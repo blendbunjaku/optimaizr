@@ -237,9 +237,7 @@ export const HELP_COMMANDS: Array<[string, string]> = [
 
 export function cmdHelp(): void {
   console.log("");
-  console.log(
-    `  ${bold("optimAIzr")} ${dim("- find where your LLM spend is wasted, then verify and apply the savings")}`,
-  );
+  console.log(`  ${bold("optimAIzr")} ${dim("- spend fewer tokens on the same work")}`);
   console.log("");
   // Pad to the longest command so a new entry can't break the column.
   const width = Math.max(...HELP_COMMANDS.map(([c]) => c.length)) + 2;

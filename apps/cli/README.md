@@ -2,25 +2,29 @@
 
 [![npm](https://img.shields.io/npm/v/optimaizr)](https://www.npmjs.com/package/optimaizr)
 [![CI](https://github.com/blendbunjaku/optimaizr/actions/workflows/ci.yml/badge.svg)](https://github.com/blendbunjaku/optimaizr/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/npm/l/optimaizr)](https://github.com/blendbunjaku/optimaizr/blob/main/LICENSE)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](https://github.com/blendbunjaku/optimaizr/blob/main/LICENSE)
 [![Node](https://img.shields.io/node/v/optimaizr)](https://nodejs.org)
 
-**Find where your LLM spend is wasted, then verify and apply the savings.**
+**Spend fewer tokens on the same work.**
 
-optimAIzr reads the token usage your coding agents and apps already record,
-shows where the money goes, and proposes changes with the arithmetic behind
-each one. It runs entirely on your machine: no account, no upload, no
-telemetry, and it reads token counts, never your prompts.
-
-Built for Claude Code and Codex users, whether you pay per token, work within a
-monthly budget, or are on a Claude or ChatGPT plan and keep hitting the 5-hour
-limit.
-
-## Quick start
+optimAIzr is a local CLI that finds wasted tokens in Claude Code, Codex and your
+own API calls, shows what each fix would save, and checks it on your own
+traffic before you switch. No account, no upload, no telemetry. It reads token
+counts, never your prompts.
 
 ```bash
-npx optimaizr profile --plan pro
+npm i -g optimaizr
+optimaizr profile
 ```
+
+Or try it once without installing: `npx optimaizr profile`.
+
+## What it does
+
+### See where your tokens go
+
+`optimaizr profile` reads the sessions already on your machine and puts spend,
+waste and the biggest fix on one screen. On a Claude plan, add `--plan pro`.
 
 ```
   optimAIzr | profile
@@ -57,57 +61,26 @@ npx optimaizr profile --plan pro
     optimaizr simulate model-fit
 ```
 
-Paying per token? Leave out `--plan` and the dollars are your real bill.
+### Find out why
 
-## What it reads
+`optimaizr why` breaks spend down by provider, model, project and kind of work,
+each level as a share of the one above.
 
-| Source                     | Setup                              |
-| -------------------------- | ---------------------------------- |
-| Claude Code                | None. Reads `~/.claude/projects`.  |
-| Codex                      | None. Reads `~/.codex/sessions`.   |
-| Your Anthropic/OpenAI app  | One line: `optimaizr.wrap(client)` |
-| A usage export (CSV, JSON) | `optimaizr import usage.csv`       |
+```
+  $132.47 total  across 1,807 requests
 
-Anthropic and OpenAI usage land in one schema, so a Claude call and a GPT call
-are compared on the same axis.
+    anthropic                         $132.47  100% 1807 calls
+      -> sonnet-5                         $99.47   75% 1640 calls
+        -> kopshti-back                   $93.34   94% 1541 calls
+          -> Mechanical                   $36.11   39% 746 calls
+          -> Reasoning                    $27.52   29% 335 calls
+          -> Generation                   $15.22   16% 141 calls
+```
 
-## Commands
+### Catch waste while you work
 
-| Command                     | What it answers                              |
-| --------------------------- | -------------------------------------------- |
-| `optimaizr profile`         | Where am I wasting the most?                 |
-| `optimaizr live`            | What is wasting money right now?             |
-| `optimaizr why`             | Where does the money go, level by level?     |
-| `optimaizr recommend`       | What can I change, ranked by saving?         |
-| `optimaizr simulate <rule>` | What would the change save?                  |
-| `optimaizr verify <rule>`   | Does the output still hold up on my traffic? |
-| `optimaizr apply <rule>`    | What exactly do I change?                    |
-| `optimaizr report`          | A shareable HTML report                      |
-| `optimaizr card`            | Your last 30 days as an image to post        |
-
-Also `audit`, `tokens`, `guide` (which model for which job), `limit`, `import`,
-`undo`, `providers` and `privacy`. Run `optimaizr --help` for everything.
-
-Every figure is labelled _measured_, _inferred_ or _estimated_, and `--why`
-prints the calculation and assumptions behind it.
-
-## What it catches
-
-13 detectors, each reporting its own evidence and confidence:
-
-| Area            | Detects                                                                   |
-| --------------- | ------------------------------------------------------------------------- |
-| Model choice    | Mechanical calls on an expensive model; reasoning spent on trivial output |
-| Caching         | Low cache hit rate; the same large context re-sent across sessions        |
-| Context         | Bloated system prompts, oversized inputs and outputs, huge tool results   |
-| Agent behaviour | Repeated file reads, retry loops on the same failing call                 |
-| Spend patterns  | Cost spikes, spend concentrated in a few sessions, price changes          |
-
-## Live recommendations
-
-Run `optimaizr live` in a second terminal and use your agent as normal. It
-follows Claude Code and Codex sessions (and apps using `wrap()`) as they are
-written, and raises a fix the moment a pattern crosses its threshold.
+`optimaizr live` runs beside your agent and raises a fix the moment a pattern
+shows up.
 
 ```
   ⚡ optimAIzr
@@ -134,19 +107,49 @@ Pressing **Y** changes what comes next, never the call already billed:
 - **Codex:** `Y` records your decision; type `/model` in Codex to switch.
 
 Amounts in `live` are what the window actually cost, never projected to a
-month. Low-confidence findings are printed rather than prompted, and each is
-raised once per session.
+month. Low-confidence findings are printed rather than prompted.
 
-## Subscriptions and budgets
+### Know what a fix is worth
 
-**Claude Pro, Max or Team.** Usage is rationed in 5-hour sessions, so
-`--plan pro` (or `max5`, `max20`, `team`, `team-premium`) shows each session's
-API-equivalent value and how much of it goes on waste. Anthropic doesn't
-publish the limit, so run `optimaizr limit` when you hit it and optimAIzr
-learns yours; `live --plan pro` then warns at 80% and 95%.
+Every finding comes with its own arithmetic: what the traffic costs now, what it
+would cost after, and how far to trust the figure. `--why` prints the full
+calculation and every assumption.
 
-**ChatGPT plans.** Nothing to set: Codex records OpenAI's own limit meter, so
-`profile` shows your plan and the exact usage and reset time of each window.
+```
+MEDIUM  441 mechanical calls ran on an over-specified model
+        $5.76/mo est.  |  $70.12/yr  |  needs verification  |  model-selection
+
+        now    $14.07  ->  after     $6.75  (441 calls, 12% of spend)
+        confidence medium   quality impact medium   basis estimated
+```
+
+### Prove it before you switch
+
+`optimaizr verify` replays your own recorded requests on the cheaper option and
+scores the answers against your quality bar, so you never trade cost for worse
+output.
+
+```
+   PASS   40 samples replayed
+
+  cost/call   $0.0121 -> $0.0034
+  projected   $61.40/mo saved
+  this check cost you $0.38
+
+  Quality checks
+    ok   no-refusal               candidate 40/40, baseline 40/40
+    ok   tool-name-matches        candidate 39/40, baseline 39/40
+```
+
+### Stay under your limits
+
+- **Claude Pro, Max or Team:** `--plan pro` (or `max5`, `max20`, `team`,
+  `team-premium`) shows each 5-hour session and how much of it goes on waste.
+  Anthropic doesn't publish the limit, so run `optimaizr limit` when you hit it
+  and optimAIzr learns yours.
+- **ChatGPT plans:** nothing to set. Codex records OpenAI's own meter.
+- **A monthly budget:** `--budget 300` names the day the cap runs out at this
+  pace, and how many days the fixes buy back.
 
 ```
   ChatGPT Plus            $20.00/mo  what you pay
@@ -156,14 +159,20 @@ learns yours; `live --plan pro` then warns at 80% and 95%.
   Waste                          9%  fix it and you'd hit the limits ~10% later
 ```
 
-**A monthly budget.** `--budget 300` shows the day a monthly cap runs out at
-this pace, and how many days the fixes buy back. `live --budget 300` warns at
-50, 80, 95 and 100%.
-
-Save your plan or budget once in `~/.optimaizr/config.json`:
+`live` warns at 80% and 95% of a plan limit, and at 50, 80, 95 and 100% of a
+budget. Save your plan or budget once in `~/.optimaizr/config.json`:
 `{ "plan": "pro", "budget": 300 }`.
 
-## Use it in your app
+## Works with
+
+| Source                     | Setup                             |
+| -------------------------- | --------------------------------- |
+| Claude Code                | None. Reads `~/.claude/projects`. |
+| Codex                      | None. Reads `~/.codex/sessions`.  |
+| Your Anthropic/OpenAI app  | One line with `wrap()`, below     |
+| A usage export (CSV, JSON) | `optimaizr import usage.csv`      |
+
+### In your app
 
 ```ts
 import Anthropic from "@anthropic-ai/sdk";
@@ -172,11 +181,40 @@ import optimaizr from "optimaizr";
 const claude = optimaizr.wrap(new Anthropic(), { service: "checkout-api" });
 ```
 
-`wrap()` returns the same client, recording each call's usage to a local
+`wrap()` returns the same client and records each call's usage to a local
 ledger. It works the same with `new OpenAI()`, never changes a request unless
 you accept a swap in `live`, and never throws into your code. Label call sites
 with `optimaizr.withRoute("summarise-ticket", () => ...)` to get advice per
 route.
+
+## What it catches
+
+13 detectors, each reporting its own evidence and confidence:
+
+| Area            | Detects                                                                   |
+| --------------- | ------------------------------------------------------------------------- |
+| Model choice    | Mechanical calls on an expensive model; reasoning spent on trivial output |
+| Caching         | Low cache hit rate; the same large context re-sent across sessions        |
+| Context         | Bloated system prompts, oversized inputs and outputs, huge tool results   |
+| Agent behaviour | Repeated file reads, retry loops on the same failing call                 |
+| Spend patterns  | Cost spikes, spend concentrated in a few sessions, price changes          |
+
+## Commands
+
+| Command                     | What it answers                              |
+| --------------------------- | -------------------------------------------- |
+| `optimaizr profile`         | Where am I wasting the most?                 |
+| `optimaizr why`             | Where does the money go?                     |
+| `optimaizr live`            | What is wasting tokens right now?            |
+| `optimaizr recommend`       | What can I change, ranked by saving?         |
+| `optimaizr simulate <rule>` | What would the change save?                  |
+| `optimaizr verify <rule>`   | Does the output still hold up on my traffic? |
+| `optimaizr apply <rule>`    | What exactly do I change?                    |
+| `optimaizr report`          | A shareable HTML report                      |
+| `optimaizr card`            | Your last 30 days as an image to post        |
+
+Also `audit`, `tokens`, `guide` (which model for which job), `limit`, `import`,
+`undo`, `providers` and `privacy`. Run `optimaizr --help` for everything.
 
 ## Privacy
 
@@ -185,29 +223,24 @@ route.
 - Keeps its data in `~/.optimaizr/` as plain JSON. `rm -rf ~/.optimaizr`
   removes everything.
 - Makes network calls only in `verify` (to your own provider, with your own
-  key) and in the optional Jev second opinion, which sends route metadata
-  only.
+  key) and in the optional Jev second opinion, which sends route metadata only.
 
 `optimaizr privacy` prints the details, and
 [SECURITY.md](https://github.com/blendbunjaku/optimaizr/blob/main/SECURITY.md)
 lists every file read and written.
 
-## Install
+## Requirements
 
-```bash
-npm install -g optimaizr    # or run any command with npx
-```
-
-Requires Node 20.11+. No runtime dependencies. `@anthropic-ai/sdk` and
-`openai` are optional, needed only for `verify`.
+Node 20.11+. No runtime dependencies. `@anthropic-ai/sdk` and `openai` are
+optional, needed only for `verify`.
 
 ## Links
 
 - [Documentation](https://www.optimaizr.com/docs) and the full
   [CLI reference](https://github.com/blendbunjaku/optimaizr/blob/main/docs/CLI.md)
+- [Source on GitHub](https://github.com/blendbunjaku/optimaizr)
 - [Changelog](https://github.com/blendbunjaku/optimaizr/blob/main/CHANGELOG.md)
 - [Report a bug](https://github.com/blendbunjaku/optimaizr/issues)
-- [Contributing](https://github.com/blendbunjaku/optimaizr/blob/main/docs/CONTRIBUTING.md)
 
 ## License
 

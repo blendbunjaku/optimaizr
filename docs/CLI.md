@@ -2,7 +2,7 @@
 
 # optimAIzr
 
-**Find where your LLM spend is wasted, then verify and apply the savings.**
+**Spend fewer tokens on the same work.**
 
 Add one line of code, or point it at your coding agents with no production
 changes at all, and you get every call: cost, latency, tokens, and what's being

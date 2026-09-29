@@ -1,8 +1,8 @@
 {
   "name": "optimaizr",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "private": false,
-  "description": "Find where your LLM spend is wasted, then verify and apply the savings.",
+  "description": "Spend fewer tokens on the same work. A local CLI that finds wasted tokens in Claude Code, Codex and your own API calls.",
   "type": "module",
   "bin": {
     "optimaizr": "dist/cli.js"

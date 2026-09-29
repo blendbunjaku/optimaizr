@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.7.1
+
+- **New README and tagline.** The npm page leads with what optimAIzr does,
+  with real output for each step, and `optimaizr --help` and the package
+  description now read "Spend fewer tokens on the same work." No behaviour
+  changes.
+
 ## 0.7.0
 
 - **Claude Team plans.** `--plan team` (Standard seat, $25) and

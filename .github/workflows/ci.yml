@@ -37,7 +37,7 @@ jobs:
         # tsc passes on a missing side-effect import; only running the bundle
         # catches it. Assert on output, since a wrong command can still exit 0.
         run: |
-          node apps/cli/dist/cli.js --help | grep -q "find where your LLM spend is wasted"
+          node apps/cli/dist/cli.js --help | grep -q "spend fewer tokens on the same work"
           node apps/cli/dist/cli.js --version | grep -qE "^optimaizr [0-9]+\.[0-9]+\.[0-9]+$"
 
       - name: Smoke-test the packed tarball

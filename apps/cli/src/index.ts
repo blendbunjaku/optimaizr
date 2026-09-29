@@ -1,5 +1,5 @@
 /**
- * optimAIzr: find where your LLM spend is wasted, then verify and apply the savings.
+ * optimAIzr: spend fewer tokens on the same work.
  *
  * Two ways in, one analysis:
  *
