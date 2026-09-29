@@ -1,0 +1,67 @@
+{
+  "name": "optimaizr",
+  "version": "0.7.0",
+  "private": false,
+  "description": "Find where your LLM spend is wasted, then verify and apply the savings.",
+  "type": "module",
+  "bin": {
+    "optimaizr": "dist/cli.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md",
+    "!dist/**/*.map"
+  ],
+  "engines": {
+    "node": ">=20.11"
+  },
+  "scripts": {
+    "build": "node scripts/bundle.mjs && npm run build:types",
+    "typecheck": "tsc --noEmit",
+    "dev": "tsc --watch",
+    "pretest": "npm run build --prefix ../../packages/core && npm run build --prefix ../../packages/local",
+    "test": "node --test test/",
+    "e2e": "node scripts/e2e.mjs",
+    "build:types": "dts-bundle-generator -o dist/index.d.ts src/index.ts --no-banner --external-inlines=@optimaizr/core --external-inlines=@optimaizr/local",
+    "prepublishOnly": "npm run build"
+  },
+  "devDependencies": {
+    "@anthropic-ai/sdk": "^0.125.0",
+    "@optimaizr/core": "*",
+    "@optimaizr/local": "*",
+    "dts-bundle-generator": "^9.5.1",
+    "esbuild": "^0.28.2"
+  },
+  "peerDependencies": {
+    "@anthropic-ai/sdk": ">=0.30.0"
+  },
+  "peerDependenciesMeta": {
+    "@anthropic-ai/sdk": {
+      "optional": true
+    }
+  },
+  "keywords": [
+    "llm",
+    "cost",
+    "observability",
+    "anthropic",
+    "claude",
+    "tokens",
+    "finops"
+  ],
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  },
+  "homepage": "https://optimaizr.com",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/blendbunjaku/optimaizr.git",
+    "directory": "apps/cli"
+  },
+  "bugs": {
+    "url": "https://github.com/blendbunjaku/optimaizr/issues"
+  }
+}

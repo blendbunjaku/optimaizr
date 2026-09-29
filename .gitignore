@@ -1,0 +1,17 @@
+node_modules/
+dist/
+*.tsbuildinfo
+
+.env
+.env.*
+!.env.example
+
+# Written by optimaizr when you run it inside this repo
+optimaizr-report.html
+optimaizr-change.md
+optimaizr.config.json
+
+.idea/
+.vscode/
+.DS_Store
+*.log

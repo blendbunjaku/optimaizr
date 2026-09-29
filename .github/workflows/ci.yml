@@ -1,0 +1,73 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: "20.11"
+
+jobs:
+  check:
+    name: build, lint, test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm run format:check
+      - run: npm test
+
+      - name: Smoke-test the built CLI
+        # tsc passes on a missing side-effect import; only running the bundle
+        # catches it. Assert on output, since a wrong command can still exit 0.
+        run: |
+          node apps/cli/dist/cli.js --help | grep -q "find where your LLM spend is wasted"
+          node apps/cli/dist/cli.js --version | grep -qE "^optimaizr [0-9]+\.[0-9]+\.[0-9]+$"
+
+      - name: Smoke-test the packed tarball
+        # Inside the repo the workspace packages resolve through symlinks, so
+        # only an install elsewhere proves the bundle is self-contained.
+        run: |
+          PKG="$(cd apps/cli && npm pack --silent --pack-destination "$RUNNER_TEMP")"
+          cd "$RUNNER_TEMP"
+          npm init -y >/dev/null
+          npm install "$RUNNER_TEMP/$PKG"
+          ./node_modules/.bin/optimaizr --version
+          test ! -d node_modules/@optimaizr \
+            || (echo "::error::The tarball depends on unpublished workspace packages." && exit 1)
+
+  security:
+    name: audit and secret scan
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - run: npm audit --audit-level=high
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
