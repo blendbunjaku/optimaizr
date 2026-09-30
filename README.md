@@ -12,8 +12,7 @@ own API calls, shows what each fix would save, and checks it on your own
 traffic before you switch. No account, no upload, no telemetry. It reads token
 counts, never your prompts.
 
-First presented on September 13, 2026, and open source since September 30,
-2026.
+First presented on September 13, 2026, and open source since September 30, 2026.
 
 ```bash
 npm i -g optimaizr
