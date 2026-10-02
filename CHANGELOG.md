@@ -1,5 +1,70 @@
 # Changelog
 
+## 0.8.0
+
+**optimAIzr inside Claude Code.** Claude Code 2.1.287 added mods, plugins that
+run inside Claude Code itself, and optimAIzr now ships one. Install it from a
+Claude Code session:
+
+```
+/plugin marketplace add blendbunjaku/optimaizr
+/plugin install optimaizr@optimaizr
+```
+
+- **The numbers where you work.** While Claude works, the spinner shows what
+  the turn has cost so far and how full your 5-hour window is. The band above
+  the prompt shows the window, how long it lasts at this pace and when it
+  resets, read from Claude Code's own limit meter rather than estimated. Each
+  answer gets one dim line with its cost, its requests and how far the window
+  moved (the `turnLine` option turns it off). `/optimaizr` prints the
+  session's spend, both plan windows and any active switch.
+- **`Y` in `live` switches the running Claude Code session.** Claude Code reads
+  its model when a session starts, so until now `Y` could only change the next
+  one. With the mod loaded, an accepted swap reaches running sessions from
+  their next request, with no restart. It is as narrow as the finding: one
+  project, and only subagents or only the main conversation when that is what
+  the finding covered, and only when it covers at least 80% of that traffic's
+  spend. If the API refuses the new model, the request goes out on the
+  original and the session stays on it. The first switched request leaves a
+  note in the conversation, and the band keeps saying which model you are on.
+  For a harder task, `/optimaizr off` sends that session back to its own model
+  and `/optimaizr on` resumes; `optimaizr undo <rule>` removes the switch
+  everywhere within seconds. Without the mod, `Y` still writes
+  `~/.claude/settings.json` for your next session.
+- **See what a switch saved.** Each switched request is priced twice: what it
+  cost, and what the same tokens would have cost on the original model. A
+  switched turn's line leads with the difference (`saved $0.10 vs Opus 5.5 ·
+this turn $0.10 on Sonnet 5.5 · …`), the band keeps a running total and
+  `/optimaizr` adds it up for the session. The first request on the new model
+  writes the conversation to its cache, where the original model would have
+  read it, so it can cost more; its line says by how much, and why.
+- **Lower reasoning effort, live.** Accept a reasoning-effort finding in `live`
+  and sessions running the mod use less effort on that work from their next
+  request, on the same model. It only ever lowers effort, and
+  `/optimaizr off` goes back. Like a model switch, the first request at the
+  new effort reads the conversation once without the cache.
+- **A guard against retry loops.** When the same command fails twice in a row
+  with nothing changed in between, the mod holds the next identical attempt
+  once and asks Claude to change something first. Asked again, it goes
+  through. The `retryGuard` option turns it off.
+- **`optimaizr mod`** prints the install steps, which sessions are running the
+  mod, and any active switch. `--json` for scripts.
+- **Still fully local.** The mod reads the usage figures Claude Code already
+  shows you, the commands Claude runs (kept in memory for the retry guard) and
+  `~/.optimaizr/overrides.json`, and writes one small file per session to
+  `~/.optimaizr/mod/sessions`. It never reads your prompts or file contents and
+  makes no network calls; `claude plugin validate mods/optimaizr` lists every
+  call it makes.
+- **Findings say where they came from.** Each `live` finding lists the
+  sessions behind it and its latest calls: time, session id (marked `sub` for
+  a subagent), project, and what the call did, e.g. `Read .../src/app.ts` or
+  `Bash npm test`. `optimaizr show <rule>` prints the same under every row,
+  and `live --json` carries `sessions` and `examples`. With several agents
+  running at once, you can now tell which one a finding is about.
+- **`live` stays quiet about cents.** A finding must have cost $0.25 over the
+  window before it is announced (was $0.01). `--min-usd` still overrides it.
+- **Windows project names.** `show` now shortens `C:\...\repo` to `repo`.
+
 ## 0.7.1
 
 - **New README and tagline.** The npm page leads with what optimAIzr does,

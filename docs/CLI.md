@@ -83,6 +83,7 @@ in the same report.
 | `optimaizr scan`            | Spend, savings, and what to do about it                         |
 | `optimaizr why`             | Drill into where the money actually goes                        |
 | `optimaizr live`            | Watch calls as they happen and surface fixes interactively      |
+| `optimaizr mod`             | Install steps and status of the Claude Code mod                 |
 | `optimaizr recommend`       | Ranked actions with impact and confidence                       |
 | `optimaizr show <rule>`     | The individual requests a recommendation touches                |
 | `optimaizr simulate <rule>` | What the change would cost, arithmetically                      |
@@ -101,8 +102,81 @@ Flags: `--why` (show every calculation and assumption), `--days N`,
 `--project STR`, `--source all|agents|sdk`, `--tz utc|local|<IANA>`, `--json`.
 
 `live` also takes `--backfill N` (replay recorded history first), `--window N`,
-`--min-usd N`, `--source all|agents|sdk`, and `--no-prompt` (print
+`--min-usd N` (default $0.25), `--source all|agents|sdk`, and `--no-prompt` (print
 recommendations instead of asking). With `--json` it never prompts.
+
+---
+
+## Inside Claude Code
+
+Claude Code 2.1.287 and later runs mods, plugins that work inside it. The
+optimAIzr mod lives in [`mods/optimaizr`](../mods/optimaizr) and installs from
+this repository's marketplace, in a Claude Code session:
+
+```
+/plugin marketplace add blendbunjaku/optimaizr
+/plugin install optimaizr@optimaizr
+```
+
+What it adds:
+
+- **The spinner** shows what the turn has cost so far and how full your 5-hour
+  window is: `Thinking · $0.18 · 61% of 5h…`.
+- **The band above the prompt** shows the window, how long it lasts at the pace
+  of the last hour (once there are 10 minutes and one point of use to go on)
+  and when it resets. The readings come from Claude Code's own limit meter and
+  are shared by every session on the machine. Off a plan, it shows what the
+  session has cost instead.
+- **Each answer** gets one line: `optimaizr: this turn $0.18 · 4 requests · 5h 55%
+→ 56%`. Set the plugin's `turnLine` option to `false` to turn it off.
+- **`/optimaizr`** prints the session's spend, both plan windows and any active
+  switch.
+- **Switches.** When you press **Y** on a model swap in `optimaizr live`, the
+  mod applies it from the next request of every running session in that
+  project. A finding that covered only subagent calls switches only
+  subagents, which start with a fresh context, so no cache is lost. A switch
+  is written only when the finding covers at least 80% of that traffic's spend.
+  A conversation already under way reads its context once more without the
+  cache on the new model. If the API refuses the model, the request is sent as
+  it was and the session stays on its own model. The first switched request
+  leaves a note in the conversation, and the band names the model you are on.
+  For a harder task, `/optimaizr off` sends that session back to its own model
+  and `/optimaizr on` resumes. `optimaizr undo <rule>` removes the switch from
+  every running session within seconds.
+- **What a switch saved.** Each switched request is priced twice from the
+  token counts the API returned: at the original model's rates and at the new
+  one's. The turn's line leads with the difference, as in `saved $0.10 vs
+Opus 5.5 · this turn $0.10 on Sonnet 5.5 · 1 request`, the band keeps a
+  running total, and `/optimaizr` adds it up. On the first request on the new
+  model, the conversation is written to its cache where the original model
+  would have read it from its own, so that request is priced against cache
+  reads and can come out negative; the line then says how much more it cost,
+  once. It is an estimate in one direction: the original model would also have
+  thought and written more, which isn't counted. Prices come from the same
+  catalogue as every other figure here, with cache writes priced as the engine
+  prices them: the main conversation at the 1-hour rate, subagents at the
+  5-minute rate.
+- **Effort.** Accepting a `reasoning-effort` finding in `live` writes an effort
+  switch: the same model, asked to think less on that work. The mod only ever
+  lowers effort, and `/optimaizr off` goes back. Like a model switch, the first
+  request at the new effort reads the conversation once without the cache (in
+  one test, $0.23 for that request against $0.02 to $0.03 for the next ones).
+  Claude Code doesn't report how much a request would have reasoned at the old
+  setting, so effort switches carry no dollar figure.
+- **A retry guard.** When the same command fails twice in a row and nothing has
+  changed since (no successful edit or command in between), the mod holds the
+  next identical attempt once and tells Claude to change something first. If
+  Claude runs it again anyway, it goes through. Set the `retryGuard` option to
+  `false` to turn it off. The mod keeps the commands it has seen in memory
+  only, and forgets them on compaction and `/clear`.
+
+Dollar figures are what Claude Code totals, at API rates; on a plan they are
+not what you pay. The terminal and the Desktop app draw the spinner and the
+band; in the VS Code chat panel switches still apply but nothing is drawn.
+
+`optimaizr mod` shows the install steps, which sessions are running it (each
+writes `~/.optimaizr/mod/sessions/<id>.json` once a minute) and any active
+switch. `live` uses the same files to decide what **Y** can reach.
 
 ---
 

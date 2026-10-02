@@ -25,6 +25,7 @@ built CLI directly: `node apps/cli/dist/cli.js profile`.
 | `apps/cli`       | The `optimaizr` command and the npm package                     |
 | `packages/core`  | The analysis engine: pricing, ingestion, rules, reports         |
 | `packages/local` | The Node host: `wrap()`, the local ledger, live tailing, replay |
+| `mods/optimaizr` | The Claude Code mod, a plugin Claude Code loads as it is        |
 
 One rule shapes the code: **`packages/core` may not import a host.** No
 filesystem, network or `process.env`. If core needs to persist something, the
@@ -38,13 +39,21 @@ both into the CLI, so the npm package has no runtime dependencies.
 - **A price or a new model:** add or edit an entry in
   `packages/core/src/pricing.ts`, with the date the rate took effect, and add a
   test in `apps/cli/test/catalogue.test.mjs` if the model id could be mistaken
-  for another one.
+  for another one. For a Claude model, also run `npm run mod:prices` in
+  `apps/cli`, so the mod prices savings at the same rates (a test fails until
+  you do).
 - **A new waste rule:** write a function in `packages/core/src/analyze/rules.ts`
   that returns at most one finding through `build()`, add it to `RULES`, and
   test it against a small hand-built dataset. Say how the figure was derived
   (`measured`, `inferred` or `estimated`) and list every assumption.
 - **A new provider:** add its models to the catalogue and an adapter in
   `packages/local/src/providers`. The analysis should not need to change.
+- **The Claude Code mod:** it has no build step. Run Claude Code with
+  `claude --plugin-dir mods/optimaizr` and it reloads on save. Keep anything
+  that doesn't need `$` in `hooks/meter.ts`, run `claude plugin validate
+mods/optimaizr` and `claude plugin test mods/optimaizr`, and bump the
+  version in its `plugin.json`, `.claude-plugin/marketplace.json` and
+  `register.tsx` together, or installed copies won't update.
 
 ## Before opening a pull request
 

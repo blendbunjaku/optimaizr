@@ -1,6 +1,6 @@
 {
   "name": "optimaizr",
-  "version": "0.7.1",
+  "version": "0.8.0",
   "private": false,
   "description": "Spend fewer tokens on the same work. A local CLI that finds wasted tokens in Claude Code, Codex and your own API calls.",
   "type": "module",
@@ -24,6 +24,7 @@
     "pretest": "npm run build --prefix ../../packages/core && npm run build --prefix ../../packages/local",
     "test": "node --test test/",
     "e2e": "node scripts/e2e.mjs",
+    "mod:prices": "node scripts/mod-prices.mjs && prettier --write ../../mods/optimaizr/hooks/prices.ts",
     "build:types": "dts-bundle-generator -o dist/index.d.ts src/index.ts --no-banner --external-inlines=@optimaizr/core --external-inlines=@optimaizr/local",
     "prepublishOnly": "npm run build"
   },
@@ -48,6 +49,8 @@
     "observability",
     "anthropic",
     "claude",
+    "claude-code",
+    "claude-code-mod",
     "tokens",
     "finops"
   ],

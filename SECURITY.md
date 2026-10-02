@@ -27,6 +27,13 @@ Two features make network calls, and only when you ask for them:
   `api.typesafe.ai`. Never prompts, completions or tool payloads.
   `live --jev --dry-run` prints the exact request instead of sending it.
 
+The Claude Code mod (`mods/optimaizr`) makes no network calls. Inside Claude
+Code it reads the session's usage figures (cost, token counts, the context
+window's fill, the plan's rate-limit windows) and the commands Claude runs,
+which it keeps in memory to spot a retry loop. It never reads your prompts,
+Claude's answers or file contents, and stores none of them.
+`claude plugin validate mods/optimaizr` lists every call it makes.
+
 ## What is read
 
 | Path                    | Why                                      |
@@ -51,14 +58,15 @@ your user permissions.
 | `decisions.json`      | Which recommendations you viewed, simulated or applied.                                                                        |
 | `verifications.json`  | The current verification state per rule, which `apply` checks.                                                                 |
 | `verifications.jsonl` | Every verification attempt, append-only.                                                                                       |
-| `overrides.json`      | Model swaps you accepted in `live`, applied by `wrap()` until you run `optimaizr undo`.                                        |
+| `overrides.json`      | Model swaps you accepted in `live`, applied by `wrap()` and the Claude Code mod until you run `optimaizr undo`.                |
+| `mod/sessions/*.json` | Written by the Claude Code mod, one per session: its id, working directory, mod version and times. Removed after 7 days.       |
 | `limits.jsonl`        | Times you recorded hitting a Claude session limit with `optimaizr limit`.                                                      |
 
 Outside that directory, optimAIzr writes only:
 
 - `~/.claude/settings.json`, and only when you press **Y** on a model swap in
-  `live`. It merges the `model` key, leaves everything else alone, and prints
-  what changed and how to undo it.
+  `live` while no session is running the mod. It merges the `model` key,
+  leaves everything else alone, and prints what changed and how to undo it.
 - `optimaizr-report.html`, `optimaizr-card.html`/`.svg` and
   `optimaizr-change.md` in the current directory, when you run `report`,
   `card` or `apply`.

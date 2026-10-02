@@ -19,6 +19,52 @@ optimaizr profile
 
 Or try it once without installing: `npx optimaizr profile`.
 
+## New in 0.8.0: inside Claude Code
+
+Claude Code now runs mods, plugins that work inside it. The optimAIzr mod puts
+the numbers where you work, lets **Y** in `optimaizr live` switch the session
+you are in, and shows what each switch saved.
+
+```
+  ⏺ optimaizr: this turn $0.18 · 4 requests · 5h 55% → 56%
+
+  optimAIzr  █████████░░░░░░░  56% of 5h · resets 15:00
+  ❯
+```
+
+Install it from a Claude Code session (2.1.287 or later):
+
+```
+/plugin marketplace add blendbunjaku/optimaizr
+/plugin install optimaizr@optimaizr
+```
+
+- **The cost while Claude works.** The spinner shows what the turn has cost so
+  far and how full your 5-hour window is. The band above the prompt shows the
+  window, how long it lasts at this pace and when it resets, from Claude Code's
+  own limit meter. Each answer gets one line with its cost, its requests and
+  how far the window moved.
+- **Switches in the session you are in.** Press **Y** on a model swap in
+  `optimaizr live` and the running session uses the cheaper model from its next
+  request. No restart, no `/model`. A reasoning-effort finding lowers effort
+  the same way.
+- **What a switch saved.** A switched turn's line leads with the saving: the
+  same tokens priced on the original model, less what they cost. The band keeps
+  a running total.
+- **Back in one command.** Harder task? `/optimaizr off` returns the session you
+  are in to its own model and effort; `/optimaizr on` resumes.
+- **A guard against retry loops.** When the same command fails twice in a row
+  with nothing changed, the next identical attempt is held once and Claude is
+  asked to change something first.
+- **`/optimaizr`** prints the session's spend, what it saved, both plan windows
+  and any switch.
+
+It reads usage figures and the commands Claude runs, never your prompts or file
+contents, and makes no network calls.
+The source is in
+[`mods/optimaizr`](https://github.com/blendbunjaku/optimaizr/tree/main/mods/optimaizr),
+and `optimaizr mod` shows whether it is running.
+
 ## What it does
 
 ### See where your tokens go
@@ -101,9 +147,14 @@ Pressing **Y** changes what comes next, never the call already billed:
 - **Your app (`wrap()`)** switches from its next request, with no restart. If
   the provider rejects the new model, the original request is sent instead.
   `optimaizr undo <rule>` reverts it.
-- **Claude Code** reads its model at session start, so `Y` updates
-  `~/.claude/settings.json` for your next session and prints the `/model`
-  command that switches the current one.
+- **Claude Code with the optimAIzr mod** switches the running session from
+  its next request, and each answer then says what the switch saved. The
+  switch is as narrow as the finding: one project, and only subagents when that
+  is what it covered. If the API refuses the new model, the request goes out on
+  the original.
+- **Claude Code without the mod** reads its model at session start, so `Y`
+  updates `~/.claude/settings.json` for your next session and prints the
+  `/model` command that switches the current one.
 - **Codex:** `Y` records your decision; type `/model` in Codex to switch.
 
 Amounts in `live` are what the window actually cost, never projected to a
@@ -213,8 +264,9 @@ route.
 | `optimaizr report`          | A shareable HTML report                      |
 | `optimaizr card`            | Your last 30 days as an image to post        |
 
-Also `audit`, `tokens`, `guide` (which model for which job), `limit`, `import`,
-`undo`, `providers` and `privacy`. Run `optimaizr --help` for everything.
+Also `mod` (the Claude Code mod), `audit`, `tokens`, `guide` (which model for
+which job), `limit`, `import`, `undo`, `providers` and `privacy`. Run
+`optimaizr --help` for everything.
 
 ## Privacy
 
@@ -224,6 +276,8 @@ Also `audit`, `tokens`, `guide` (which model for which job), `limit`, `import`,
   removes everything.
 - Makes network calls only in `verify` (to your own provider, with your own
   key) and in the optional Jev second opinion, which sends route metadata only.
+- The Claude Code mod reads usage figures and the commands Claude runs, never
+  your prompts or file contents, and makes no network calls.
 
 `optimaizr privacy` prints the details, and
 [SECURITY.md](https://github.com/blendbunjaku/optimaizr/blob/main/SECURITY.md)
