@@ -267,7 +267,7 @@ export const register: Register = (on, options) => {
       if (model && result.usage) {
         const first = !state.convo.loaded.has(model.to);
         state.convo.loaded.add(model.to);
-        const saved = savedBy(model, result.usage, first);
+        const saved = savedBy(model, result.usage, first, e.agentId === undefined);
         if (saved !== null) state.saved = (state.saved ?? 0) + saved;
         if (state.turn && saved !== null) state.turn.saved = (state.turn.saved ?? 0) + saved;
       }

@@ -454,7 +454,23 @@ test("a switched turn leads with what it saved", async ($, on) => {
 });
 
 test("the first request on a new model says when it costs more, and why", async ($, on) => {
-  // It writes 100,000 tokens to Sonnet's cache ($0.25) that Opus would have read ($0.02).
+  // The main conversation caches for an hour: 100,000 tokens written to Sonnet's
+  // cache cost $0.40, where Opus would have read them for $0.02.
+  const w = world(on, {
+    files: switchTo(SONNET),
+    tokens: { ...TOKENS, cache_creation_input_tokens: 100_000 },
+  });
+  await $.session.start(SESSION);
+  await $.turn.start({ text: "keep going", turnId: "t1" });
+  w.now.usd = 1.4;
+  await step($);
+  expect((await answered($)).text).toBe(
+    "this turn $0.40 on Sonnet 5.5 · 1 request · $0.38 more than Opus 5.5 once, to load the conversation · 5h 58% → 58%",
+  );
+});
+
+test("a subagent's cache is priced at the 5-minute rate", async ($, on) => {
+  // Subagents cache for 5 minutes: the same 100,000 tokens cost $0.25 on Sonnet.
   const w = world(on, {
     files: switchTo(SONNET),
     tokens: { ...TOKENS, cache_creation_input_tokens: 100_000 },
@@ -462,12 +478,9 @@ test("the first request on a new model says when it costs more, and why", async 
   await $.session.start(SESSION);
   await $.turn.start({ text: "keep going", turnId: "t1" });
   w.now.usd = 1.25;
-  await step($);
-  expect((await answered($)).text).toBe(
-    "this turn $0.25 on Sonnet 5.5 · 1 request · $0.23 more than Opus 5.5 once, to load the conversation · 5h 58% → 58%",
-  );
+  await step($, OPUS, "agent-1");
+  expect((await answered($)).text).toContain("$0.23 more than Opus 5.5 once");
 });
-
 test("an effort switch lowers effort, and never raises it", async ($, on) => {
   const w = world(on, { files: switchTo(OPUS, { effort: "low" }) });
   await $.session.start(SESSION);

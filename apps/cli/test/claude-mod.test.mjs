@@ -147,7 +147,8 @@ test("an accepted effort finding lowers effort through the mod, same model", () 
   assert.equal(o.effort, "low");
   assert.equal(o.to, o.from);
   assert.equal(describeClaudeOverride(o), "shop-api main: Opus 5.5 at low effort");
-  assert.doesNotMatch(outcome.detail, /without the cache/);
+  // Measured on 2.1.286: the first low-effort request rewrote the cache, $0.23 instead of cents.
+  assert.match(outcome.detail, /without the cache/);
 });
 
 test("a model switch and an effort switch for the same model live side by side", () => {

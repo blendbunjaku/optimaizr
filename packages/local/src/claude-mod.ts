@@ -210,9 +210,8 @@ export function claudeModRewriter(opts: ClaudeModRewriterOptions = {}): RequestR
           `${added.map(describeClaudeOverride).join(", ")}. ` +
           `${n} Claude Code session${n === 1 ? "" : "s"} running the optimAIzr mod ` +
           `switch${n === 1 ? "es" : ""} from the next request, no restart. ` +
-          (effort
-            ? ""
-            : "A conversation already under way reads its context once more without the cache. ") +
+          // Changing the model or the effort means the cached conversation can't be reused.
+          "A conversation already under way reads its context once more without the cache. " +
           `Harder task? \`/optimaizr off\` in a session goes back for that session; ` +
           `\`optimaizr undo ${finding.rule}\` reverts it everywhere.`,
       };

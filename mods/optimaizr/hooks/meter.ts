@@ -158,11 +158,19 @@ export function effortFor(
 
 const priceOf = (model: string): Price | undefined => PRICES[baseModel(model)];
 
-/** What a request's tokens cost at a model's rates. `warm`: its cache writes would have been reads. */
-export function costAt(model: string, t: Tokens, opts: { warm?: boolean } = {}): number | null {
+/**
+ * What a request's tokens cost at a model's rates. `warm`: its cache writes would
+ * have been reads. `hour`: the main conversation caches for an hour, at 2x input;
+ * subagents for 5 minutes, at 1.25x, as the engine prices them.
+ */
+export function costAt(
+  model: string,
+  t: Tokens,
+  opts: { warm?: boolean; hour?: boolean } = {},
+): number | null {
   const p = priceOf(model);
   if (!p) return null;
-  const write = opts.warm ? p.cacheRead : p.cacheWrite;
+  const write = opts.warm ? p.cacheRead : opts.hour ? p.cacheWrite1h : p.cacheWrite;
   return (
     (t.input_tokens * p.input +
       t.output_tokens * p.output +
@@ -178,9 +186,9 @@ export function costAt(model: string, t: Tokens, opts: { warm?: boolean } = {}):
  * the conversation to its cache, where the original model would have read it,
  * so that one is priced warm and can come out negative.
  */
-export function savedBy(o: Override, t: Tokens, first: boolean): number | null {
-  const was = costAt(o.from, t, { warm: first });
-  const is = costAt(o.to, t);
+export function savedBy(o: Override, t: Tokens, first: boolean, hour = true): number | null {
+  const was = costAt(o.from, t, { warm: first, hour });
+  const is = costAt(o.to, t, { hour });
   return was === null || is === null ? null : was - is;
 }
 
