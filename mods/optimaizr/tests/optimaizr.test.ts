@@ -10,7 +10,7 @@ const MINUTE = 60_000;
 // Far after the mock clock's start, so the window never resets mid-test.
 const RESETS = "2030-01-01T01:00:00.000Z";
 
-type Usage = { usd: number; pct?: number };
+type Usage = { usd: number; pct?: number; ctx?: number };
 
 /**
  * A session in /work/shop-api: files in a map, usage the test sets, and a
@@ -39,9 +39,11 @@ function world(
   const efforts: unknown[] = [];
   const tools: string[] = [];
   const logs: string[] = [];
+  const toasts: string[] = [];
+  const opened: string[] = [];
   const now: Usage = { usd: 1, pct: 58 };
   const usage = (): SessionUsage => ({
-    context: { window: 1_000_000 },
+    context: { window: 1_000_000, ...(now.ctx !== undefined ? { tokens: now.ctx } : {}) },
     rateLimits:
       now.pct === undefined ? [] : [{ kind: "five_hour", percentUsed: now.pct, resetsAt: RESETS }],
     cost: { usd: now.usd },
@@ -60,7 +62,14 @@ function world(
     return { value: undefined };
   });
   on("ui.invalidate", () => ({ value: undefined }));
-  on("ui.toast", () => ({ value: undefined }));
+  on("ui.toast", ($, e) => {
+    toasts.push(e.text);
+    return { value: undefined };
+  });
+  on("ui.open", ($, e) => {
+    opened.push(e.id);
+    return { value: undefined };
+  });
   on("ui.log", ($, e) => {
     logs.push(e.text);
     return { value: undefined };
@@ -101,7 +110,7 @@ function world(
   mock.env(on, { HOME: "/home/me" });
   const clock = mock.clock(on, { now: 0 });
 
-  return { files, sent, efforts, tools, logs, now, usage, clock };
+  return { files, sent, efforts, tools, logs, toasts, opened, now, usage, clock };
 }
 
 const SESSION = { surface: "terminal", isInteractive: true, cwd: CWD } as const;
@@ -161,7 +170,7 @@ test("the session file tells optimaizr live the mod is running", async ($, on) =
   await $.session.start(SESSION);
   const file = `${DIR}/mod/sessions/s1.json`;
   const beat = JSON.parse(w.files.get(file)!);
-  expect(beat).toMatchObject({ id: "s1", version: "0.8.0", cwd: CWD });
+  expect(beat).toMatchObject({ id: "s1", version: "0.8.1", cwd: CWD });
   expect(beat.endedAt).toBeUndefined();
 
   await $.session.end({ reason: "clear", sessionId: "s1", resume: { id: "s1" } });
@@ -469,8 +478,8 @@ test("the first request on a new model says when it costs more, and why", async 
   );
 });
 
-test("a subagent's cache is priced at the 5-minute rate", async ($, on) => {
-  // Subagents cache for 5 minutes: the same 100,000 tokens cost $0.25 on Sonnet.
+test("a subagent has no reload to pay: both models write its cache, at the 5-minute rate", async ($, on) => {
+  // 100,000 tokens written fresh: $0.50 on Opus 5.5, $0.25 on Sonnet 5.5.
   const w = world(on, {
     files: switchTo(SONNET),
     tokens: { ...TOKENS, cache_creation_input_tokens: 100_000 },
@@ -479,7 +488,7 @@ test("a subagent's cache is priced at the 5-minute rate", async ($, on) => {
   await $.turn.start({ text: "keep going", turnId: "t1" });
   w.now.usd = 1.25;
   await step($, OPUS, "agent-1");
-  expect((await answered($)).text).toContain("$0.23 more than Opus 5.5 once");
+  expect((await answered($)).text).toContain("saved $0.25 vs Opus 5.5");
 });
 test("an effort switch lowers effort, and never raises it", async ($, on) => {
   const w = world(on, { files: switchTo(OPUS, { effort: "low" }) });
@@ -552,4 +561,221 @@ test("/optimaizr adds up what was saved and held", async ($, on) => {
     "Saved      $0.20 by switching models: the same tokens at the original model's rates, less what they cost",
   );
   expect(out.text).toContain("Guard      1 retry held");
+});
+
+test("a long conversation waits for its switch, and subagents switch now", async ($, on) => {
+  // Reloading 100,000 tokens into Sonnet costs $0.38; an average request saves
+  // about $0.009, so it would take over 40 requests to win back.
+  const w = world(on, { files: switchTo(SONNET) });
+  w.now.ctx = 100_000;
+  await $.session.start(SESSION);
+  await step($);
+  await step($, OPUS, "agent-1");
+  expect(w.sent).toEqual([OPUS, SONNET]);
+
+  const drawn = textOf(await $.ui.render(band()));
+  expect(drawn).toContain(
+    "waiting   shop-api: Opus 5.5 → Sonnet 5.5 · reload $0.38 pays back in ~",
+  );
+  expect(drawn).toContain("subagents switch now");
+});
+
+test("a short conversation switches at once", async ($, on) => {
+  const w = world(on, { files: switchTo(SONNET) });
+  w.now.ctx = 2_000;
+  await $.session.start(SESSION);
+  await step($);
+  expect(w.sent).toEqual([SONNET]);
+});
+
+test("the window warns once as it passes 80%", async ($, on) => {
+  const w = world(on);
+  await $.session.start(SESSION);
+  const at = (pct: number) =>
+    $.session.measure({
+      ...w.usage(),
+      rateLimits: [{ kind: "five_hour", percentUsed: pct, resetsAt: RESETS }],
+      changed: ["rateLimits"],
+    });
+  await at(81);
+  await at(83);
+  expect(w.toasts).toHaveLength(1);
+  expect(w.toasts[0]).toContain("optimAIzr: 5h window at 81%");
+});
+
+test("a savings milestone gets a toast", async ($, on) => {
+  // 50,000 output tokens: $1.00 on Opus 5.5, $0.50 on Sonnet 5.5.
+  const w = world(on, {
+    files: switchTo(SONNET),
+    tokens: { ...TOKENS, input_tokens: 0, output_tokens: 50_000 },
+  });
+  await $.session.start(SESSION);
+  await step($);
+  expect(w.toasts).toEqual(["optimAIzr: saved $0.50 this session by switching"]);
+});
+
+test("/optimaizr hud opens the HUD with the session at a glance", async ($, on) => {
+  const w = world(on);
+  await $.session.start(SESSION);
+  for (const usd of [1.1, 1.3]) {
+    await $.turn.start({ text: "go", turnId: "t1" });
+    w.now.usd = usd;
+    await step($);
+    await answered($);
+  }
+  expect((await $.command.run(command("hud"))).text).toBe(
+    "Opened the optimAIzr HUD. Esc closes it.",
+  );
+  expect(w.opened).toEqual(["optimaizr"]);
+
+  const pane = textOf(
+    await $.ui.render({
+      component: "Pane",
+      surface: "terminal",
+      requestId: "optimaizr",
+      props: {
+        title: "optimAIzr",
+        isFocused: true,
+        bodyColumns: 80,
+        placement: "dock",
+        scroll: { offset: 0, bodyRows: 30 },
+        view: {},
+      },
+    }),
+  );
+  for (const part of [
+    "● watching",
+    "no switch yet",
+    "spent $1.30",
+    "2 requests",
+    "5h",
+    "priciest #2",
+  ]) {
+    expect(pane).toContain(part);
+  }
+});
+
+test("after an hour idle the cache has expired, so a long conversation switches at once", async ($, on) => {
+  const w = world(on, { files: switchTo(SONNET) });
+  w.now.ctx = 100_000;
+  await $.session.start(SESSION);
+  await step($);
+  await w.clock.advance(61 * MINUTE);
+  await step($);
+  expect(w.sent).toEqual([OPUS, SONNET]);
+  expect(textOf(await $.ui.render(band()))).not.toContain("waiting");
+});
+
+test("the HUD's pause button stops and resumes the switch", async ($, on) => {
+  const w = world(on, { files: switchTo(SONNET) });
+  await $.session.start(SESSION);
+  await step($);
+  const pane = await $.ui.mount({
+    plugin: "optimaizr",
+    surface: "terminal",
+    component: "Pane",
+    requestId: "optimaizr",
+    props: {
+      title: "optimAIzr",
+      isFocused: true,
+      bodyColumns: 44,
+      placement: "dock",
+      scroll: { offset: 0, bodyRows: 30 },
+      view: {},
+    },
+  });
+  expect(textOf(await pane.drawn())).toContain("● on Sonnet 5.5");
+
+  await pane.press({ key: "pause" });
+  await step($);
+  await pane.press({ key: "pause" });
+  await step($);
+  expect(w.sent).toEqual([SONNET, OPUS, SONNET]);
+});
+
+test("before a switch has paid for its reload, the pane and /optimaizr say so", async ($, on) => {
+  // 100,000 tokens reloaded into Sonnet: $0.38 more than Opus reading them.
+  const w = world(on, {
+    files: switchTo(SONNET),
+    tokens: { ...TOKENS, cache_creation_input_tokens: 100_000 },
+  });
+  await $.session.start(SESSION);
+  await step($);
+  const pane = textOf(
+    await $.ui.render({
+      component: "Pane",
+      surface: "terminal",
+      requestId: "optimaizr",
+      props: {
+        title: "optimAIzr",
+        isFocused: true,
+        bodyColumns: 44,
+        placement: "dock",
+        scroll: { offset: 0, bodyRows: 30 },
+        view: {},
+      },
+    }),
+  );
+  expect(pane).toContain("reload $0.38 not won back yet");
+  expect((await $.command.run(command(""))).text).toContain(
+    "Saved      not yet: reloading the conversation cost $0.38 more than the switch has saved so far",
+  );
+  expect(w.sent).toEqual([SONNET]);
+});
+
+test("an automatic switch says so, once, and can be undone the same way", async ($, on) => {
+  const w = world(on, { files: switchTo(SONNET, { auto: true }) });
+  await $.session.start(SESSION);
+  await step($);
+  await step($);
+  expect(w.toasts).toEqual([
+    "optimAIzr: switched to Sonnet 5.5 automatically · p or /optimaizr off undoes",
+  ]);
+  expect(w.logs[0]).toContain("(model-fit, automatically)");
+  expect(textOf(await $.ui.render(band()))).toContain("Opus 5.5 → Sonnet 5.5 (auto)");
+});
+
+test("when only subagents switch, the note says so, and the main conversation gets its own", async ($, on) => {
+  const w = world(on, { files: switchTo(SONNET) });
+  w.now.ctx = 100_000;
+  await $.session.start(SESSION);
+  await step($);
+  await step($, OPUS, "agent-1");
+  await w.clock.advance(61 * MINUTE);
+  await step($);
+  expect(w.sent).toEqual([OPUS, SONNET, SONNET]);
+  expect(w.logs).toEqual([
+    "Switched this session's subagents from Opus 5.5 to Sonnet 5.5 (model-fit). Harder task? /optimaizr off goes back to Opus 5.5.",
+    "Switched this session from Opus 5.5 to Sonnet 5.5 (model-fit). Harder task? /optimaizr off goes back to Opus 5.5.",
+  ]);
+});
+
+test("the HUD shows a saving as a share of the 5-hour window too", async ($, on) => {
+  // 50,000 output tokens: $1.00 on Opus, $0.50 on Sonnet, so $0.50 saved.
+  // The session spent $2.00 while the window moved from 58% to 62%: $0.50 a point.
+  const w = world(on, {
+    files: switchTo(SONNET),
+    tokens: { ...TOKENS, input_tokens: 0, output_tokens: 50_000 },
+  });
+  await $.session.start(SESSION);
+  w.now.usd = 3;
+  w.now.pct = 62;
+  await step($);
+  const hud = textOf(
+    await $.ui.render({
+      component: "Pane",
+      surface: "terminal",
+      requestId: "optimaizr",
+      props: {
+        title: "optimAIzr HUD",
+        isFocused: true,
+        bodyColumns: 60,
+        placement: "dock",
+        scroll: { offset: 0, bodyRows: 30 },
+        view: {},
+      },
+    }),
+  );
+  expect(hud).toContain("saved $0.50");
+  expect(hud).toContain("≈1.0% of your 5h window");
 });

@@ -1,5 +1,46 @@
 # Changelog
 
+## 0.8.1
+
+- **`optimaizr live --auto`.** Confident model and effort findings about
+  Claude Code are applied through the mod without asking; everything else still
+  asks. Each automatic switch says so once, in a toast and a note, the band and
+  the pane mark it `(auto)`, and `p` in the HUD or `/optimaizr off` undoes it.
+  The payback check below still holds a long conversation back.
+- **A switch waits until it pays.** Switching a conversation mid-way means the
+  new model reloads it into its cache, and on a long session that can cost
+  more than the switch saves. The mod now weighs it: the reload's cost against
+  what an average request in this session saves, and it switches a
+  conversation under way only when that pays back within 10 requests. Until
+  then the band says `waiting` and why, such as `reload $0.38 pays back in
+~43 requests`. Subagents start with an empty cache, so they switch right
+  away, and so does a conversation idle for over an hour, whose cache has
+  expired.
+- **Opus steps down to Sonnet, not Haiku.** The model-fit finding moves simple
+  work one tier down within its provider: Opus to Sonnet 5.5 (half the price),
+  Sonnet to Haiku 4.5, GPT-5 to GPT-5 mini. Sonnet 5.5's 1M-token window also
+  takes the long-context calls Haiku's 200K window couldn't, so the finding
+  usually covers more traffic: on one month of real use, $89.56/mo instead of
+  $45.51.
+- **`/optimaizr hud`.** A heads-up display docked beside Claude: what it
+  is doing right now (`● on Sonnet 5.5`, `● waiting`, `● paused`), what the
+  switch saved, how much cheaper it ran and roughly what share of your
+  5-hour window that is, spend, burn rate per hour, cache
+  hits, both plan windows as gauges with when the 5-hour one runs out, a
+  coloured sparkline of the last turns with the priciest one named, and a
+  button (`p`) that pauses or resumes the switch.
+- **A meter you can read at a glance.** The band's meter turns from green to
+  yellow to red as the window fills, and a toast says when it passes 80% and
+  95%, with the time left at this pace. Another says when a session's savings
+  pass $0.50, $1, $2 and so on.
+- **Subagent savings priced right.** A subagent writes its cache from scratch
+  on either model, so its first request no longer counts as a reload.
+
+- **Fixes.** A model-fit finding over more than one model (Opus and Sonnet
+  traffic, each with its own step down) could no longer be applied with Y. It
+  can again, each model to its own target. The question card no longer repeats
+  `Change:` on every wrapped line, and `--auto` says why when it asks after all.
+
 ## 0.8.0
 
 **optimAIzr inside Claude Code.** Claude Code 2.1.287 added mods, plugins that

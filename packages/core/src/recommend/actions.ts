@@ -98,10 +98,22 @@ export interface ProposedChange {
 export function proposedChange(f: OptimizationFinding, traffic?: Traffic): ProposedChange {
   const t = traffic ? { traffic } : {};
   const c = f.candidate;
-  if (c?.kind === "swap-model" && c.to) {
+  // One target, or one per model (Opus to Sonnet, Sonnet to Haiku): a rewriter
+  // asks `targetFor` for each slice either way.
+  if (c?.kind === "swap-model" && (c.to || c.targetFor)) {
     const from = f.affected.models.map((m) => priceFor(m)?.label ?? m).join(" / ");
-    const to = priceFor(c.to)?.label ?? c.to;
-    return { kind: "swap-model", label: `Switch to ${to}`, from, to, toModelId: c.to, ...t };
+    const targets = c.to
+      ? [c.to]
+      : [...new Set(f.affected.models.map((m) => c.targetFor?.(m)).filter((m) => m !== undefined))];
+    const to = targets.map((id) => priceFor(id)?.label ?? id).join(" / ");
+    return {
+      kind: "swap-model",
+      label: `Switch to ${to}`,
+      from,
+      to,
+      ...(c.to ? { toModelId: c.to } : {}),
+      ...t,
+    };
   }
   if (c?.kind === "lower-effort")
     return { kind: "lower-effort", label: "Lower reasoning effort", ...t };

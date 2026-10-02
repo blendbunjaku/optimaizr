@@ -340,23 +340,34 @@ function blendedRate(price: ModelPrice): number {
   return card.inputPerM + card.outputPerM;
 }
 
+// One tier down: a frontier model's mechanical calls go to a balanced model
+// people trust (Opus to Sonnet), a balanced model's to a fast one.
+const STEP_DOWN: Record<string, string[]> = {
+  frontier: ["balanced", "fast"],
+  balanced: ["fast"],
+};
+
 /**
- * The cheapest fast-tier model from the same provider. Crossing vendors is a
- * migration (SDK, auth, limits, data terms), not a config change, so it's
- * never proposed.
+ * The cheapest cheaper model one tier down from the same provider, or the tier
+ * below that when there is none. Crossing vendors is a migration (SDK, auth,
+ * limits, data terms), not a config change, so it's never proposed.
  */
 function downgradeTargetFor(modelId: string): ModelPrice | null {
   const from = priceFor(modelId);
   if (!from) return null;
   const ceiling = blendedRate(from);
-  let best: ModelPrice | null = null;
-  for (const m of allModels()) {
-    if (m.provider !== from.provider || m.tier !== "fast") continue;
-    const rate = blendedRate(m);
-    if (rate >= ceiling) continue;
-    if (!best || rate < blendedRate(best)) best = m;
+  for (const tier of STEP_DOWN[from.tier] ?? []) {
+    let best: ModelPrice | null = null;
+    for (const m of allModels()) {
+      if (m.provider !== from.provider || m.tier !== tier) continue;
+      const rate = blendedRate(m);
+      if (rate >= ceiling) continue;
+      // Ties keep the first listed, which is the newest.
+      if (!best || rate < blendedRate(best)) best = m;
+    }
+    if (best) return best;
   }
-  return best;
+  return null;
 }
 
 /** "A", "A and B", "A, B and C". */
@@ -441,7 +452,7 @@ function modelFit(ctx: Ctx): OptimizationFinding | null {
       "Every affected call fits inside the context window of the model it would move to.",
       "Quality is unverified until `optimaizr verify model-fit` replays this traffic.",
     ],
-    calculation: `Each call re-priced on the cheapest fast-tier model from its own provider (${names}) using its recorded token counts and the rate cards in force on the day of the call, then summed.`,
+    calculation: `Each call re-priced one tier down on the cheapest model from its own provider (${names}) using its recorded token counts and the rate cards in force on the day of the call, then summed.`,
     observations: samples.map((s) => `${s.desc}, would save ${usd(s.saved)}`),
     fix: `Route mechanical steps to ${names} and keep the bigger model for planning and multi-step reasoning. In agent setups this is usually a sub-agent model override, not a change to your main model.`,
     candidate: {

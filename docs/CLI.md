@@ -102,8 +102,10 @@ Flags: `--why` (show every calculation and assumption), `--days N`,
 `--project STR`, `--source all|agents|sdk`, `--tz utc|local|<IANA>`, `--json`.
 
 `live` also takes `--backfill N` (replay recorded history first), `--window N`,
-`--min-usd N` (default $0.25), `--source all|agents|sdk`, and `--no-prompt` (print
-recommendations instead of asking). With `--json` it never prompts.
+`--min-usd N` (default $0.25), `--source all|agents|sdk`, `--no-prompt` (print
+recommendations instead of asking), and `--auto` (apply confident model and
+effort switches through the Claude Code mod without asking). With `--json` it
+never prompts.
 
 ---
 
@@ -130,14 +132,20 @@ What it adds:
 - **Each answer** gets one line: `optimaizr: this turn $0.18 · 4 requests · 5h 55%
 → 56%`. Set the plugin's `turnLine` option to `false` to turn it off.
 - **`/optimaizr`** prints the session's spend, both plan windows and any active
-  switch.
+  switch. `/optimaizr hud` opens the same as a HUD, with the saving also shown as an
+  estimated share of your 5-hour window (from how far the window moved against
+  what the session spent; other sessions move it too): gauges for both windows, a
+  sparkline of the last turns, savings and retries held. The meter turns green,
+  yellow, then red as the window fills, and a toast marks 80% and 95%.
 - **Switches.** When you press **Y** on a model swap in `optimaizr live`, the
   mod applies it from the next request of every running session in that
   project. A finding that covered only subagent calls switches only
   subagents, which start with a fresh context, so no cache is lost. A switch
   is written only when the finding covers at least 80% of that traffic's spend.
-  A conversation already under way reads its context once more without the
-  cache on the new model. If the API refuses the model, the request is sent as
+  A conversation already under way switches only once reloading it into the
+  new model's cache pays back within 10 requests, priced from this session's
+  average request; until then the band says `waiting` and why. Subagents start
+  with an empty cache and switch at once. If the API refuses the model, the request is sent as
   it was and the session stays on its own model. The first switched request
   leaves a note in the conversation, and the band names the model you are on.
   For a harder task, `/optimaizr off` sends that session back to its own model

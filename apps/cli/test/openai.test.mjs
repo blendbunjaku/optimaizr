@@ -378,10 +378,24 @@ test("mechanical calls are re-routed within their own provider, never across ven
 
   assert.ok(finding, "expected a model-fit finding");
 
-  // Each vendor's traffic goes to that vendor's cheapest fast-tier model.
-  assert.equal(finding.candidate.targetFor("claude-opus-5"), "claude-haiku-4-5");
-  assert.equal(finding.candidate.targetFor("gpt-5"), "gpt-5-nano");
+  // Each vendor's traffic steps one tier down, inside that vendor.
+  assert.equal(finding.candidate.targetFor("claude-opus-5"), "claude-sonnet-5-5");
+  assert.equal(finding.candidate.targetFor("gpt-5"), "gpt-5-mini");
   assert.ok(finding.savings.windowUsd > 0);
+});
+
+test("a balanced model's mechanical calls still step down to the fast tier", () => {
+  const events = [];
+  for (let i = 0; i < 20; i++) events.push(mechanicalEvent("claude-sonnet-5-5", "anthropic", i));
+
+  const finding = findWaste({
+    events,
+    window: { from: events[0].ts, to: events[events.length - 1].ts, days: 9 },
+    sources: ["test"],
+    warnings: [],
+  }).find((f) => f.rule === "model-fit");
+
+  assert.equal(finding?.candidate.targetFor("claude-sonnet-5-5"), "claude-haiku-4-5");
 });
 
 test("a call already on the cheapest model in its provider has nowhere to go", () => {

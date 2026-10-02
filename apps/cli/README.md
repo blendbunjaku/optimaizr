@@ -46,8 +46,10 @@ Install it from a Claude Code session (2.1.287 or later):
   how far the window moved.
 - **Switches in the session you are in.** Press **Y** on a model swap in
   `optimaizr live` and the running session uses the cheaper model from its next
-  request. No restart, no `/model`. A reasoning-effort finding lowers effort
-  the same way.
+  request. No restart, no `/model`. Subagents switch at once; a long
+  conversation waits until reloading it into the new model pays back. A
+  reasoning-effort finding lowers effort the same way. With
+  `optimaizr live --auto`, confident switches apply without asking.
 - **What a switch saved.** A switched turn's line leads with the saving: the
   same tokens priced on the original model, less what they cost. The band keeps
   a running total.
@@ -57,7 +59,7 @@ Install it from a Claude Code session (2.1.287 or later):
   with nothing changed, the next identical attempt is held once and Claude is
   asked to change something first.
 - **`/optimaizr`** prints the session's spend, what it saved, both plan windows
-  and any switch.
+  and any switch. `/optimaizr hud` shows it all as gauges and a sparkline.
 
 It reads usage figures and the commands Claude runs, never your prompts or file
 contents, and makes no network calls.

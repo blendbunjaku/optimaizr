@@ -23,7 +23,9 @@ Needs Claude Code 2.1.287 or later.
   `saved $0.10 vs Opus 5.5 · this turn $0.10 on Sonnet 5.5 · …`, and the band
   keeps a running total. It is the same tokens priced on both models.
 - **`/optimaizr`** prints the session's spend, what it saved, both plan windows
-  and any switch.
+  and any switch. **`/optimaizr hud`** shows it as gauges and a sparkline.
+- **Switches that pay:** subagents switch at once; a long conversation waits
+  until reloading it into the new model pays back, and the band says so.
 - **A guard against retry loops:** when the same command fails twice in a row
   with nothing changed, the next identical attempt is held once and Claude is
   asked to change something first.

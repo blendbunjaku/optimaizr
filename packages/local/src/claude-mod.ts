@@ -127,6 +127,8 @@ export interface ClaudeModRewriterOptions {
   sessionsDir?: string;
   minShare?: number;
   now?: () => Date;
+  /** Mark what it writes as applied by `live --auto`. */
+  auto?: boolean;
 }
 
 /**
@@ -174,6 +176,7 @@ export function claudeModRewriter(opts: ClaudeModRewriterOptions = {}): RequestR
           from: s.model,
           to,
           ...(effort ? { effort } : {}),
+          ...(opts.auto ? { auto: true } : {}),
           at,
         });
       }
@@ -211,10 +214,36 @@ export function claudeModRewriter(opts: ClaudeModRewriterOptions = {}): RequestR
           `${n} Claude Code session${n === 1 ? "" : "s"} running the optimAIzr mod ` +
           `switch${n === 1 ? "es" : ""} from the next request, no restart. ` +
           // Changing the model or the effort means the cached conversation can't be reused.
-          "A conversation already under way reads its context once more without the cache. " +
+          (effort
+            ? "A conversation already under way reads its context once more without the cache. "
+            : "Subagents switch now. A conversation already under way switches once reloading " +
+              "it into the new model's cache pays back within 10 requests; until then the mod " +
+              "shows it as waiting. ") +
           `Harder task? \`/optimaizr off\` in a session goes back for that session; ` +
           `\`optimaizr undo ${finding.rule}\` reverts it everywhere.`,
       };
     },
   };
+}
+
+/**
+ * Whether `live --auto` may apply a finding without asking: a model or effort
+ * switch, not low confidence, covering Claude Code traffic, with the mod running.
+ */
+export function autoEligible(
+  rec: {
+    finding: OptimizationFinding;
+    traffic: { slices: TrafficSlice[] };
+    withheld?: unknown;
+  },
+  running: number,
+): boolean {
+  const kind = rec.finding.candidate?.kind;
+  return (
+    !rec.withheld &&
+    (kind === "swap-model" || kind === "lower-effort") &&
+    rec.finding.savings.confidence !== "low" &&
+    rec.traffic.slices.some((s) => s.source === "claude-code") &&
+    running > 0
+  );
 }
