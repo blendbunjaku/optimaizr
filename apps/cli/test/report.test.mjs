@@ -8,6 +8,7 @@ import { ingestClaudeCode } from "@optimaizr/core";
 import { summarize } from "@optimaizr/core";
 import { findWaste } from "@optimaizr/core";
 import { renderHtml } from "@optimaizr/core";
+import { callActivity, callSession, projectName } from "@optimaizr/core";
 
 /**
  * The HTML report is the one artefact optimAIzr produces that gets forwarded —
@@ -106,4 +107,23 @@ test("the report carries no credential-shaped material", async () => {
   assert.ok(!/sk-[A-Za-z0-9_-]{16,}/.test(html), "no API key shape");
   assert.ok(!/ANTHROPIC_API_KEY/.test(html), "no key variable named");
   assert.ok(!/Bearer\s+[A-Za-z0-9._-]{12,}/.test(html), "no bearer token");
+});
+
+test("callActivity reads Claude Code and Codex tool calls", () => {
+  const base = { sessionId: "03f7865d-d886", isSubagent: true, project: "C:\\Users\\me\\repo" };
+  const read = { ...base, tools: [{ name: "Read", signature: "Read:/a/b/src/app.ts" }] };
+  const codex = {
+    ...base,
+    tools: [{ name: "shell", signature: 'shell:{"command":["bash","-lc","npm test"]}' }],
+  };
+  assert.equal(callActivity(read), "Read .../src/app.ts");
+  assert.equal(callActivity(codex), "shell npm test");
+  assert.equal(callActivity({ ...base, tools: [] }), "text only, no tools");
+  assert.equal(callSession(read), "03f7865d sub");
+  assert.equal(projectName(base.project), "repo");
+});
+
+test("callActivity drops the agent's cd prefix", () => {
+  const e = { tools: [{ name: "Bash", signature: "Bash:cd /Users/me/repo && npm test" }] };
+  assert.equal(callActivity(e), "Bash npm test");
 });

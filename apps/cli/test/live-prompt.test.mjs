@@ -45,7 +45,8 @@ function fixture(n = 60) {
 /** A real model-fit recommendation, confident enough to be worth a prompt. */
 async function recommendation() {
   const data = await ingestClaudeCode({ root: fixture() });
-  const analyzer = createLiveAnalyzer({ minIntervalMs: 0 });
+  // The fixture is small; this tests prompting, not the default floor.
+  const analyzer = createLiveAnalyzer({ minIntervalMs: 0, minUsd: 0.01 });
   const recs = [];
   for (const e of data.events) recs.push(...analyzer.push(e));
   recs.push(...analyzer.flush());

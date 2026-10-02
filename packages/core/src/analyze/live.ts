@@ -23,8 +23,10 @@ export const LIVE_DEFAULTS = {
   minIntervalMs: 2_000,
   /** Also re-analyse after this many calls, however fast they arrive. */
   everyNEvents: 25,
-  /** Don't announce trivia. Matches the rules' own $0.01 floor. */
-  minUsd: 0.01,
+  /** Don't announce trivia. Cents over a few minutes read as noise, not advice. */
+  minUsd: 0.25,
+  /** Affected calls quoted under a finding, so it can be traced to an agent. */
+  examples: 3,
   /** Re-announce a standing finding only once its cost has grown this much. */
   regrowth: 2,
   /** Above this probability, the judge's "needs a big model" wins. */
@@ -67,6 +69,10 @@ export interface LiveRecommendation {
   windowEvents: number;
   /** The call whose arrival tipped the rule over its threshold. */
   trigger: { id: string; model: string; route?: string | undefined; ts: string };
+  /** Distinct sessions among the affected calls; parallel agents each have their own. */
+  sessions: number;
+  /** The most recent affected calls, newest first, so a finding names its source. */
+  examples: UsageEvent[];
   /**
    * Where the affected calls came from (sources, services, routes, models), so
    * accepting a finding changes only that traffic.
@@ -185,6 +191,7 @@ export function createLiveAnalyzer(opts: LiveOptions = {}): LiveAnalyzer {
       const windowMs =
         first && last ? new Date(last.ts).getTime() - new Date(first.ts).getTime() : 0;
       const at = trigger ?? last;
+      const affected = events.filter(finding.affects);
 
       out.push({
         recommendation,
@@ -198,6 +205,8 @@ export function createLiveAnalyzer(opts: LiveOptions = {}): LiveAnalyzer {
           route: at?.route,
           ts: at?.ts ?? "",
         },
+        sessions: new Set(affected.map((e) => e.sessionId)).size,
+        examples: affected.slice(-LIVE_DEFAULTS.examples).reverse(),
         traffic: trafficOf(finding, events),
         ...(before !== undefined ? { repeatOf: before } : {}),
         ...(judged ? { judged } : {}),

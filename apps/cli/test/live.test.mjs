@@ -280,3 +280,21 @@ test("a failing Jev never stops local recommendations", async () => {
     "an unreachable Jev must not withhold a local finding",
   );
 });
+
+test("a live finding names the sessions and calls behind it", async () => {
+  const recs = streamAll(await events());
+  assert.ok(recs.length > 0, "expected live recommendations");
+  for (const rec of recs) {
+    assert.ok(rec.sessions >= 1);
+    assert.ok(rec.examples.length > 0 && rec.examples.length <= 3);
+    assert.ok(rec.examples.every((e) => rec.finding.affects(e)));
+  }
+});
+
+test("cents are not announced: the default floor drops trivial findings", async () => {
+  const evts = await events();
+  const loose = streamAll(evts, { minUsd: 0 });
+  const strict = streamAll(evts);
+  assert.ok(strict.every((r) => r.observedUsd >= 0.25));
+  assert.ok(strict.length <= loose.length);
+});

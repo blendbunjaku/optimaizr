@@ -5,6 +5,7 @@ import type {
   EvidenceClass,
   OptimizationFinding,
   Recommendation,
+  UsageEvent,
 } from "../domain/types.js";
 import type { Summary, TopCall } from "../analyze/summary.js";
 import type { DrillNode, DrillTree } from "../analyze/drilldown.js";
@@ -888,6 +889,52 @@ const SEVERITY_TAG: Record<OptimizationFinding["severity"], string> = {
   low: dim("LOW "),
 };
 
+function clip(s: string, n: number): string {
+  return s.length > n ? `${s.slice(0, n - 3)}...` : s;
+}
+
+/** Last folder of a project path, on either separator (Windows paths use `\`). */
+export function projectName(p: string): string {
+  return p.split(/[\\/]/).filter(Boolean).slice(-1)[0] ?? p;
+}
+
+/** Short session id, marked when a subagent made the call. */
+export function callSession(e: UsageEvent): string {
+  return `${e.sessionId.slice(0, 8)}${e.isSubagent ? " sub" : ""}`;
+}
+
+// Codex records a shell call as JSON args; pull out the command itself.
+function commandOf(text: string): string | undefined {
+  if (!text.startsWith("{")) return undefined;
+  try {
+    const a = JSON.parse(text) as { command?: unknown; cmd?: unknown };
+    const cmd = a.command ?? a.cmd;
+    if (typeof cmd === "string") return cmd;
+    if (Array.isArray(cmd)) {
+      const shell = /^(bash|sh|zsh|pwsh|powershell)(\.exe)?$/.test(String(cmd[0]));
+      return shell && cmd.length >= 3 ? String(cmd[cmd.length - 1]) : cmd.join(" ");
+    }
+  } catch {
+    // Signatures are cut at 200 chars, so long args may not parse.
+  }
+  return undefined;
+}
+
+/** What a call did, from its first tool: `Read .../src/app.ts`, `Bash npm test`. */
+export function callActivity(e: UsageEvent, width = 48): string {
+  const first = e.tools[0];
+  if (!first) return "text only, no tools";
+  const colon = first.signature.indexOf(":");
+  let target = colon >= 0 ? first.signature.slice(colon + 1) : "";
+  target = (commandOf(target) ?? target).replace(/\s+/g, " ").trim();
+  // Agents prefix most commands with `cd <repo> &&`; the part after it is the work.
+  target = target.replace(/^cd \S+ && /, "");
+  const parts = target.split(/[\\/]/);
+  if (parts.length > 3 && !target.includes(" ")) target = `.../${parts.slice(-2).join("/")}`;
+  const more = e.tools.length > 1 ? ` +${e.tools.length - 1} more` : "";
+  return clip(`${first.name} ${target}`.trim(), width - more.length) + more;
+}
+
 /**
  * One streamed recommendation. Quotes `observedUsd`, never `monthlyUsd`: a
  * window of minutes can't be projected to a month.
@@ -900,6 +947,8 @@ export function renderLiveRecommendation(
     windowMs: number;
     windowEvents: number;
     trigger: { id: string; model: string; route?: string | undefined; ts: string };
+    sessions?: number;
+    examples?: readonly UsageEvent[];
     repeatOf?: number;
     judged?: { needsFrontierShare: number; sampled: number };
     withheld?: { by: string; needsFrontierShare: number; sampled: number };
@@ -929,6 +978,18 @@ export function renderLiveRecommendation(
   );
 
   for (const line of wrap(rec.recommendation.rationale, 66)) out.push(`        ${dim(line)}`);
+
+  // Name the calls behind the number, so it can be traced to an agent.
+  if (rec.examples && rec.examples.length > 0) {
+    const n = rec.sessions ?? 1;
+    out.push(`        ${dim(`from ${n} session${n === 1 ? "" : "s"}, latest:`)}`);
+    for (const e of rec.examples) {
+      const time = new Date(e.ts).toLocaleTimeString();
+      out.push(
+        `          ${dim(pad(time, 12))} ${pad(callSession(e), 12)} ${dim(pad(clip(projectName(e.project), 16), 16))} ${callActivity(e, 40)}`,
+      );
+    }
+  }
 
   if (rec.withheld) {
     const pct = (rec.withheld.needsFrontierShare * 100).toFixed(0);

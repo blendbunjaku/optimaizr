@@ -4,11 +4,14 @@ import {
   acceptRisk,
   blue,
   bold,
+  callActivity,
+  callSession,
   dim,
   findWaste,
   green,
   modelLabel,
   priceFor,
+  projectName,
   projectionDays,
   readVerification,
   red,
@@ -181,9 +184,13 @@ export async function cmdShow(args: Args): Promise<void> {
   );
   console.log("");
   for (const e of shown) {
-    const where = (e.route ?? e.project.split("/").slice(-1)[0] ?? "").slice(0, 22);
+    const where = (e.route ?? projectName(e.project)).slice(0, 22);
     console.log(
       `    ${usd(e.cost.total).padStart(9)} ${dim("|")} ${modelLabel(e.model).padEnd(12)} ${dim(`${fmtTokens(e.inputTokens + e.cacheReadTokens)} in / ${e.outputTokens} out`.padEnd(22))} ${dim(where.padEnd(22))} ${dim(e.ts.slice(0, 16).replace("T", " "))}`,
+    );
+    // Which agent made the call and what it did, so parallel agents can be told apart.
+    console.log(
+      `              ${dim(`session ${callSession(e).padEnd(12)}`)} ${callActivity(e, 52)}`,
     );
   }
   console.log("");

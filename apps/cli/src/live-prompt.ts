@@ -4,8 +4,11 @@ import {
   nextCommandFor,
   usd,
   bold,
+  callActivity,
+  callSession,
   dim,
   green,
+  projectName,
   red,
   yellow,
   blue,
@@ -140,6 +143,13 @@ function renderCard(rec: LiveRecommendation): string {
   out.push(
     `  ${dim("Observed cost:")} ${bold(red(usd(rec.observedUsd)))} ${dim("/")} ${f.affected.calls} ${dim("calls")}`,
   );
+  const latest = rec.examples[0];
+  if (latest) {
+    const more = rec.sessions > 1 ? dim(` (+${rec.sessions - 1} more sessions)`) : "";
+    out.push(
+      `  ${dim("Latest:")}        ${callSession(latest)} ${dim(projectName(latest.project))} ${callActivity(latest, 36)}${more}`,
+    );
+  }
   out.push("");
   out.push(`  ${bold("[Y]")} Apply optimization`);
   out.push(`  ${bold("[N]")} Continue`);
