@@ -138,7 +138,9 @@ function renderCard(rec: LiveRecommendation): string {
     out.push(`  ${dim("Current:")}       ${change.from}`);
     out.push(`  ${dim("Suggested:")}     ${green(change.to)}`);
   } else {
-    for (const line of wrapText(change.label, 52)) out.push(`  ${dim("Change:")}        ${line}`);
+    const [first = "", ...rest] = wrapText(change.label, 52);
+    out.push(`  ${dim("Change:")}        ${first}`);
+    for (const line of rest) out.push(`                 ${line}`);
   }
   out.push(
     `  ${dim("Observed cost:")} ${bold(red(usd(rec.observedUsd)))} ${dim("/")} ${f.affected.calls} ${dim("calls")}`,

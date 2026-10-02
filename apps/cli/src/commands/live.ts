@@ -1,4 +1,5 @@
 import {
+  accept,
   blue,
   bold,
   type BudgetStatus,
@@ -12,6 +13,7 @@ import {
   dim,
   green,
   LIVE_DEFAULTS,
+  type LiveRecommendation,
   localTime,
   modelLabel,
   monthDay,
@@ -25,10 +27,12 @@ import {
   resetTime,
   usd,
   windowLabel,
+  wrap as wrapText,
   yellow,
 } from "@optimaizr/core";
 import {
   activeModSessions,
+  autoEligible,
   claudeModRewriter,
   claudeProjectsRoot,
   claudeSettingsRewriter,
@@ -91,6 +95,39 @@ export async function cmdLive(args: Args): Promise<void> {
   // it behaves exactly like Ctrl-C anywhere else.
   let requestExit: () => void = () => {};
 
+  // --auto: a confident model or effort finding about Claude Code is applied
+  // through the mod with no question. Everything else still asks.
+  const auto = Boolean(args.flags.auto);
+  const autoRewriter = claudeModRewriter({ auto: true });
+  const autoTried = new Set<string>();
+  const autoApply = (rec: LiveRecommendation): boolean => {
+    if (!auto || !autoEligible(rec, activeModSessions().length)) return false;
+    const key = `${rec.finding.rule}::${rec.trigger.route ?? rec.trigger.model}`;
+    if (autoTried.has(key)) return true;
+    autoTried.add(key);
+    const outcome = accept(rec.finding, {
+      rewriters: [autoRewriter],
+      traffic: rec.traffic,
+      dryRun,
+    });
+    if (outcome.kind !== "applied") {
+      // Say why it asks after all, so --auto never looks like it did nothing.
+      const why = outcome.kind === "queued" ? outcome.reason : outcome.detail;
+      if (!json) console.log(`\n  ${dim(`auto: not applied, ${why}. Asking instead.`)}`);
+      return false;
+    }
+    if (json) {
+      console.log(JSON.stringify({ auto: { rule: rec.finding.rule, detail: outcome.detail } }));
+    } else {
+      console.log("");
+      console.log(
+        `  ${yellow("⚡")} ${bold("optimAIzr")} ${dim("auto ·")} ${rec.recommendation.action}`,
+      );
+      for (const line of wrapText(outcome.detail, 66)) console.log(`  ${dim(line)}`);
+    }
+    return true;
+  };
+
   const prompt = json
     ? null
     : createLivePrompt({
@@ -145,6 +182,7 @@ export async function cmdLive(args: Args): Promise<void> {
         }
       : {}),
     onRecommendation: (rec) => {
+      if (autoApply(rec)) return;
       if (json) {
         console.log(
           JSON.stringify({
@@ -298,7 +336,11 @@ export async function cmdLive(args: Args): Promise<void> {
     }
     if (source === "all" || source === "sdk") watching.push(ledgerPath());
     for (const w of watching) console.log(`  ${dim(`watching ${w}`)}`);
-    if (watchesAgents && interactive) {
+    if (watchesAgents && auto) {
+      console.log(
+        `  ${dim("auto: confident model and effort switches apply to Claude Code sessions running the mod, no question; p or /optimaizr off undoes")}`,
+      );
+    } else if (watchesAgents && interactive) {
       const mods = activeModSessions().length;
       console.log(
         `  ${dim(

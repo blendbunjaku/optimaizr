@@ -4,9 +4,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { accept, trafficOf } from "@optimaizr/core";
+import { accept, proposedChange, trafficOf } from "@optimaizr/core";
 import {
   activeModSessions,
+  autoEligible,
   claudeModRewriter,
   claudeSettingsRewriter,
   describeClaudeOverride,
@@ -99,6 +100,7 @@ test("Y switches running sessions through the mod, per project and agent", () =>
   assert.equal(outcome.via, "optimAIzr mod");
   assert.match(outcome.detail, /1 Claude Code session running the optimAIzr mod switches from/);
   assert.match(outcome.detail, /`\/optimaizr off` in a session goes back for that session/);
+  assert.match(outcome.detail, /Subagents switch now/);
   assert.match(outcome.detail, /optimaizr undo model-fit` reverts it everywhere/);
 
   const written = readOverrides(file);
@@ -243,4 +245,69 @@ test("Claude Code traffic is split by agent, each slice with its own share", () 
   const main = slices.find((s) => s.subagent === false);
   assert.deepEqual([sub.calls, sub.share], [2, 1]);
   assert.deepEqual([main.calls, main.share], [1, 0.5]);
+});
+
+test("live --auto applies only confident model and effort switches, with the mod running", () => {
+  const f = finding([slice()]);
+  const rec = (over = {}) => ({
+    finding: { ...f, savings: { confidence: "medium" } },
+    traffic: f.traffic,
+    ...over,
+  });
+  assert.equal(autoEligible(rec(), 1), true);
+  assert.equal(autoEligible(rec(), 0), false, "no session running the mod");
+  assert.equal(autoEligible(rec({ withheld: { by: "jev" } }), 1), false);
+  assert.equal(
+    autoEligible({ ...rec(), finding: { ...f, savings: { confidence: "low" } } }, 1),
+    false,
+  );
+  assert.equal(
+    autoEligible({ ...rec(), traffic: { slices: [slice({ source: "sdk" })] } }, 1),
+    false,
+  );
+});
+
+test("what live --auto writes is marked as automatic", () => {
+  const file = path.join(tempDir(), "overrides.json");
+  const r = claudeModRewriter({
+    file,
+    auto: true,
+    sessionsDir: sessions({ id: "s1", seenAt: ago(5_000) }),
+    now: () => NOW,
+  });
+  const f = finding([slice()]);
+  accept(f, { rewriters: [r], traffic: f.traffic });
+  assert.equal(readOverrides(file)[0].auto, true);
+});
+
+test("a finding over Opus and Sonnet applies, each model to its own step down", () => {
+  const file = path.join(tempDir(), "overrides.json");
+  const r = claudeModRewriter({
+    file,
+    sessionsDir: sessions({ id: "s1", seenAt: ago(5_000) }),
+    now: () => NOW,
+  });
+  const base = finding([slice(), slice({ model: "claude-sonnet-5-5" })]);
+  const f = {
+    ...base,
+    affected: { ...base.affected, models: ["claude-opus-5-5", "claude-sonnet-5-5"] },
+    candidate: {
+      kind: "swap-model",
+      targetFor: (m) => (m.includes("opus") ? "claude-sonnet-5-5" : "claude-haiku-4-5"),
+      matches: () => true,
+      description: "step down",
+    },
+  };
+  const change = proposedChange(f, f.traffic);
+  assert.equal(change.kind, "swap-model");
+  assert.equal(change.to, "Sonnet 5.5 / Haiku 4.5");
+
+  assert.equal(accept(f, { rewriters: [r], traffic: f.traffic }).kind, "applied");
+  assert.deepEqual(
+    readOverrides(file).map((o) => [o.from, o.to]),
+    [
+      ["claude-opus-5-5", "claude-sonnet-5-5"],
+      ["claude-sonnet-5-5", "claude-haiku-4-5"],
+    ],
+  );
 });

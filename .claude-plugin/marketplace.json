@@ -12,7 +12,7 @@
       "name": "optimaizr",
       "source": "./mods/optimaizr",
       "description": "What the turn has cost and your 5-hour window while Claude works, and model switches from optimaizr live applied from the next request.",
-      "version": "0.8.0",
+      "version": "0.8.1",
       "category": "productivity"
     }
   ]

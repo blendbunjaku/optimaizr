@@ -256,6 +256,9 @@ export function cmdHelp(): void {
   console.log(`  ${dim("--window N      live: calls held in the rolling window")}`);
   console.log(`  ${dim("--min-usd N     live: don't announce below this observed amount")}`);
   console.log(`  ${dim("--no-prompt     live: print recommendations, never ask")}`);
+  console.log(
+    `  ${dim("--auto          live: apply confident switches through the Claude Code mod")}`,
+  );
   console.log(`  ${dim("--budget N      monthly cap in USD: when it runs out, what buys days")}`);
   console.log(`  ${dim("--plan pro|max5|max20|team|team-premium")}`);
   console.log(`  ${dim("                read usage as a Claude subscription: sessions, limit")}`);

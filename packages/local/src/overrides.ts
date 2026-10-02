@@ -27,6 +27,8 @@ export interface ModelOverride {
   to: string;
   /** Claude Code only: an effort switch, the same model asked to think less. */
   effort?: string;
+  /** Applied by `live --auto`, with no one pressing Y. */
+  auto?: boolean;
   /** ISO 8601, when it was accepted. */
   at: string;
 }
@@ -61,7 +63,8 @@ function isOverride(o: unknown): o is ModelOverride {
     (v.route === undefined || typeof v.route === "string") &&
     (v.source === undefined || v.source === "claude-code") &&
     (v.subagent === undefined || typeof v.subagent === "boolean") &&
-    (v.effort === undefined || typeof v.effort === "string")
+    (v.effort === undefined || typeof v.effort === "string") &&
+    (v.auto === undefined || typeof v.auto === "boolean")
   );
 }
 
@@ -120,8 +123,9 @@ export function sdkOverrideRewriter(opts: SdkOverrideRewriterOptions = {}): Requ
   return {
     kind: "sdk wrapper",
 
-    supports(change: ProposedChange): boolean {
-      if (change.kind !== "swap-model" || !change.toModelId) return false;
+    supports(change: ProposedChange, finding: OptimizationFinding): boolean {
+      if (change.kind !== "swap-model") return false;
+      if (!change.toModelId && !finding.candidate?.targetFor) return false;
       return Boolean(change.traffic?.slices.some((s) => s.source === "sdk"));
     },
 

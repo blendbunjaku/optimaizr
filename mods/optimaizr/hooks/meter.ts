@@ -21,6 +21,8 @@ export type Override = {
   to: string;
   /** An effort switch: the same model, asked to think less. */
   effort?: string;
+  /** Applied by `optimaizr live --auto`, with no one pressing Y. */
+  auto?: boolean;
 };
 
 /** A request's token counts, as the API reports them. */
@@ -76,6 +78,43 @@ export function clock(iso: string): string {
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 }
 
+/**
+ * A saving as a share of the 5-hour window, from how far the window moved
+ * against what was spent meanwhile. Null until it has moved a whole point;
+ * other sessions on the account move it too, so it is an estimate.
+ */
+export function windowShare(saved: number, spent: { usd: number; pct: number }): number | null {
+  if (spent.pct < 1 || spent.usd <= 0 || saved <= 0) return null;
+  return saved / (spent.usd / spent.pct);
+}
+
+/** `0.4%`, `2.1%`, `12%`. */
+export function share(pct: number): string {
+  return pct < 10 ? `${pct.toFixed(1)}%` : `${Math.round(pct)}%`;
+}
+
+/** The meter's colour as the window fills: calm, then a warning, then urgent. */
+export function meterColor(pct: number): "green" | "yellow" | "red" {
+  return pct < 60 ? "green" : pct < 85 ? "yellow" : "red";
+}
+
+/** A sparkline of turn costs, one cell each, scaled to the largest. */
+export function sparkline(values: readonly number[]): string {
+  const cells = "▁▂▃▄▅▆▇█";
+  const top = Math.max(...values, 0);
+  return values.map((v) => cells[top > 0 ? Math.min(7, Math.round((v / top) * 7)) : 0]).join("");
+}
+
+/** The window levels that earn a toast, and the session savings that do. */
+export const WINDOW_ALERTS = [80, 95];
+export const SAVED_MILESTONES = [0.5, 1, 2, 5, 10, 20, 50];
+
+/** The highest threshold crossed going from `was` to `now`, if any. */
+export function crossed(thresholds: readonly number[], was: number, now: number): number | null {
+  const hit = thresholds.filter((t) => was < t && now >= t);
+  return hit.length > 0 ? hit[hit.length - 1]! : null;
+}
+
 /** The filled and empty halves of a meter `width` cells wide. */
 export function bar(pct: number, width: number): [string, string] {
   const n = Math.round((Math.min(100, Math.max(0, pct)) / 100) * width);
@@ -106,7 +145,8 @@ function isOverride(v: unknown): v is Override {
     typeof o.from === "string" &&
     typeof o.to === "string" &&
     (o.subagent === undefined || typeof o.subagent === "boolean") &&
-    (o.effort === undefined || EFFORTS.includes(o.effort))
+    (o.effort === undefined || EFFORTS.includes(o.effort)) &&
+    (o.auto === undefined || typeof o.auto === "boolean")
   );
 }
 
@@ -186,6 +226,30 @@ export function costAt(
  * the conversation to its cache, where the original model would have read it,
  * so that one is priced warm and can come out negative.
  */
+/** What reloading a conversation of `contextTokens` into the new model's cache costs, over reading it on the old one. */
+export function reloadCost(o: Override, contextTokens: number): number | null {
+  const from = priceOf(o.from);
+  const to = priceOf(o.to);
+  if (!from || !to) return null;
+  return (contextTokens * (to.cacheWrite1h - from.cacheRead)) / 1_000_000;
+}
+
+// Switching a conversation under way waits until the reload is won back within this many requests.
+export const PAYBACK_REQUESTS = 10;
+
+/**
+ * Requests until a mid-conversation switch pays for its reload, from this
+ * session's average request. Infinity when a request saves nothing.
+ */
+export function paybackRequests(o: Override, contextTokens: number, avg: Tokens): number {
+  const reload = reloadCost(o, contextTokens);
+  const was = costAt(o.from, avg, { hour: true });
+  const is = costAt(o.to, avg, { hour: true });
+  if (reload === null || was === null || is === null) return Infinity;
+  if (reload <= 0) return 0;
+  return was > is ? reload / (was - is) : Infinity;
+}
+
 export function savedBy(o: Override, t: Tokens, first: boolean, hour = true): number | null {
   const was = costAt(o.from, t, { warm: first, hour });
   const is = costAt(o.to, t, { hour });
@@ -302,6 +366,10 @@ export function summary(s: {
   /** Net saving of this session's switched requests, when any were priced. */
   saved?: number;
   held?: number;
+  /** What each recent turn cost, oldest first. */
+  turns?: readonly number[];
+  /** Why a switch for this conversation is waiting, when one is. */
+  note?: string;
 }): string {
   const rows: Array<[string, string]> = [];
   const onPlan = s.limits.length > 0;
@@ -310,13 +378,24 @@ export function summary(s: {
     "Spend",
     `${spent}${onPlan ? " at API rates" : ""} over ${plural(s.requests, "request")} since ${clock(new Date(s.startedAt).toISOString())}`,
   ]);
-  if (s.saved !== undefined) {
+  if (s.saved !== undefined && s.saved < 0) {
+    rows.push([
+      "Saved",
+      `not yet: reloading the conversation cost ${usd(-s.saved)} more than the switch has saved so far`,
+    ]);
+  } else if (s.saved !== undefined) {
     rows.push([
       "Saved",
       `${usd(s.saved)} by switching models: the same tokens at the original model's rates, less what they cost`,
     ]);
   }
   if (s.held) rows.push(["Guard", `${plural(s.held, "retry", "retries")} held`]);
+  if (s.turns && s.turns.length > 1) {
+    rows.push([
+      "Turns",
+      `${sparkline(s.turns)}  last ${s.turns.length}, up to ${usd(Math.max(...s.turns))}`,
+    ]);
+  }
   const five = fiveHour(s.limits);
   if (five)
     rows.push(["5h window", `${percent(five.percentUsed)}${windowNote(five, s.window, s.now)}`]);
@@ -334,5 +413,6 @@ export function summary(s: {
     rows.push([i === 0 ? "Switch" : "", `${describeSwitch(o)} · ${how}`]);
   }
   if (s.switches.length === 0) rows.push(["Switch", "none: accept one with Y in optimaizr live"]);
+  if (s.note) rows.push(["", s.note.replace(/^waiting\s+/, "waiting: ")]);
   return rows.map(([k, v]) => `${k.padEnd(11)}${v}`).join("\n");
 }
