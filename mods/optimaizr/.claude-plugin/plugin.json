@@ -1,0 +1,29 @@
+{
+  "name": "optimaizr",
+  "version": "0.8.0",
+  "description": "optimAIzr inside Claude Code: what the turn has cost and your 5-hour window while Claude works, what each model switch saved, the model and effort switches you accept in `optimaizr live` applied from the next request, and a guard against retry loops. Fully local.",
+  "author": {
+    "name": "Blend Bunjaku",
+    "url": "https://github.com/blendbunjaku"
+  },
+  "homepage": "https://optimaizr.com",
+  "repository": "https://github.com/blendbunjaku/optimaizr",
+  "license": "MIT",
+  "keywords": ["cost", "tokens", "usage", "rate-limits", "optimaizr"],
+  "userConfig": {
+    "turnLine": {
+      "type": "boolean",
+      "title": "Line under each answer",
+      "description": "Show what each turn cost, how many requests it made and how far your 5-hour window moved.",
+      "required": false,
+      "default": true
+    },
+    "retryGuard": {
+      "type": "boolean",
+      "title": "Hold repeated failing commands",
+      "description": "When the same command fails twice in a row with nothing changed in between, hold the next identical attempt once and ask Claude to change something first.",
+      "required": false,
+      "default": true
+    }
+  }
+}

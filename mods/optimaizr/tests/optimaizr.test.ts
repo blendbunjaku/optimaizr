@@ -1,0 +1,542 @@
+import type { On, RenderInput, SessionUsage } from "claude-code";
+import { expect, mock, test } from "claude-code/testing";
+import type { Engine } from "claude-code/testing";
+
+const DIR = "/home/me/.optimaizr";
+const CWD = "/work/shop-api";
+const OPUS = "claude-opus-5-5";
+const SONNET = "claude-sonnet-5-5";
+const MINUTE = 60_000;
+// Far after the mock clock's start, so the window never resets mid-test.
+const RESETS = "2030-01-01T01:00:00.000Z";
+
+type Usage = { usd: number; pct?: number };
+
+/**
+ * A session in /work/shop-api: files in a map, usage the test sets, and a
+ * model that answers every request unless `refuses` names it.
+ */
+type Tokens = {
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_input_tokens: number;
+  cache_creation_input_tokens: number;
+};
+
+const TOKENS: Tokens = {
+  input_tokens: 10,
+  output_tokens: 10,
+  cache_read_input_tokens: 0,
+  cache_creation_input_tokens: 0,
+};
+
+function world(
+  on: On,
+  opts: { files?: Record<string, string>; refuses?: string; tokens?: Tokens } = {},
+) {
+  const files = new Map(Object.entries(opts.files ?? {}));
+  const sent: string[] = [];
+  const efforts: unknown[] = [];
+  const tools: string[] = [];
+  const logs: string[] = [];
+  const now: Usage = { usd: 1, pct: 58 };
+  const usage = (): SessionUsage => ({
+    context: { window: 1_000_000 },
+    rateLimits:
+      now.pct === undefined ? [] : [{ kind: "five_hour", percentUsed: now.pct, resetsAt: RESETS }],
+    cost: { usd: now.usd },
+  });
+
+  on("session.start", ($, e) => ({ cwd: e.cwd }));
+  on("session.id", () => ({ value: "s1" }));
+  on("session.root", () => ({ value: CWD }));
+  on("session.usage", () => ({ value: usage() }));
+  on("command.register", ($, e) => ({ value: { command: e.name } }));
+  on("fs.read", ($, e) =>
+    files.has(e.path) ? { value: files.get(e.path)! } : { deny: `ENOENT ${e.path}` },
+  );
+  on("fs.write", ($, e) => {
+    files.set(e.path, e.text);
+    return { value: undefined };
+  });
+  on("ui.invalidate", () => ({ value: undefined }));
+  on("ui.toast", () => ({ value: undefined }));
+  on("ui.log", ($, e) => {
+    logs.push(e.text);
+    return { value: undefined };
+  });
+  on("session.end", ($, e) => ({ sessionId: e.sessionId }));
+  on("session.measure", ($, e) => ({ changed: e.changed }));
+  on("turn.start", ($, e) => ({ turnId: e.turnId }));
+  on("turn.complete", ($, e) => ({ text: e.answer }));
+  // A model that answers whole, with nothing to stream.
+  // eslint-disable-next-line require-yield
+  on("turn.step", async function* ($, e) {
+    sent.push(e.model);
+    efforts.push(e.effort);
+    const refused = e.model === opts.refuses;
+    return {
+      turnId: e.turnId,
+      index: e.index,
+      answer: "",
+      toolUses: [],
+      stopReason: refused ? null : "end_turn",
+      usage: refused ? null : { ...(opts.tokens ?? TOKENS), model: e.model },
+    };
+  });
+  // `npm test` always fails; every other tool call succeeds.
+  on("tool.call", ($, e) => {
+    const a = e as unknown as Record<string, string>;
+    tools.push(`${e.tool} ${a.command ?? a.pattern ?? a.url ?? a.file_path ?? ""}`);
+    return e.tool === "Bash" && a.command === "npm test"
+      ? { isError: true as const, result: "1 failing" }
+      : { result: "ok" as never };
+  });
+  on("ui.render", { component: "Spinner" }, ($, e) => ({
+    type: "Text",
+    children: [`${e.props.word}${e.props.suffix}`],
+  }));
+  on("ui.render", { component: "AbovePrompt" }, () => ({ type: "Box", children: [] }));
+  mock.store(on, {});
+  mock.env(on, { HOME: "/home/me" });
+  const clock = mock.clock(on, { now: 0 });
+
+  return { files, sent, efforts, tools, logs, now, usage, clock };
+}
+
+const SESSION = { surface: "terminal", isInteractive: true, cwd: CWD } as const;
+
+const overrides = (...list: object[]) =>
+  JSON.stringify({
+    version: 1,
+    overrides: list.map((o) => ({ rule: "model-fit", at: "x", ...o })),
+  });
+
+async function step($: Engine, model = OPUS, agentId?: string, effort?: "low" | "xhigh") {
+  const stream = $.turn.step({
+    turnId: "t1",
+    index: 0,
+    model,
+    messageCount: 3,
+    ...(agentId ? { agentId } : {}),
+    ...(effort ? { effort } : {}),
+  });
+  // Read to the end by hand: the return value is the step's result.
+  for (;;) {
+    const n = await stream.next();
+    if (n.done) return n.value;
+  }
+}
+
+function textOf(tree: unknown): string {
+  if (typeof tree === "string" || typeof tree === "number") return String(tree);
+  if (Array.isArray(tree)) return tree.map(textOf).join("");
+  if (typeof tree !== "object" || !tree) return "";
+  return textOf(Reflect.get(tree, "children") ?? []);
+}
+
+const spinner: RenderInput<"Spinner"> = {
+  component: "Spinner",
+  surface: "terminal",
+  requestId: "main",
+  props: { word: "Thinking", message: null, suffix: "…", mode: "thinking" },
+};
+
+const band = (bodyColumns = 120): RenderInput<"AbovePrompt"> => ({
+  component: "AbovePrompt",
+  surface: "terminal",
+  requestId: "band",
+  props: {
+    hasSurvey: false,
+    isWorking: false,
+    maxRows: 10,
+    bodyColumns,
+    scroll: { offset: 0, bodyRows: 10 },
+    view: {},
+  },
+});
+
+test("the session file tells optimaizr live the mod is running", async ($, on) => {
+  const w = world(on);
+  await $.session.start(SESSION);
+  const file = `${DIR}/mod/sessions/s1.json`;
+  const beat = JSON.parse(w.files.get(file)!);
+  expect(beat).toMatchObject({ id: "s1", version: "0.8.0", cwd: CWD });
+  expect(beat.endedAt).toBeUndefined();
+
+  await $.session.end({ reason: "clear", sessionId: "s1", resume: { id: "s1" } });
+  expect(JSON.parse(w.files.get(file)!).endedAt).toBeUndefined();
+
+  await $.session.end({ reason: "prompt_input_exit", sessionId: "s1", resume: { id: "s1" } });
+  expect(typeof JSON.parse(w.files.get(file)!).endedAt).toBe("string");
+});
+
+test("a switch moves the next request in its project, and nothing else", async ($, on) => {
+  const w = world(on, {
+    files: {
+      [`${DIR}/overrides.json`]: overrides(
+        { source: "claude-code", project: CWD, from: OPUS, to: SONNET },
+        // wrap() entries and other projects are not Claude Code's to apply here.
+        { project: CWD, from: "claude-haiku-4-5", to: SONNET },
+        { source: "claude-code", project: "/work/other", from: "claude-opus-5", to: SONNET },
+      ),
+    },
+  });
+  await $.session.start(SESSION);
+
+  await step($, OPUS);
+  await step($, `${OPUS}[1m]`);
+  await step($, "claude-haiku-4-5");
+  await step($, "claude-opus-5");
+  expect(w.sent).toEqual([SONNET, SONNET, "claude-haiku-4-5", "claude-opus-5"]);
+});
+
+test("a switch for subagents leaves the main conversation alone", async ($, on) => {
+  const w = world(on, {
+    files: {
+      [`${DIR}/overrides.json`]: overrides({
+        source: "claude-code",
+        project: CWD,
+        subagent: true,
+        from: OPUS,
+        to: SONNET,
+      }),
+    },
+  });
+  await $.session.start(SESSION);
+
+  await step($, OPUS);
+  await step($, OPUS, "agent-1");
+  expect(w.sent).toEqual([OPUS, SONNET]);
+});
+
+test("a refused model falls back to the original and is not tried again", async ($, on) => {
+  const w = world(on, {
+    refuses: SONNET,
+    files: {
+      [`${DIR}/overrides.json`]: overrides({
+        source: "claude-code",
+        project: CWD,
+        from: OPUS,
+        to: SONNET,
+      }),
+    },
+  });
+  await $.session.start(SESSION);
+
+  const r = await step($, OPUS);
+  expect(r.stopReason).toBe("end_turn");
+  await step($, OPUS);
+  expect(w.sent).toEqual([SONNET, OPUS, OPUS]);
+});
+
+test("optimaizr undo reaches a running session within seconds", async ($, on) => {
+  const file = `${DIR}/overrides.json`;
+  const w = world(on, {
+    files: { [file]: overrides({ source: "claude-code", project: CWD, from: OPUS, to: SONNET }) },
+  });
+  await $.session.start(SESSION);
+  await step($, OPUS);
+
+  w.files.set(file, overrides());
+  await w.clock.advance(5_000);
+  await step($, OPUS);
+  expect(w.sent).toEqual([SONNET, OPUS]);
+});
+
+test("the spinner shows the turn so far and the 5-hour window", async ($, on) => {
+  const w = world(on);
+  await $.session.start(SESSION);
+  await $.turn.start({ text: "add rate limiting", turnId: "t1" });
+  w.now.usd = 1.18;
+  w.now.pct = 61;
+  await step($);
+
+  expect(textOf(await $.ui.render(spinner))).toBe("Thinking · $0.18 · 61% of 5h…");
+});
+
+test("the band shows the window, the pace and when it resets", async ($, on) => {
+  const w = world(on);
+  w.now.pct = 40;
+  await $.session.start(SESSION);
+  await w.clock.advance(30 * MINUTE);
+  await $.session.measure({
+    ...w.usage(),
+    rateLimits: [{ kind: "five_hour", percentUsed: 50, resetsAt: RESETS }],
+    changed: ["rateLimits"],
+  });
+
+  const wide = textOf(await $.ui.render(band()));
+  expect(wide).toContain("optimAIzr");
+  expect(wide).toContain("50% of 5h");
+  // 10 points in 30 minutes leaves 50 points: 2h 30m.
+  expect(wide).toContain("~2h 30m left at this pace");
+  expect(wide).toContain("resets ");
+
+  const narrow = textOf(await $.ui.render(band(60)));
+  expect(narrow).toContain("50% of 5h");
+  expect(narrow).not.toContain("left at this pace");
+});
+
+test("off a plan the band shows what the session has cost", async ($, on) => {
+  const w = world(on);
+  w.now.pct = undefined;
+  w.now.usd = 3.5;
+  await $.session.start(SESSION);
+
+  expect(textOf(await $.ui.render(band()))).toContain("$3.50 this session");
+});
+
+test("each answer gets one line with what the turn cost", async ($, on) => {
+  const w = world(on);
+  await $.session.start(SESSION);
+  await $.turn.start({ text: "add rate limiting", turnId: "t1" });
+  w.now.usd = 1.42;
+  w.now.pct = 61;
+  await step($);
+
+  const done = await $.turn.complete({
+    answer: "Done.",
+    durationMs: 14_000,
+    isAborted: false,
+    turnId: "t1",
+    reason: "answer",
+  });
+  expect(done.text).toBe("this turn $0.42 · 1 request · 5h 58% → 61%");
+
+  const sub = await $.turn.complete({
+    answer: "Subagent done.",
+    durationMs: 1_000,
+    isAborted: false,
+    turnId: "t2",
+    agentId: "agent-1",
+    reason: "answer",
+  });
+  expect(sub.text).toBe("Subagent done.");
+});
+
+test("/optimaizr prints the session's figures and its switches", async ($, on) => {
+  world(on, {
+    files: {
+      [`${DIR}/overrides.json`]: overrides({
+        source: "claude-code",
+        project: CWD,
+        subagent: true,
+        from: OPUS,
+        to: SONNET,
+      }),
+    },
+  });
+  await $.session.start(SESSION);
+  await step($);
+
+  const out = await $.command.run({
+    command: "optimaizr",
+    args: "",
+    origin: { kind: "composer" },
+    presentation: { isFullscreen: false, columns: 120 },
+  });
+  expect(out.text).toContain("Spend      $1.00 at API rates over 1 request since");
+  expect(out.text).toContain("5h window  58%");
+  expect(out.text).toContain(
+    "Switch     shop-api subagents: Opus 5.5 → Sonnet 5.5 · /optimaizr off here, optimaizr undo model-fit everywhere",
+  );
+});
+
+const command = (args: string) => ({
+  command: "optimaizr",
+  args,
+  origin: { kind: "composer" } as const,
+  presentation: { isFullscreen: false, columns: 120 },
+});
+
+test("/optimaizr off sends this session back to its own model, on resumes", async ($, on) => {
+  const w = world(on, {
+    files: {
+      [`${DIR}/overrides.json`]: overrides({
+        source: "claude-code",
+        project: CWD,
+        from: OPUS,
+        to: SONNET,
+      }),
+    },
+  });
+  await $.session.start(SESSION);
+  await step($);
+
+  const off = await $.command.run(command("off"));
+  expect(off.text).toBe(
+    "Switches are off for this session: requests go to Opus 5.5 again. /optimaizr on switches back to Sonnet 5.5; optimaizr undo model-fit removes it everywhere.",
+  );
+  await step($);
+  expect(textOf(await $.ui.render(band()))).toContain("paused    shop-api: Opus 5.5 → Sonnet 5.5");
+
+  await $.command.run(command("on"));
+  await step($);
+  expect(w.sent).toEqual([SONNET, OPUS, SONNET]);
+});
+
+test("the first switched request leaves one note on how to go back", async ($, on) => {
+  const w = world(on, {
+    files: {
+      [`${DIR}/overrides.json`]: overrides({
+        source: "claude-code",
+        project: CWD,
+        from: OPUS,
+        to: SONNET,
+      }),
+    },
+  });
+  await $.session.start(SESSION);
+  await step($);
+  await step($);
+  expect(w.logs).toEqual([
+    "Switched this session from Opus 5.5 to Sonnet 5.5 (model-fit). Harder task? /optimaizr off goes back to Opus 5.5.",
+  ]);
+  expect(textOf(await $.ui.render(band()))).toContain(
+    "switched  shop-api: Opus 5.5 → Sonnet 5.5 · harder task? /optimaizr off",
+  );
+});
+
+test("after an undo the band stops saying switched", async ($, on) => {
+  const file = `${DIR}/overrides.json`;
+  const w = world(on, {
+    files: { [file]: overrides({ source: "claude-code", project: CWD, from: OPUS, to: SONNET }) },
+  });
+  await $.session.start(SESSION);
+  await step($);
+  expect(textOf(await $.ui.render(band()))).toContain("switched");
+
+  w.files.set(file, overrides());
+  await w.clock.advance(61_000);
+  expect(textOf(await $.ui.render(band()))).not.toContain("switched");
+});
+
+const switchTo = (to: string, more: object = {}) => ({
+  [`${DIR}/overrides.json`]: overrides({
+    source: "claude-code",
+    project: CWD,
+    from: OPUS,
+    to,
+    ...more,
+  }),
+});
+
+const answered = ($: Engine) =>
+  $.turn.complete({
+    answer: "Done.",
+    durationMs: 9_000,
+    isAborted: false,
+    turnId: "t1",
+    reason: "answer",
+  });
+
+test("a switched turn leads with what it saved", async ($, on) => {
+  // 1,000 in and 10,000 out: $0.204 on Opus 5.5, $0.102 on Sonnet 5.5.
+  const w = world(on, {
+    files: switchTo(SONNET),
+    tokens: { ...TOKENS, input_tokens: 1_000, output_tokens: 10_000 },
+  });
+  await $.session.start(SESSION);
+  await $.turn.start({ text: "rename the helpers", turnId: "t1" });
+  w.now.usd = 1.1;
+  await step($);
+
+  expect(textOf(await $.ui.render(spinner))).toBe(
+    "Thinking · Sonnet 5.5 · $0.10 · saved $0.10 · 58% of 5h…",
+  );
+  expect((await answered($)).text).toBe(
+    "saved $0.10 vs Opus 5.5 · this turn $0.10 on Sonnet 5.5 · 1 request · 5h 58% → 58%",
+  );
+  expect(textOf(await $.ui.render(band()))).toContain(
+    "switched  shop-api: Opus 5.5 → Sonnet 5.5 · saved $0.10 · harder task? /optimaizr off",
+  );
+});
+
+test("the first request on a new model says when it costs more, and why", async ($, on) => {
+  // It writes 100,000 tokens to Sonnet's cache ($0.25) that Opus would have read ($0.02).
+  const w = world(on, {
+    files: switchTo(SONNET),
+    tokens: { ...TOKENS, cache_creation_input_tokens: 100_000 },
+  });
+  await $.session.start(SESSION);
+  await $.turn.start({ text: "keep going", turnId: "t1" });
+  w.now.usd = 1.25;
+  await step($);
+  expect((await answered($)).text).toBe(
+    "this turn $0.25 on Sonnet 5.5 · 1 request · $0.23 more than Opus 5.5 once, to load the conversation · 5h 58% → 58%",
+  );
+});
+
+test("an effort switch lowers effort, and never raises it", async ($, on) => {
+  const w = world(on, { files: switchTo(OPUS, { effort: "low" }) });
+  await $.session.start(SESSION);
+  await $.turn.start({ text: "tidy up", turnId: "t1" });
+  w.now.usd = 1.08;
+  await step($, OPUS, undefined, "xhigh");
+  await step($, OPUS, undefined, "low");
+  expect(w.sent).toEqual([OPUS, OPUS]);
+  expect(w.efforts).toEqual(["low", "low"]);
+  expect((await answered($)).text).toBe(
+    "this turn $0.08 at low effort · 2 requests · 5h 58% → 58%",
+  );
+  expect(w.logs).toEqual([
+    "Lowered this session to low effort on Opus 5.5 (model-fit). Harder task? /optimaizr off goes back to its own effort.",
+  ]);
+});
+
+test("a command that failed twice unchanged is held once", async ($, on) => {
+  const w = world(on);
+  await $.session.start(SESSION);
+  const run = (command: string) => $.tool.call({ tool: "Bash", command });
+
+  await run("npm test");
+  await run("npm test");
+  const held = await run("npm test");
+  expect(held.deny).toContain("optimAIzr held this retry");
+  expect(w.logs).toEqual([
+    "Held a retry of `npm test`: it failed twice in a row with nothing changed in between.",
+  ]);
+
+  // Asked again, it goes through; after an edit the count starts over.
+  await run("npm test");
+  await $.tool.call({
+    tool: "Edit",
+    file_path: "/work/shop-api/a.ts",
+    old_string: "a",
+    new_string: "b",
+  });
+  await run("npm test");
+  expect(w.tools.filter((t) => t === "Bash npm test")).toHaveLength(4);
+});
+
+test("after compaction a failing command starts its count over", async ($, on) => {
+  const w = world(on);
+  on("session.compact", () => ({ skip: "not in a test" }));
+  await $.session.start(SESSION);
+  const run = () => $.tool.call({ tool: "Bash", command: "npm test" });
+  await run();
+  await run();
+  await $.session.compact({ trigger: "manual", messages: [] });
+  await run();
+  expect(w.tools.filter((t) => t === "Bash npm test")).toHaveLength(3);
+});
+
+test("/optimaizr adds up what was saved and held", async ($, on) => {
+  world(on, {
+    files: switchTo(SONNET),
+    tokens: { ...TOKENS, input_tokens: 1_000, output_tokens: 10_000 },
+  });
+  await $.session.start(SESSION);
+  await step($);
+  await step($);
+  await $.tool.call({ tool: "Bash", command: "npm test" });
+  await $.tool.call({ tool: "Bash", command: "npm test" });
+  await $.tool.call({ tool: "Bash", command: "npm test" });
+
+  const out = await $.command.run(command(""));
+  expect(out.text).toContain(
+    "Saved      $0.20 by switching models: the same tokens at the original model's rates, less what they cost",
+  );
+  expect(out.text).toContain("Guard      1 retry held");
+});

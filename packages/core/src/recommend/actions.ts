@@ -6,9 +6,9 @@ import type { OptimizationFinding, UsageEvent, VerifyCandidate } from "../domain
 /**
  * What accepting a recommendation does. By the time `live` can show one, the
  * call it describes has already been billed, so only the next request can
- * change: an app using `wrap()` picks up overrides on its next call, while
- * Claude Code and Codex read their model at session start (the running
- * session switches only via `/model`).
+ * change: an app using `wrap()` or a Claude Code session running the optimAIzr
+ * mod picks up overrides on its next request, while Codex (and Claude Code
+ * without the mod) reads its model at session start.
  *
  * `accept()` returns `applied` only when a rewriter really took the change,
  * `queued` when the decision was recorded and the user got the command that
@@ -22,6 +22,10 @@ export interface TrafficSlice {
   route?: string;
   model: string;
   calls: number;
+  /** Claude Code only: subagent calls (true) or the main conversation (false). */
+  subagent?: boolean;
+  /** Affected spend over all spend in the same slice, so a rewriter can tell a narrow finding. */
+  share?: number;
 }
 
 /** Where a finding's affected calls came from. `live` knows; a batch report may not. */
@@ -40,12 +44,18 @@ export function trafficOf(f: OptimizationFinding, events: readonly UsageEvent[])
   const slices = new Map<string, TrafficSlice>();
   const total = new Map<string, number>();
   const hit = new Map<string, number>();
+  const sliceSpend = new Map<string, number>();
+  const sliceHit = new Map<string, number>();
 
   for (const e of events) {
     total.set(e.source, (total.get(e.source) ?? 0) + e.cost.total);
+    // Claude Code's subagents are their own slice: the mod can switch them alone.
+    const agent = e.source === "claude-code" ? (e.isSubagent ? "sub" : "main") : "";
+    const key = [e.source, e.project, e.route ?? "", e.model, agent].join("\u0000");
+    sliceSpend.set(key, (sliceSpend.get(key) ?? 0) + e.cost.total);
     if (!f.affects(e)) continue;
     hit.set(e.source, (hit.get(e.source) ?? 0) + e.cost.total);
-    const key = [e.source, e.project, e.route ?? "", e.model].join("\u0000");
+    sliceHit.set(key, (sliceHit.get(key) ?? 0) + e.cost.total);
     const s = slices.get(key);
     if (s) s.calls++;
     else
@@ -55,7 +65,12 @@ export function trafficOf(f: OptimizationFinding, events: readonly UsageEvent[])
         ...(e.route !== undefined ? { route: e.route } : {}),
         model: e.model,
         calls: 1,
+        ...(agent ? { subagent: agent === "sub" } : {}),
       });
+  }
+  for (const [key, s] of slices) {
+    const all = sliceSpend.get(key) ?? 0;
+    s.share = all > 0 ? (sliceHit.get(key) ?? 0) / all : 0;
   }
 
   const shareBySource: Traffic["shareBySource"] = {};

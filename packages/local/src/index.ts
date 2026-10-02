@@ -12,6 +12,7 @@ export * from "./wrap.js";
 export * from "./live.js";
 export * from "./rewriters.js";
 export * from "./overrides.js";
+export * from "./claude-mod.js";
 // Optional, opt-in, and the only outbound path in this package.
 export * from "./jev.js";
 export * from "./verify/replay.js";

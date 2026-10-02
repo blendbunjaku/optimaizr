@@ -24,6 +24,7 @@ import {
   HELP_COMMANDS,
 } from "./commands/info.js";
 import { cmdLive, cmdUndo } from "./commands/live.js";
+import { cmdMod } from "./commands/mod.js";
 import { cmdCard, cmdLimit, cmdProfile } from "./commands/plan.js";
 import { cmdVerify } from "./commands/verify.js";
 import { initConfig } from "./config.js";
@@ -80,6 +81,9 @@ async function main(): Promise<void> {
       return cmdApply(args);
     case "undo":
       return cmdUndo(args);
+    case "mod":
+    case "mods":
+      return cmdMod(args);
     case "import":
       return cmdImport(args);
     case "report":

@@ -3,6 +3,7 @@ import {
   bold,
   type BudgetStatus,
   budgetStatus,
+  callActivity,
   type CallEvent,
   codexPlanView,
   createBudgetTracker,
@@ -27,10 +28,13 @@ import {
   yellow,
 } from "@optimaizr/core";
 import {
+  activeModSessions,
+  claudeModRewriter,
   claudeProjectsRoot,
   claudeSettingsRewriter,
   codexSessionsRoot,
   createLiveSession,
+  describeClaudeOverride,
   ledgerPath,
   type ModelOverride,
   overridesPath,
@@ -94,9 +98,13 @@ export async function cmdLive(args: Args): Promise<void> {
         jevEnabled: useJev,
         dryRun,
         // What Y can change. The call on screen is already billed; wrapped apps
-        // switch on their next request, and Claude Code's settings.json covers
-        // its next session (declined when the finding covers too little traffic).
-        rewriters: [sdkOverrideRewriter(), claudeSettingsRewriter()],
+        // and Claude Code sessions running the mod switch on their next request.
+        // Without the mod, settings.json covers Claude Code's next session.
+        rewriters: [
+          sdkOverrideRewriter(),
+          claudeModRewriter(),
+          claudeSettingsRewriter({ unless: () => activeModSessions().length > 0 }),
+        ],
         render: (rec) => `\n${renderLiveRecommendation(rec, { replayed: backfill > 0 })}`,
         onExit: () => requestExit(),
       });
@@ -147,6 +155,16 @@ export async function cmdLive(args: Args): Promise<void> {
             windowEvents: rec.windowEvents,
             windowMs: rec.windowMs,
             trigger: rec.trigger,
+            sessions: rec.sessions,
+            examples: rec.examples.map((e) => ({
+              id: e.id,
+              ts: e.ts,
+              sessionId: e.sessionId,
+              isSubagent: e.isSubagent ?? false,
+              project: e.project,
+              model: e.model,
+              activity: callActivity(e, 120),
+            })),
             risk: rec.finding.risk,
             verification: rec.recommendation.verification,
             judged: rec.judged ?? null,
@@ -280,6 +298,16 @@ export async function cmdLive(args: Args): Promise<void> {
     }
     if (source === "all" || source === "sdk") watching.push(ledgerPath());
     for (const w of watching) console.log(`  ${dim(`watching ${w}`)}`);
+    if (watchesAgents && interactive) {
+      const mods = activeModSessions().length;
+      console.log(
+        `  ${dim(
+          mods > 0
+            ? `optimAIzr mod in ${mods} Claude Code session${mods === 1 ? "" : "s"}: Y switches them from the next request`
+            : "Y reaches a running Claude Code session with the optimAIzr mod: optimaizr mod",
+        )}`,
+      );
+    }
     // Overrides from earlier runs are still active, so list them up front.
     for (const o of readOverrides()) {
       console.log(`  ${dim(`override ${describeOverride(o)} · optimaizr undo ${o.rule}`)}`);
@@ -336,13 +364,15 @@ export async function cmdLive(args: Args): Promise<void> {
 }
 
 export function describeOverride(o: ModelOverride): string {
+  if (o.source === "claude-code") return `claude code ${describeClaudeOverride(o)}`;
   const where = `${o.project}${o.route ? `/${o.route}` : ""}`;
   return `${where}: ${modelLabel(o.from)} -> ${modelLabel(o.to)}`;
 }
 
 /**
  * `optimaizr undo <rule>`: take back a model override accepted in `live`.
- * Wrapped apps re-read overrides before every request, so it applies at once.
+ * Wrapped apps and the mod re-read overrides before every request, so it
+ * applies at once.
  */
 export function cmdUndo(args: Args): void {
   const rule = args.positional[0];
@@ -369,7 +399,13 @@ export function cmdUndo(args: Args): void {
     console.log(`  ${dim("A Claude Code change is undone in ~/.claude/settings.json.")}`);
   } else {
     for (const o of removed) console.log(`  ${green("Reverted")} ${describeOverride(o)}`);
-    console.log(`  ${dim("Wrapped apps send the original model from their next request.")}`);
+    const who = [
+      ...(removed.some((o) => o.source !== "claude-code") ? ["Wrapped apps"] : []),
+      ...(removed.some((o) => o.source === "claude-code")
+        ? ["Claude Code sessions running the mod"]
+        : []),
+    ].join(" and ");
+    console.log(`  ${dim(`${who} send the original model from their next request.`)}`);
   }
   console.log("");
 }

@@ -6,11 +6,11 @@ import { priceFor } from "@optimaizr/core";
 import type { OptimizationFinding, ProposedChange, RequestRewriter } from "@optimaizr/core";
 
 /**
- * Applying a recommendation to Claude Code. `live` runs in a separate process
- * and the call is already billed, so the lever is the next call: the `model`
- * in `~/.claude/settings.json`. Claude Code reads it at session start, so the
- * change covers later sessions, and the outcome hands over the `/model`
- * command that switches the running one.
+ * Applying a recommendation to Claude Code without the optimAIzr mod. `live`
+ * runs in a separate process and the call is already billed, so the lever is
+ * the `model` in `~/.claude/settings.json`. Claude Code reads it at session
+ * start, so the change covers later sessions, and the outcome hands over the
+ * `/model` command that switches the running one.
  */
 
 export function claudeSettingsPath(): string {
@@ -42,6 +42,8 @@ export interface ClaudeSettingsRewriterOptions {
   settingsPath?: string;
   /** Minimum affected share before a global change is offered. */
   minShare?: number;
+  /** Stand aside when this is true, e.g. while the optimAIzr mod switches sessions itself. */
+  unless?: () => boolean;
 }
 
 /**
@@ -65,7 +67,7 @@ export function claudeSettingsRewriter(opts: ClaudeSettingsRewriterOptions = {})
     kind: "claude-code settings",
 
     supports(change: ProposedChange, finding: OptimizationFinding): boolean {
-      if (change.kind !== "swap-model") return false;
+      if (change.kind !== "swap-model" || opts.unless?.()) return false;
       // Claude Code only runs Anthropic models, so a swap to anything else is
       // not something this file can express.
       const target = claudeTarget(change, finding);

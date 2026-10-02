@@ -1,0 +1,4 @@
+{
+  "description": "optimAIzr: the turn's cost, savings and the 5-hour window on the spinner and above the prompt, a line under each answer, /optimaizr, model and effort switches from ~/.optimaizr/overrides.json applied in turn.step, and a tool.call guard against retry loops",
+  "modules": ["./register.tsx"]
+}

@@ -15,3 +15,7 @@ optimaizr.config.json
 .vscode/
 .DS_Store
 *.log
+
+# Written by Claude Code when it loads a mod from this repo
+mods/*/.claude-plugin/types/
+mods/*/tsconfig.json

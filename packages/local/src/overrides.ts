@@ -6,20 +6,27 @@ import type { OptimizationFinding, ProposedChange, RequestRewriter } from "@opti
 import { optimaizrDir } from "./ledger.js";
 
 /**
- * Model overrides `wrap()` applies before a request is sent, so accepting a
- * live recommendation reaches a running app with no restart. Each entry is as
- * narrow as its finding: one service, one route (or none), one source model.
+ * Model overrides applied before a request is sent, so accepting a live
+ * recommendation reaches a running app (`wrap()`) or Claude Code session (the
+ * optimAIzr mod) with no restart. Each entry is as narrow as its finding: one
+ * service or project, one route (or none), one source model.
  */
 
 export interface ModelOverride {
   /** The finding that produced it, so `optimaizr undo <rule>` can find it. */
   rule: string;
-  /** `service` as the app passed it to `wrap()`. */
+  /** Who applies it: absent for `wrap()`, `claude-code` for the optimAIzr mod. */
+  source?: "claude-code";
+  /** `service` as the app passed it to `wrap()`, or Claude Code's working directory. */
   project: string;
   /** Exact route; absent means calls made without one. */
   route?: string;
+  /** Claude Code only: subagents (true), the main conversation (false), or both (absent). */
+  subagent?: boolean;
   from: string;
   to: string;
+  /** Claude Code only: an effort switch, the same model asked to think less. */
+  effort?: string;
   /** ISO 8601, when it was accepted. */
   at: string;
 }
@@ -51,7 +58,10 @@ function isOverride(o: unknown): o is ModelOverride {
     typeof v.project === "string" &&
     typeof v.from === "string" &&
     typeof v.to === "string" &&
-    (v.route === undefined || typeof v.route === "string")
+    (v.route === undefined || typeof v.route === "string") &&
+    (v.source === undefined || v.source === "claude-code") &&
+    (v.subagent === undefined || typeof v.subagent === "boolean") &&
+    (v.effort === undefined || typeof v.effort === "string")
   );
 }
 
@@ -75,10 +85,15 @@ export function removeOverrides(rule: string, file = overridesPath()): ModelOver
   return all.filter((o) => o.rule === rule);
 }
 
-const sameSlot = (a: ModelOverride, b: Omit<ModelOverride, "rule" | "to" | "at">) =>
-  a.project === b.project && (a.route ?? null) === (b.route ?? null) && a.from === b.from;
+export const sameSlot = (a: ModelOverride, b: Omit<ModelOverride, "rule" | "to" | "at">) =>
+  (a.source ?? null) === (b.source ?? null) &&
+  a.project === b.project &&
+  (a.route ?? null) === (b.route ?? null) &&
+  (a.subagent ?? null) === (b.subagent ?? null) &&
+  Boolean(a.effort) === Boolean(b.effort) &&
+  a.from === b.from;
 
-/** The override for one outbound request, if there is one. */
+/** The override for one outbound `wrap()` request, if there is one. */
 export function overrideFor(
   overrides: readonly ModelOverride[],
   call: { project: string; route?: string | undefined; model: string },
@@ -96,7 +111,7 @@ export interface SdkOverrideRewriterOptions {
 
 /**
  * Apply a model swap to apps using `wrap()` from their next request. SDK
- * traffic only: Claude Code and Codex never read this file.
+ * traffic only: Claude Code's entries are written by `claudeModRewriter`.
  */
 export function sdkOverrideRewriter(opts: SdkOverrideRewriterOptions = {}): RequestRewriter {
   const file = opts.file ?? overridesPath();

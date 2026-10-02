@@ -124,7 +124,11 @@ export function cmdPrivacy(): void {
     ["Usage records", `${optimaizrDir()}/events.jsonl - tokens, cost, latency, model.`],
     [
       "Live overrides",
-      `${optimaizrDir()}/overrides.json - model swaps you accepted in 'live'; wrap() applies them. 'optimaizr undo' lists them.`,
+      `${optimaizrDir()}/overrides.json - model swaps you accepted in 'live'; wrap() and the Claude Code mod apply them. 'optimaizr undo' lists them.`,
+    ],
+    [
+      "Claude Code mod",
+      `Reads usage figures and the commands Claude runs (in memory, for the retry guard), never prompts or file contents, and makes no network calls. Each session it runs in keeps ${optimaizrDir()}/mod/sessions/<id>.json: id, folder, version, times.`,
     ],
     ["Prompt contents", "Not stored unless you explicitly enable capture."],
     ["Capture", "Off by default. Sampled, redacted and local-only when on."],
@@ -217,6 +221,7 @@ export const HELP_COMMANDS: Array<[string, string]> = [
   ["optimaizr why", "drill into where the money actually goes"],
   ["optimaizr recommend", "ranked actions with impact and confidence"],
   ["optimaizr live", "watch calls as they happen and surface fixes"],
+  ["optimaizr mod", "the Claude Code mod: install it, see it running"],
   ["optimaizr limit", "record a Claude session-limit hit (with --plan)"],
   ["optimaizr show <rule>", "the requests a recommendation touches"],
   ["optimaizr simulate <rule>", "what the change would cost"],
