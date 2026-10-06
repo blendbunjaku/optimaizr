@@ -21,7 +21,12 @@ import type { CallEvent, Dataset, ToolCall } from "../types.js";
  */
 export function claudeConfigDir(): string {
   const set = process.env.CLAUDE_CONFIG_DIR?.trim();
-  return set ? path.resolve(set) : path.join(os.homedir(), ".claude");
+  return set ? userPath(set) : path.join(os.homedir(), ".claude");
+}
+
+/** A path from an env var: a quoted `~/x` reaches us unexpanded, so expand it here. */
+export function userPath(p: string): string {
+  return path.resolve(p === "~" || p.startsWith("~/") ? path.join(os.homedir(), p.slice(1)) : p);
 }
 
 const CHARS_PER_TOKEN = 4;

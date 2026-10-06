@@ -253,12 +253,16 @@ budget. To override the detected plan or set a budget, save it once in
 
 ## Works with
 
-| Source                     | Setup                             |
-| -------------------------- | --------------------------------- |
-| Claude Code                | None. Reads `~/.claude/projects`. |
-| Codex                      | None. Reads `~/.codex/sessions`.  |
-| Your Anthropic/OpenAI app  | One line with `wrap()`, below     |
-| A usage export (CSV, JSON) | `optimaizr import usage.csv`      |
+| Source                     | Setup                                                               |
+| -------------------------- | ------------------------------------------------------------------- |
+| Claude Code                | None. Reads `~/.claude/projects`, or `$CLAUDE_CONFIG_DIR/projects`. |
+| Codex                      | None. Reads `~/.codex/sessions`, or `$CODEX_HOME/sessions`.         |
+| Your Anthropic/OpenAI app  | One line with `wrap()`, below                                       |
+| A usage export (CSV, JSON) | `optimaizr import usage.csv`                                        |
+
+Two Claude accounts? Point it at each one:
+`CLAUDE_CONFIG_DIR=~/.claude-personal optimaizr profile`. The plan, the
+transcripts and any setting it applies all follow that folder.
 
 ### In your app
 

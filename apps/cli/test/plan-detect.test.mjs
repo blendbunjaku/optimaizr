@@ -146,6 +146,18 @@ test("CLAUDE_CONFIG_DIR moves the config, transcripts and settings together", ()
   });
 });
 
+test("a quoted ~ in CLAUDE_CONFIG_DIR or CODEX_HOME is expanded", () => {
+  withEnv({ CLAUDE_CONFIG_DIR: "~/.claude-personal", CODEX_HOME: "~/.codex-work" }, () => {
+    assert.equal(claudeConfigDir(), path.join(os.homedir(), ".claude-personal"));
+    assert.equal(claudeProjectsRoot(), path.join(os.homedir(), ".claude-personal", "projects"));
+    assert.equal(
+      claudeGlobalConfigPath(),
+      path.join(os.homedir(), ".claude-personal", ".claude.json"),
+    );
+    assert.equal(codexHome(), path.join(os.homedir(), ".codex-work"));
+  });
+});
+
 test("CODEX_HOME moves where Codex sessions are read from", () => {
   const dir = tmp("codexhome");
   withEnv({ CODEX_HOME: dir }, () => {

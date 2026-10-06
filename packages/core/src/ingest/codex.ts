@@ -4,6 +4,7 @@ import os from "node:os";
 import readline from "node:readline";
 
 import { costOf, providerOf } from "../pricing.js";
+import { userPath } from "./claudecode.js";
 import type {
   CallEvent,
   Dataset,
@@ -29,7 +30,7 @@ import type {
 /** Codex's own folder: `CODEX_HOME` when set, else ~/.codex. */
 export function codexHome(): string {
   const set = process.env.CODEX_HOME?.trim();
-  return set ? path.resolve(set) : path.join(os.homedir(), ".codex");
+  return set ? userPath(set) : path.join(os.homedir(), ".codex");
 }
 
 export interface CodexIngestOptions {

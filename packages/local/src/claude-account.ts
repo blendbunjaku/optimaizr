@@ -7,6 +7,7 @@ import {
   planFromAccount,
   type ClaudeAccountInfo,
   type PlanDetection,
+  userPath,
 } from "@optimaizr/core";
 
 /**
@@ -20,7 +21,7 @@ export function claudeGlobalConfigPath(): string {
   const legacy = path.join(claudeConfigDir(), ".config.json");
   if (fs.existsSync(legacy)) return legacy;
   const set = process.env.CLAUDE_CONFIG_DIR?.trim();
-  return path.join(set ? path.resolve(set) : os.homedir(), ".claude.json");
+  return path.join(set ? userPath(set) : os.homedir(), ".claude.json");
 }
 
 export function readClaudeAccount(file = claudeGlobalConfigPath()): ClaudeAccountInfo | null {

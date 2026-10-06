@@ -221,12 +221,16 @@ day the money runs out.
 
 ## Works with
 
-| Source                     | Setup                                       |
-| -------------------------- | ------------------------------------------- |
-| Claude Code                | None. Reads `~/.claude/projects`.           |
-| Codex                      | None. Reads `~/.codex/sessions`.            |
-| Your Anthropic/OpenAI app  | One line: `optimaizr.wrap(new Anthropic())` |
-| A usage export (CSV, JSON) | `optimaizr import usage.csv`                |
+| Source                     | Setup                                                               |
+| -------------------------- | ------------------------------------------------------------------- |
+| Claude Code                | None. Reads `~/.claude/projects`, or `$CLAUDE_CONFIG_DIR/projects`. |
+| Codex                      | None. Reads `~/.codex/sessions`, or `$CODEX_HOME/sessions`.         |
+| Your Anthropic/OpenAI app  | One line: `optimaizr.wrap(new Anthropic())`                         |
+| A usage export (CSV, JSON) | `optimaizr import usage.csv`                                        |
+
+Two Claude accounts? Point it at each one:
+`CLAUDE_CONFIG_DIR=~/.claude-personal optimaizr profile`. The plan, the
+transcripts and any setting it applies all follow that folder.
 
 13 detectors cover oversized models, cache misses, bloated prompts, repeated
 file reads, retry loops, runaway reasoning, cost spikes and more, and two
