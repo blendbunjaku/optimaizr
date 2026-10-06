@@ -197,7 +197,8 @@ test("advisories are excluded from recoverable savings", async (t) => {
   assert.equal(advisory.rule, "pricing-change");
   assert.equal(advisory.savings.windowUsd, 0, "an advisory is not waste");
 
-  const recoverable = recoverableMonthly(findings);
+  // Clear waste and likely savings together: everything recoverable.
+  const recoverable = recoverableMonthly(findings, ["fix", "try"]);
   const all = findings.reduce((s, f) => s + f.savings.monthlyUsd, 0);
   assert.ok(advisory.savings.monthlyUsd > 0, "the advisory still carries a real figure");
   assert.ok(recoverable < all, "the advisory must not inflate recoverable savings");
@@ -213,7 +214,7 @@ test("advisories are excluded from recoverable savings", async (t) => {
     overlap.contended.every((c) => !c.rules.includes("pricing-change")),
     "an advisory never contends for a call: it claims nothing",
   );
-  assert.ok(recoverableAnnual(findings) > recoverable, "annual exceeds monthly");
+  assert.ok(recoverableAnnual(findings, ["fix", "try"]) > recoverable, "annual exceeds monthly");
 });
 
 test("findings are ranked by money, largest first", async () => {
@@ -333,7 +334,7 @@ test("overlapping findings do not inflate the headline savings", async () => {
 test("a call claimed twice is counted once, at its larger claim", async () => {
   const data = await ingestClaudeCode({ root: contendedFixture() });
   const findings = findWaste(data);
-  const active = findings.filter((f) => !f.advisory);
+  const active = findings.filter((f) => !f.advisory && f.tier !== "test");
 
   // Recompute the invariant independently of the implementation: for every
   // call, the total may count only the biggest single claim on it.
@@ -346,7 +347,7 @@ test("a call claimed twice is counted once, at its larger claim", async () => {
   const expected = [...best.values()].reduce((s, v) => s + v, 0);
 
   assert.ok(
-    Math.abs(recoverableWindow(findings) - expected) < 1e-9,
+    Math.abs(recoverableWindow(findings, ["fix", "try"]) - expected) < 1e-9,
     "the window total is the per-call maximum, summed",
   );
 });

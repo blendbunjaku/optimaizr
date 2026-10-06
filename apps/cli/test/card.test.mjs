@@ -28,6 +28,11 @@ function profile(overrides = {}) {
     nextCommand: "optimaizr simulate model-fit",
     budget: null,
     plan: null,
+    levers: [],
+    likelyMonthlyUsd: 0,
+    biggestWin: null,
+    habits: [],
+    breakdown: { reread: 0.56, output: 0.2, cacheWrite: 0.2, input: 0.04, tools: 0 },
     ...overrides,
   };
 }
@@ -70,6 +75,38 @@ test("on a plan the headline is the subscription's value, with the multiple", ()
   assert.equal(d.multiple, "22x");
   assert.deepEqual(d.headlineNote, ["a month of API-equivalent usage", "on a $20 Claude Pro plan"]);
   assert.match(d.shareText, /on a \$20 plan \(22x what I pay\)/);
+});
+
+test("the card says where the money goes, how clean it is, and the biggest lever", () => {
+  const plain = cardData(profile(), summary);
+  assert.equal(plain.rereadShare, 0.56);
+  assert.equal(plain.lever, null, "a fix is not a lever");
+  assert.match(plain.shareText, /56% of it was Claude re-reading the conversation\./);
+  assert.match(plain.shareText, /10% of it was waste/);
+
+  const withLever = cardData(
+    profile({
+      biggestWin: {
+        recommendation: {
+          rule: "context-compaction",
+          tier: "test",
+          savings: { monthlyUsd: 257.8 },
+        },
+        share: 0.28,
+        moreWork: 1.39,
+      },
+    }),
+    summary,
+  );
+  assert.deepEqual(withLever.lever, { label: "compact earlier", share: 0.28 });
+  assert.match(
+    withLever.shareText,
+    /Biggest lever: compact earlier, up to 28% less \(\$258\/month\)\./,
+  );
+  const svg = renderCardSvg(withLever);
+  assert.match(svg, /56% of it: re-reading the conversation/);
+  assert.match(svg, /clear waste \$44\.80\/mo/);
+  assert.match(svg, /biggest lever: compact earlier, up to 28% less/);
 });
 
 test("nothing that names a codebase reaches the image or the page", () => {

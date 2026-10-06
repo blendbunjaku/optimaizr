@@ -170,7 +170,7 @@ test("the session file tells optimaizr live the mod is running", async ($, on) =
   await $.session.start(SESSION);
   const file = `${DIR}/mod/sessions/s1.json`;
   const beat = JSON.parse(w.files.get(file)!);
-  expect(beat).toMatchObject({ id: "s1", version: "0.8.1", cwd: CWD });
+  expect(beat).toMatchObject({ id: "s1", version: "0.9.0", cwd: CWD });
   expect(beat.endedAt).toBeUndefined();
 
   await $.session.end({ reason: "clear", sessionId: "s1", resume: { id: "s1" } });
@@ -178,6 +178,35 @@ test("the session file tells optimaizr live the mod is running", async ($, on) =
 
   await $.session.end({ reason: "prompt_input_exit", sessionId: "s1", resume: { id: "s1" } });
   expect(typeof JSON.parse(w.files.get(file)!).endedAt).toBe("string");
+});
+
+test("the session file carries Claude Code's meters, rewritten when they move", async ($, on) => {
+  const w = world(on);
+  await $.session.start(SESSION);
+  const file = `${DIR}/mod/sessions/s1.json`;
+  expect(JSON.parse(w.files.get(file)!).windows).toMatchObject({
+    fiveHour: { percentUsed: 58, resetsAt: RESETS },
+  });
+
+  await $.session.measure({
+    ...w.usage(),
+    rateLimits: [
+      { kind: "five_hour", percentUsed: 61, resetsAt: RESETS },
+      { kind: "seven_day", percentUsed: 30 },
+    ],
+    changed: ["rateLimits"],
+  });
+  const beat = JSON.parse(w.files.get(file)!);
+  expect(beat.windows.fiveHour.percentUsed).toBe(61);
+  expect(beat.windows.sevenDay).toEqual({ percentUsed: 30 });
+  expect(typeof beat.windows.at).toBe("string");
+});
+
+test("off a plan the session file has no meters", async ($, on) => {
+  const w = world(on);
+  w.now.pct = undefined;
+  await $.session.start(SESSION);
+  expect(JSON.parse(w.files.get(`${DIR}/mod/sessions/s1.json`)!).windows).toBeUndefined();
 });
 
 test("a switch moves the next request in its project, and nothing else", async ($, on) => {

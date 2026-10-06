@@ -61,6 +61,59 @@ function planKey(raw: string): string {
   return raw.toLowerCase().replace(/[\s_-]/g, "");
 }
 
+/**
+ * The account fields Claude Code caches in its config after sign-in
+ * (`oauthAccount` in ~/.claude.json). Undocumented, so every one is optional
+ * and anything unrecognised reads as unknown.
+ */
+export interface ClaudeAccountInfo {
+  organizationType?: string | null;
+  organizationRateLimitTier?: string | null;
+  userRateLimitTier?: string | null;
+  seatTier?: string | null;
+  billingType?: string | null;
+}
+
+/** Where the plan a report uses came from. */
+export type PlanSource = "flag" | "config" | "detected";
+
+/**
+ * What Claude Code's account info says about the plan:
+ * - `plan`: one we can read sessions against.
+ * - `partial`: the family is known but not the tier (Max 5x or 20x?).
+ * - `per-token`: billed at API rates (Enterprise), so `--budget` fits instead.
+ * - `unknown`: nothing usable; never filled in with a guess.
+ */
+export type PlanDetection =
+  | { kind: "plan"; plan: PlanId; label: string }
+  | { kind: "partial"; label: string; choices: PlanId[] }
+  | { kind: "per-token"; label: string }
+  | { kind: "unknown"; reason: string };
+
+export function planFromAccount(account: ClaudeAccountInfo | null): PlanDetection {
+  if (!account) return { kind: "unknown", reason: "no Claude Code sign-in found" };
+  const org = planKey(account.organizationType ?? "");
+  const tiers = [account.userRateLimitTier, account.organizationRateLimitTier]
+    .map((t) => planKey(t ?? ""))
+    .join(" ");
+  const seat = planKey(account.seatTier ?? "");
+  const found = (plan: PlanId): PlanDetection => ({ kind: "plan", plan, label: PLANS[plan].label });
+
+  if (org.includes("enterprise")) return { kind: "per-token", label: "Claude Enterprise" };
+  if (org.includes("max")) {
+    if (tiers.includes("max20x")) return found("max20");
+    if (tiers.includes("max5x")) return found("max5");
+    return { kind: "partial", label: "Claude Max", choices: ["max5", "max20"] };
+  }
+  if (org.includes("team")) {
+    if (seat.includes("premium")) return found("team-premium");
+    if (seat.includes("standard")) return found("team");
+    return { kind: "partial", label: "Claude Team", choices: ["team", "team-premium"] };
+  }
+  if (org.includes("pro")) return found("pro");
+  return { kind: "unknown", reason: "Claude Code's account info does not name a plan" };
+}
+
 export const SESSION_HOURS = 5;
 const HOUR = 3_600_000;
 const SESSION_MS = SESSION_HOURS * HOUR;
@@ -131,9 +184,27 @@ export function sessionBlocks(
   return sessions.map(({ startMs: _s, items: _i, ...rest }) => rest);
 }
 
+/** One of Claude Code's own limit meters, as the optimAIzr mod last read it. */
+export interface ClaudeWindowReading {
+  /** 0-100, Claude Code's own figure. */
+  percentUsed: number;
+  resetsAt?: string;
+}
+
+export interface ClaudeWindows {
+  fiveHour?: ClaudeWindowReading;
+  sevenDay?: ClaudeWindowReading;
+  /** ISO time of the reading. */
+  at: string;
+}
+
 export interface PlanView {
   plan: PlanId;
   label: string;
+  /** How the plan was chosen; absent for callers that predate detection. */
+  source?: PlanSource;
+  /** Claude Code's real meters, when the mod reported them recently. */
+  windows?: ClaudeWindows;
   /** Monthly list price, per seat when `perSeat`. */
   priceUsd: number;
   perSeat: boolean;
@@ -160,7 +231,13 @@ export interface PlanView {
 export function planView(
   events: UsageEvent[],
   findings: OptimizationFinding[],
-  opts: { plan: PlanId; limitHits?: string[]; now?: Date },
+  opts: {
+    plan: PlanId;
+    limitHits?: string[];
+    now?: Date;
+    source?: PlanSource;
+    windows?: ClaudeWindows | null;
+  },
 ): PlanView {
   const now = (opts.now ?? new Date()).getTime();
   const sessions = sessionBlocks(events, findings, opts.limitHits ?? []);
@@ -188,6 +265,8 @@ export function planView(
   return {
     plan: opts.plan,
     label,
+    ...(opts.source ? { source: opts.source } : {}),
+    ...(opts.windows ? { windows: opts.windows } : {}),
     priceUsd,
     perSeat,
     valueMonthlyUsd,

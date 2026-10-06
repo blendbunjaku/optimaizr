@@ -29,6 +29,12 @@ export interface CardData {
   topModel: { label: string; share: number } | null;
   wasteShare: number;
   biggestWaste: string | null;
+  /** Share of spend that went on re-reading context: usually the biggest part. */
+  rereadShare: number;
+  /** Clear waste per month: the saving that needs no trade-off. */
+  clearWasteMonthlyUsd: number;
+  /** The biggest lever, when it is one: "compact earlier", up to a share. */
+  lever: { label: string; share: number } | null;
   /** The text a post would carry, ready to paste. */
   shareText: string;
 }
@@ -85,16 +91,28 @@ export function cardData(profile: Profile, summary: Summary): CardData {
 
   const biggestWaste = profile.bottleneck ? ruleLabel(profile.bottleneck.rule) : null;
   const pct = Math.round(wasteShare * 100);
+  const reread = Math.round(profile.breakdown.reread * 100);
+  const win = profile.biggestWin;
+  const lever =
+    win && win.recommendation.tier === "test"
+      ? { label: ruleLabel(win.recommendation.rule).toLowerCase(), share: win.share }
+      : null;
   const shareText = [
     plan
       ? `My AI coding: ${roundUsd(headlineUsd)}/month of API-equivalent usage on a ${price} plan (${multiple} what I pay).`
       : `My AI coding runs ${roundUsd(headlineUsd)}/month at list prices.`,
     `${summary.totalTokens > 0 ? ((input / summary.totalTokens) * 100).toFixed(1) : 0}% of ${fmtTokens(summary.totalTokens)} tokens in 30 days were input.`,
+    reread > 0 ? `${reread}% of it was Claude re-reading the conversation.` : "",
     pct > 0
       ? `${pct}% of it was waste${biggestWaste ? `, mostly ${biggestWaste.toLowerCase()}` : ""}.`
       : "Almost none of it was waste.",
+    lever && win
+      ? `Biggest lever: ${lever.label}, up to ${Math.round(lever.share * 100)}% less (${roundUsd(win.recommendation.savings.monthlyUsd)}/month).`
+      : "",
     "npx optimaizr profile",
-  ].join(" ");
+  ]
+    .filter(Boolean)
+    .join(" ");
 
   return {
     from: summary.windowDays.from,
@@ -119,6 +137,9 @@ export function cardData(profile: Profile, summary: Summary): CardData {
         : null,
     wasteShare,
     biggestWaste,
+    rereadShare: profile.breakdown.reread,
+    clearWasteMonthlyUsd: profile.savingsMonthlyUsd,
+    lever,
     shareText,
   };
 }
@@ -216,8 +237,9 @@ export function renderCardSvg(d: CardData): string {
 
   const headline = roundUsd(d.headlineUsd);
   const wastePct = Math.round(d.wasteShare * 100);
+  const rereadPct = Math.round(d.rereadShare * 100);
   const barW = 1072;
-  const fill = Math.max(wastePct > 0 ? 6 : 0, Math.round(barW * Math.min(1, d.wasteShare)));
+  const fill = Math.max(rereadPct > 0 ? 6 : 0, Math.round(barW * Math.min(1, d.rereadShare)));
 
   const parts = [
     `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">`,
@@ -271,22 +293,31 @@ export function renderCardSvg(d: CardData): string {
         )
       : "",
 
-    // Waste.
+    // Where it goes, how clean it is, and the biggest lever.
     `<line x1="64" y1="420" x2="1136" y2="420" stroke="${RULE}"/>`,
-    text(64, 474, wastePct > 0 ? `${wastePct}% of it was waste` : "Almost no waste", {
-      size: 34,
+    text(64, 474, `${rereadPct}% of it: re-reading the conversation`, {
+      size: 32,
       weight: 800,
-      fill: wastePct > 0 ? WARN : PAPER,
     }),
-    d.biggestWaste
-      ? text(1136, 472, `biggest: ${d.biggestWaste.toLowerCase()}`, {
-          size: 20,
-          fill: MUTED,
-          anchor: "end",
-        })
-      : "",
+    text(1136, 472, `clear waste ${roundUsd(d.clearWasteMonthlyUsd)}/mo`, {
+      size: 20,
+      fill: wastePct >= 15 ? WARN : MUTED,
+      anchor: "end",
+    }),
     `<rect x="64" y="496" width="${barW}" height="12" rx="6" fill="${RULE}"/>`,
-    fill > 0 ? `<rect x="64" y="496" width="${fill}" height="12" rx="6" fill="${WARN}"/>` : "",
+    fill > 0 ? `<rect x="64" y="496" width="${fill}" height="12" rx="6" fill="${ACCENT}"/>` : "",
+    d.lever
+      ? text(
+          64,
+          540,
+          `biggest lever: ${d.lever.label}, up to ${Math.round(d.lever.share * 100)}% less`,
+          {
+            size: 19,
+            fill: ACCENT,
+            mono: true,
+          },
+        )
+      : "",
 
     // How to get your own.
     text(64, 580, "$", { size: 22, fill: ACCENT, mono: true, weight: 700 }),

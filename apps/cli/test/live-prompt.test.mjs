@@ -76,7 +76,7 @@ function harness(keys, over = {}) {
   return { prompt, written, out: () => written.join("\n") };
 }
 
-test("the card shows the current and suggested models and the observed cost", async () => {
+test("the card says what happened, why it matters, the change and the money", async () => {
   const { confident } = await recommendation();
   const h = harness(["n"]);
   h.prompt.offer(confident);
@@ -84,13 +84,12 @@ test("the card shows the current and suggested models and the observed cost", as
 
   const out = h.out();
   assert.match(out, /optimAIzr/);
-  assert.match(out, /This task looks suitable for a cheaper model\./);
-  assert.match(out, /Current:\s+Sonnet 5/);
-  assert.match(out, /Suggested:\s+Haiku 4\.5/);
-  assert.match(out, /Observed cost:\s+\$/);
-  assert.match(out, /\[Y\] Apply optimization/);
-  assert.match(out, /\[N\] Continue/);
-  assert.match(out, /\[D\] Why\?/);
+  assert.match(out, /What happened\s+\S/);
+  assert.match(out, /Why it matters\s+\S/);
+  assert.match(out, /Change\s+Sonnet 5 -> Haiku 4\.5/);
+  assert.match(out, /Saving\s+\$[\d.]+ could have been saved on \d+ calls? in the last \d+ min/);
+  assert.match(out, /likely|high confidence/, "the card says how sure it is in words");
+  assert.match(out, /\[Y\] Apply\s+\[N\] Not now\s+\[D\] Why\?/);
 });
 
 test("Y does not claim to have applied anything when nothing can modify the request", async () => {
@@ -246,7 +245,7 @@ test("the same rule and route is never raised twice", async () => {
   h.prompt.offer({ ...confident, observedUsd: confident.observedUsd * 3 });
   await h.prompt.drain();
 
-  const cards = h.written.filter((l) => l.includes("[Y] Apply optimization")).length;
+  const cards = h.written.filter((l) => l.includes("[Y] Apply")).length;
   assert.equal(cards, 1, "a repeat of the same finding must not prompt again");
 });
 
@@ -259,7 +258,7 @@ test("a provisional finding is printed, never prompted", async () => {
   await h.prompt.drain();
 
   assert.match(h.out(), /PRINTED-NOT-PROMPTED/);
-  assert.doesNotMatch(h.out(), /\[Y\] Apply optimization/);
+  assert.doesNotMatch(h.out(), /\[Y\] Apply/);
 });
 
 test("non-interactive prints and never blocks on a key", async () => {
@@ -317,7 +316,7 @@ test("prompts are answered one at a time, never interleaved", async () => {
   h.prompt.offer(other); // queued while the first is open
   await h.prompt.drain();
 
-  const cards = h.written.filter((l) => l.includes("[Y] Apply optimization"));
+  const cards = h.written.filter((l) => l.includes("[Y] Apply"));
   assert.equal(cards.length, 2);
   // The second card must come after the first is resolved.
   const firstDone = h.written.findIndex((l) => l.includes("Continuing."));
@@ -337,6 +336,6 @@ test("a finding Jev withheld is reported, never offered as a choice", async () =
   await h.prompt.drain();
 
   assert.match(h.out(), /PRINTED-NOT-PROMPTED/);
-  assert.doesNotMatch(h.out(), /\[Y\] Apply optimization/);
+  assert.doesNotMatch(h.out(), /\[Y\] Apply/);
   assert.doesNotMatch(h.out(), /\[Y\/N\/D\]/);
 });

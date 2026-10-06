@@ -14,9 +14,15 @@ prompt contents, credentials or usage data off your machine.
 ## Where your data goes
 
 **Nowhere, by default.** Analysis runs entirely on your machine. There is no
-account, no upload and no telemetry: no analytics, no phone-home, no crash
+account, no upload and no telemetry: no analytics, no usage reporting, no crash
 reporting. `optimaizr metrics` is computed from your local data and sent
 nowhere.
+
+One request is automatic: once a day, a detached background process asks
+`registry.npmjs.org` for the latest optimaizr version number, so the CLI can
+say when there is a newer one. It sends nothing about you or your usage, never
+runs in CI, with `--json` or when output is piped, and is off with
+`OPTIMAIZR_NO_UPDATE_CHECK=1` or `"updateCheck": false` in the config.
 
 Two features make network calls, and only when you ask for them:
 
@@ -36,12 +42,13 @@ Claude's answers or file contents, and stores none of them.
 
 ## What is read
 
-| Path                    | Why                                      |
-| ----------------------- | ---------------------------------------- |
-| `~/.claude/projects`    | Claude Code transcripts (usage per call) |
-| `~/.codex/sessions`     | Codex rollouts (usage and plan meter)    |
-| `~/.optimaizr/*.json`   | Your config and custom model prices      |
-| Files you pass `import` | A CSV or JSON usage export               |
+| Path                    | Why                                       |
+| ----------------------- | ----------------------------------------- |
+| `~/.claude/projects`    | Claude Code transcripts (usage per call)  |
+| `~/.codex/sessions`     | Codex rollouts (usage and plan meter)     |
+| `~/.optimaizr/*.json`   | Your config and custom model prices       |
+| `~/.claude.json`        | Only your plan fields, to detect the plan |
+| Files you pass `import` | A CSV or JSON usage export                |
 
 Transcripts are never copied or modified.
 
@@ -51,22 +58,28 @@ Everything optimAIzr keeps lives in `~/.optimaizr/` as plain JSON and JSONL.
 Nothing is encrypted, because nothing leaves the machine and the files inherit
 your user permissions.
 
-| File                  | Contents                                                                                                                       |
-| --------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| `events.jsonl`        | One record per call from `wrap()` or `import`: model, time, token counts, cost, latency, tool names, and a hash of the prefix. |
-| `samples.jsonl`       | **Only if you enable capture.** Redacted request/response pairs for `verify`.                                                  |
-| `decisions.json`      | Which recommendations you viewed, simulated or applied.                                                                        |
-| `verifications.json`  | The current verification state per rule, which `apply` checks.                                                                 |
-| `verifications.jsonl` | Every verification attempt, append-only.                                                                                       |
-| `overrides.json`      | Model swaps you accepted in `live`, applied by `wrap()` and the Claude Code mod until you run `optimaizr undo`.                |
-| `mod/sessions/*.json` | Written by the Claude Code mod, one per session: its id, working directory, mod version and times. Removed after 7 days.       |
-| `limits.jsonl`        | Times you recorded hitting a Claude session limit with `optimaizr limit`.                                                      |
+| File                    | Contents                                                                                                                                                |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `events.jsonl`          | One record per call from `wrap()` or `import`: model, time, token counts, cost, latency, tool names, and a hash of the prefix.                          |
+| `samples.jsonl`         | **Only if you enable capture.** Redacted request/response pairs for `verify`.                                                                           |
+| `decisions.json`        | Which recommendations you viewed, simulated or applied.                                                                                                 |
+| `verifications.json`    | The current verification state per rule, which `apply` checks.                                                                                          |
+| `verifications.jsonl`   | Every verification attempt, append-only.                                                                                                                |
+| `overrides.json`        | Model swaps you accepted in `live`, applied by `wrap()` and the Claude Code mod until you run `optimaizr undo`.                                         |
+| `mod/sessions/*.json`   | Written by the Claude Code mod, one per session: its id, working directory, mod version, times and Claude Code's own plan meters. Removed after 7 days. |
+| `settings-changes.json` | What `apply context-compaction` changed in Claude Code or Codex, so `undo` can put it back.                                                             |
+| `update.json`           | When the version check last ran, the latest version it saw, and the last version that ran here.                                                         |
+| `limits.jsonl`          | Times you recorded hitting a Claude session limit with `optimaizr limit`.                                                                               |
 
 Outside that directory, optimAIzr writes only:
 
 - `~/.claude/settings.json`, and only when you press **Y** on a model swap in
-  `live` while no session is running the mod. It merges the `model` key,
-  leaves everything else alone, and prints what changed and how to undo it.
+  `live` while no session is running the mod (it merges the `model` key), or
+  accept compacting earlier (it merges `env.CLAUDE_CODE_AUTO_COMPACT_WINDOW`).
+  Everything else is left alone, and it prints what changed and how to undo it.
+- `~/.codex/config.toml`, only when you accept compacting earlier for Codex. It
+  sets the top-level `model_auto_compact_token_limit` line and keeps the rest of
+  the file, comments included.
 - `optimaizr-report.html`, `optimaizr-card.html`/`.svg` and
   `optimaizr-change.md` in the current directory, when you run `report`,
   `card` or `apply`.

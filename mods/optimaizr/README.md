@@ -52,6 +52,8 @@ the retry guard. It never reads your prompts or file contents and makes no
 network calls. It
 reads `~/.optimaizr/overrides.json` and writes one small file per session to
 `~/.optimaizr/mod/sessions`, which is how `optimaizr live` knows it is running.
+That file also carries Claude Code's own 5-hour and weekly meters, so
+`optimaizr profile` and `optimaizr live` can show your real windows.
 `claude plugin validate` on this folder lists every call it makes.
 
 ## Develop

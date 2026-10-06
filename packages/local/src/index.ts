@@ -13,6 +13,8 @@ export * from "./live.js";
 export * from "./rewriters.js";
 export * from "./overrides.js";
 export * from "./claude-mod.js";
+export * from "./claude-account.js";
+export * from "./compaction.js";
 // Optional, opt-in, and the only outbound path in this package.
 export * from "./jev.js";
 export * from "./verify/replay.js";

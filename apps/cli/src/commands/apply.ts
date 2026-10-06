@@ -5,7 +5,9 @@ import {
   blue,
   bold,
   callActivity,
+  type CallEvent,
   callSession,
+  COMPACT_AT,
   dim,
   findWaste,
   green,
@@ -25,7 +27,7 @@ import {
   wrap as wrapText,
   yellow,
 } from "@optimaizr/core";
-import { logVerification } from "@optimaizr/local";
+import { applyCompaction, type CompactAgent, logVerification } from "@optimaizr/local";
 import type { Args } from "../args.js";
 import { load } from "../data.js";
 
@@ -42,6 +44,9 @@ export async function cmdApply(args: Args): Promise<void> {
   }
 
   const data = await load(args);
+  // A setting, not a request rewrite: written to the agents' own config files,
+  // with the previous value kept for `optimaizr undo context-compaction`.
+  if (ruleName === "context-compaction") return applyCompactionLever(args, data.events);
   const finding = findWaste(data).find((f) => f.rule === ruleName);
   if (!finding) {
     console.log(`  ${red("No such finding:")} ${ruleName}`);
@@ -266,4 +271,43 @@ export async function cmdSimulate(args: Args): Promise<void> {
   console.log("");
   setStatus(ruleName, "simulated");
   if (sim.stale) process.exitCode = 1;
+}
+
+/**
+ * `optimaizr apply context-compaction`: have Claude Code and/or Codex compact
+ * at COMPACT_AT. `--agent claude` or `--agent codex` narrows it; by default it
+ * covers whichever agents appear in the usage.
+ */
+function applyCompactionLever(args: Args, events: CallEvent[]): void {
+  const want = typeof args.flags.agent === "string" ? args.flags.agent.toLowerCase() : null;
+  const seen = (a: CompactAgent) => events.some((e) => e.source === a);
+  const agents: CompactAgent[] =
+    want === "claude" || want === "claude-code"
+      ? ["claude-code"]
+      : want === "codex"
+        ? ["codex"]
+        : (["claude-code", "codex"] as const).filter(seen);
+  console.log("");
+  if (agents.length === 0) {
+    console.log(`  ${dim("No Claude Code or Codex usage found, so there is nothing to set.")}`);
+    console.log(`  ${dim("Pick one with --agent claude or --agent codex.")}`);
+    console.log("");
+    return;
+  }
+  if (args.flags["dry-run"]) {
+    console.log(
+      `  ${dim(`Dry run: would set ${agents.join(" and ")} to compact at ${COMPACT_AT}.`)}`,
+    );
+    console.log("");
+    return;
+  }
+  for (const r of applyCompaction(agents)) {
+    console.log(`  ${r.ok ? green("Applied") : red("Could not apply")} ${r.detail}`);
+  }
+  console.log("");
+  console.log(`  ${dim("A summary can drop details from early in a long conversation.")}`);
+  console.log(
+    `  ${dim("Try it for a week, then compare with")} ${blue("optimaizr profile")}${dim(". Undo:")} ${blue("optimaizr undo context-compaction")}`,
+  );
+  console.log("");
 }

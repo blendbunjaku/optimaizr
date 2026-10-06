@@ -128,19 +128,22 @@ test("profile figures are the engine's figures, not new ones", async () => {
   assert.equal(profile.savingsMonthlyUsd, recoverableMonthly(findings));
   assert.equal(profile.wasteWindowUsd, recoverableWindow(findings));
 
-  const recs = toRecommendations(findings, data.events.length);
+  // Levers ("up to") are listed on their own, never as opportunities.
+  const recs = toRecommendations(findings, data.events.length).filter((r) => r.tier !== "test");
   assert.ok(recs.length > 0, "fixture should produce at least one recommendation");
   assert.deepEqual(
     profile.opportunities.map((r) => r.id),
     recs.slice(0, 3).map((r) => r.id),
   );
   assert.equal(profile.bottleneck?.id, recs[0].id);
-  assert.equal(profile.nextCommand, `optimaizr simulate ${recs[0].id}`);
+  // The screen leads with the biggest win of any tier, and the next step follows it.
+  const lead = profile.biggestWin?.recommendation ?? recs[0];
+  assert.equal(profile.nextCommand, `optimaizr simulate ${lead.id}`);
 });
 
-test("flagged calls are the union of what recoverable findings counted", async () => {
+test("flagged calls are the union of what clear-waste findings counted", async () => {
   const { data, findings, profile } = await profileOf(oversizedRecords());
-  const recoverable = findings.filter((f) => !f.advisory);
+  const recoverable = findings.filter((f) => !f.advisory && f.tier === "fix");
   const union = data.events.filter((e) => recoverable.some((f) => f.affects(e)));
 
   assert.equal(profile.flaggedCalls, union.length);
@@ -158,9 +161,9 @@ test("with nothing recoverable, the profile says so and points at why", async ()
   assert.equal(profile.nextCommand, "optimaizr why");
 
   const text = renderProfile(profile);
-  assert.match(text, /No recoverable waste found/);
+  assert.match(text, /No clear waste and no levers worth testing were found/);
   assert.match(text, /optimaizr why/);
-  assert.doesNotMatch(text, /Biggest opportunity/);
+  assert.doesNotMatch(text, /Biggest win/);
 });
 
 test("building a profile never writes a decision", async () => {
@@ -180,10 +183,13 @@ test("the rendered profile answers usage, waste and what next", async () => {
   const text = renderProfile(profile);
 
   for (const heading of [
-    "AI usage",
-    "Optimization",
-    "Biggest opportunity",
-    "Top opportunities",
+    "Savings found",
+    "Biggest win",
+    "What happened",
+    "Why it matters",
+    "What to do",
+    "Where it goes",
+    "item by item",
     "Next step",
   ]) {
     assert.ok(text.includes(heading), `missing section: ${heading}`);
@@ -204,7 +210,7 @@ function fixtureHome(records) {
   if (records) writeProjects(path.join(home, ".claude", "projects"), records);
   return {
     HOME: home,
-    CLAUDE_CONFIG_DIR: home,
+    CLAUDE_CONFIG_DIR: path.join(home, ".claude"),
     OPTIMAIZR_DIR: path.join(home, ".optimaizr"),
   };
 }
@@ -227,7 +233,7 @@ test("profile prints the snapshot and writes nothing", { skip }, async () => {
 
   assert.equal(code, 0);
   assert.match(stdout, /optimAIzr \| profile/);
-  assert.match(stdout, /Biggest opportunity/);
+  assert.match(stdout, /Biggest win/);
   assert.match(stdout, /optimaizr simulate [a-z-]+/);
   assert.equal(fs.existsSync(env.OPTIMAIZR_DIR), false, "profile must not create state");
 });
@@ -240,7 +246,10 @@ test("profile --json is machine-readable and matches the text", { skip }, async 
   const p = JSON.parse(stdout);
   assert.equal(p.calls, 50);
   assert.ok(p.savingsMonthlyUsd > 0);
-  assert.equal(p.nextCommand, `optimaizr simulate ${p.bottleneck.id}`);
+  assert.equal(
+    p.nextCommand,
+    `optimaizr simulate ${(p.biggestWin?.recommendation ?? p.bottleneck).id}`,
+  );
   assert.deepEqual(p.errors, []);
 });
 

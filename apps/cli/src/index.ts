@@ -63,6 +63,16 @@ export type {
   TrafficSlice,
 } from "@optimaizr/core";
 export { createLivePrompt, type LivePrompt, type PromptOptions } from "./live-prompt.js";
+export {
+  createStatusLine,
+  emptyStatus,
+  recordCall,
+  renderRunSummary,
+  renderStatus,
+  type StatusState,
+} from "./live-status.js";
+export { newer, updateLines, updatesEnabled, type UpdateState } from "./update.js";
+export { changelogSections } from "./commands/changelog.js";
 export { verifyCandidate, applyCandidate, type VerifyResult } from "@optimaizr/local";
 export {
   DEFAULT_BAR,

@@ -1,8 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
-import os from "node:os";
 
-import { priceFor } from "@optimaizr/core";
+import { claudeConfigDir, priceFor } from "@optimaizr/core";
 import type { OptimizationFinding, ProposedChange, RequestRewriter } from "@optimaizr/core";
 
 /**
@@ -14,7 +13,7 @@ import type { OptimizationFinding, ProposedChange, RequestRewriter } from "@opti
  */
 
 export function claudeSettingsPath(): string {
-  return path.join(os.homedir(), ".claude", "settings.json");
+  return path.join(claudeConfigDir(), "settings.json");
 }
 
 /**

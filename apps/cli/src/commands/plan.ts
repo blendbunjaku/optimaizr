@@ -2,7 +2,6 @@ import fs from "node:fs";
 import path from "node:path";
 import {
   analyze,
-  blue,
   bold,
   buildProfile,
   cardData,
@@ -21,9 +20,9 @@ import {
   usd,
   wrap as wrapText,
 } from "@optimaizr/core";
-import { optimaizrDir } from "@optimaizr/local";
+import { latestClaudeWindows, optimaizrDir } from "@optimaizr/local";
 import type { Args } from "../args.js";
-import { activeConfig, budgetOf, planOf, shouldHintPlan } from "../config.js";
+import { budgetOf, planNote, resolvePlan } from "../config.js";
 import {
   emptyNotice,
   limitsPath,
@@ -105,15 +104,33 @@ export async function cmdLimit(args: Args): Promise<void> {
 }
 
 /**
- * The command that shows the learned limit for the user's plan: bare `profile`
- * when the config sets one, else the plan passed here, with `pro` as the example.
+ * The command that shows the learned limit: bare `profile` when the plan is
+ * known without a flag (config or Claude Code's sign-in), else the plan passed
+ * here, with `pro` as the example.
  */
 export function seeLimitCommand(args: Args): string {
   const flag = typeof args.flags.plan === "string" ? parsePlan(args.flags.plan) : null;
-  const saved = activeConfig().plan;
-  const configured = typeof saved === "string" ? parsePlan(saved) : null;
-  if (configured && (!flag || flag === configured)) return "optimaizr profile";
+  const { plan: _flag, ...rest } = args.flags;
+  const known = resolvePlan({ ...args, flags: rest }).plan;
+  if (known && (!flag || flag === known)) return "optimaizr profile";
   return `optimaizr profile --plan ${flag ?? "pro"}`;
+}
+
+/** Plan options for `buildProfile`: the plan, where it came from, recorded hits and live meters. */
+function planOptions(args: Args) {
+  const choice = resolvePlan(args);
+  return {
+    choice,
+    options:
+      choice.plan === null
+        ? undefined
+        : {
+            plan: choice.plan,
+            source: choice.source ?? undefined,
+            limitHits: readLimitHits(),
+            windows: latestClaudeWindows(),
+          },
+  };
 }
 
 /**
@@ -127,13 +144,12 @@ export async function cmdCard(args: Args): Promise<void> {
   if (data.events.length === 0) return emptyNotice();
   const dayOpts = summaryOptions(args);
   const { findings } = analyze(data);
-  const plan = planOf(args);
   const profile = buildProfile(
     data,
     summarize(data, dayOpts),
     findings,
     undefined,
-    plan === null ? undefined : { plan, limitHits: readLimitHits() },
+    planOptions(args).options,
   );
   const recent = args.flags.days
     ? data
@@ -175,7 +191,7 @@ export async function cmdProfile(args: Args): Promise<void> {
   const summary = summarize(data, dayOpts);
   const { findings, errors } = analyze(data);
   const limitUsd = budgetOf(args);
-  const plan = planOf(args);
+  const plan = planOptions(args);
   const profile = buildProfile(
     data,
     summary,
@@ -187,22 +203,20 @@ export async function cmdProfile(args: Args): Promise<void> {
           timeZone: dayOpts.timeZone,
           events: await loadForBudget(args),
         },
-    plan === null ? undefined : { plan, limitHits: readLimitHits() },
+    plan.options,
   );
 
   if (args.flags.json) {
-    console.log(JSON.stringify({ ...profile, errors }, null, 2));
+    console.log(
+      JSON.stringify({ ...profile, detectedPlan: plan.choice.detected, errors }, null, 2),
+    );
     return;
   }
 
   console.log(renderProfile(profile));
-  if (shouldHintPlan(args, data)) {
-    console.log(
-      `  ${dim("On Claude Pro, Max or Team?")} ${blue("optimaizr profile --plan pro")} ${dim("(or max5, max20, team,")}`,
-    );
-    console.log(
-      `  ${dim('team-premium) shows your 5-hour sessions. On the API or Enterprise? "plan": "api" hides this.')}`,
-    );
+  const note = planNote(plan.choice, data.events);
+  if (note) {
+    for (const line of note) console.log(`  ${line}`);
     console.log("");
   }
   for (const e of errors) console.log(`  ${red(`warning: ${ruleErrorWarning(e)}`)}`);

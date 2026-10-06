@@ -38,6 +38,7 @@ import {
   WINDOW_ALERTS,
   windowNote,
   windowShare,
+  windowsOf,
 } from "./meter.ts";
 
 // The optimAIzr mod: this turn's cost and the 5-hour window while Claude works,
@@ -45,7 +46,7 @@ import {
 // accepts, and a guard against retry loops. It reads usage figures and the
 // commands Claude runs, never prompt text or file contents.
 
-const VERSION = "0.8.1";
+const VERSION = "0.9.0";
 // The HUD /optimaizr hud opens beside the conversation.
 const PANE = "optimaizr";
 // overrides.json is read again at most this often, so `optimaizr undo` lands fast.
@@ -152,6 +153,8 @@ async function take($: Api, u: SessionUsage): Promise<void> {
       );
     }
   }
+  // The CLI reads the meters from the session file, so a move is written at once.
+  if (five && five.percentUsed !== was) await beat($).catch(() => undefined);
   if (five) {
     const stored = await $.store.get("window");
     const prev = isWindow(stored) ? stored : state.window;
@@ -169,7 +172,9 @@ async function measure($: Api): Promise<void> {
 /** The session file `optimaizr live` and `optimaizr mod` read. */
 async function beat($: Api, ended = false): Promise<void> {
   if (!state.file) return;
-  const now = new Date(await $.clock.now()).toISOString();
+  const at = await $.clock.now();
+  const now = new Date(at).toISOString();
+  const windows = windowsOf(state.usage?.rateLimits, at);
   const body = {
     id: state.id,
     version: VERSION,
@@ -177,6 +182,7 @@ async function beat($: Api, ended = false): Promise<void> {
     startedAt: new Date(state.startedAt).toISOString(),
     seenAt: now,
     ...(ended ? { endedAt: now } : {}),
+    ...(windows ? { windows } : {}),
   };
   await $.fs.write(state.file, `${JSON.stringify(body)}\n`);
 }

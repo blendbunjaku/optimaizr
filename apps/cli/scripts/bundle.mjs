@@ -7,6 +7,8 @@ import { build } from "esbuild";
 import { chmod, readFile, rm, writeFile } from "node:fs/promises";
 
 const { version } = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
+// `optimaizr changelog` works offline, so the notes travel inside the bundle.
+const changelog = await readFile(new URL("../../../CHANGELOG.md", import.meta.url), "utf8");
 
 const SHEBANG = "#!/usr/bin/env node";
 
@@ -24,7 +26,10 @@ const common = {
   sourcemap: process.env.OPTIMAIZR_SOURCEMAP === "1",
   logLevel: "info",
   // for --version, since there's no package.json next to the bundle
-  define: { __OPTIMAIZR_VERSION__: JSON.stringify(version) },
+  define: {
+    __OPTIMAIZR_VERSION__: JSON.stringify(version),
+    __OPTIMAIZR_CHANGELOG__: JSON.stringify(changelog),
+  },
 };
 
 await build({

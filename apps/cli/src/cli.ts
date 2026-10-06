@@ -13,6 +13,7 @@ import {
   cmdWhy,
 } from "./commands/analyze.js";
 import { cmdApply, cmdShow, cmdSimulate } from "./commands/apply.js";
+import { cmdChangelog } from "./commands/changelog.js";
 import { cmdImport } from "./commands/import.js";
 import {
   cmdFeedback,
@@ -27,7 +28,8 @@ import { cmdLive, cmdUndo } from "./commands/live.js";
 import { cmdMod } from "./commands/mod.js";
 import { cmdCard, cmdLimit, cmdProfile } from "./commands/plan.js";
 import { cmdVerify } from "./commands/verify.js";
-import { initConfig } from "./config.js";
+import { activeConfig, initConfig } from "./config.js";
+import { afterCommand, runUpdateCheck, updatesEnabled } from "./update.js";
 
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
@@ -38,8 +40,21 @@ async function main(): Promise<void> {
   const first = args.command;
   if (args.flags.help || first === "help" || first === "-h") return cmdHelp();
   if (args.flags.version || first === "version" || first === "-v") return cmdVersion();
+  // The detached background half of the update check: no output, ever.
+  if (first === "__update-check") return runUpdateCheck();
 
   initConfig();
+  await run(args);
+  const enabled = updatesEnabled({
+    env: process.env,
+    isTTY: Boolean(process.stdout.isTTY),
+    json: Boolean(args.flags.json),
+    configured: activeConfig().updateCheck,
+  });
+  if (enabled && process.argv[1]) afterCommand(process.argv[1]);
+}
+
+async function run(args: ReturnType<typeof parseArgs>): Promise<void> {
   switch (args.command) {
     case "scan":
       return cmdScan(args);
@@ -93,6 +108,9 @@ async function main(): Promise<void> {
       return cmdGuide();
     case "feedback":
       return cmdFeedback();
+    case "changelog":
+    case "whatsnew":
+      return cmdChangelog(args);
     default: {
       // Exit non-zero so scripts notice a typo.
       const names = HELP_COMMANDS.map(([c]) => c.split(" ")[1]!);
