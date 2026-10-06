@@ -15,7 +15,19 @@ import type { CallEvent, Dataset, ToolCall } from "../types.js";
  * a placeholder `output_tokens`, the last one the real total.
  */
 
-const CACHE_ROOT = path.join(os.homedir(), ".claude", "projects");
+/**
+ * Claude Code's own folder: `CLAUDE_CONFIG_DIR` when set (people with two
+ * accounts point each at its own folder), else ~/.claude.
+ */
+export function claudeConfigDir(): string {
+  const set = process.env.CLAUDE_CONFIG_DIR?.trim();
+  return set ? userPath(set) : path.join(os.homedir(), ".claude");
+}
+
+/** A path from an env var: a quoted `~/x` reaches us unexpanded, so expand it here. */
+export function userPath(p: string): string {
+  return path.resolve(p === "~" || p.startsWith("~/") ? path.join(os.homedir(), p.slice(1)) : p);
+}
 
 const CHARS_PER_TOKEN = 4;
 
@@ -97,7 +109,15 @@ interface Partial {
   effort?: string | null;
   isSubagent: boolean;
   stopReason?: string | null;
+  turnId?: string;
+  contextEpoch: number;
   tools: Map<string, ToolCall>;
+}
+
+/** The prompt a thread is answering, and how often it has been compacted. */
+interface Thread {
+  turnId?: string;
+  epoch: number;
 }
 
 /**
@@ -109,10 +129,52 @@ export interface TranscriptState {
   toolResults: Map<string, ToolResultInfo>;
   /** messageId -> when it last changed, so a tailer can tell when it settled. */
   touchedAt: Map<string, number>;
+  /** By file and agent: the main conversation and each subagent are separate threads. */
+  threads: Map<string, Thread>;
 }
 
 export function createTranscriptState(): TranscriptState {
-  return { partials: new Map(), toolResults: new Map(), touchedAt: new Map() };
+  return { partials: new Map(), toolResults: new Map(), touchedAt: new Map(), threads: new Map() };
+}
+
+function threadOf(
+  state: TranscriptState,
+  file: string,
+  rec: { isSidechain?: boolean; agentId?: string },
+): Thread {
+  const key = `${file}|${rec.isSidechain ? (rec.agentId ?? "side") : "main"}`;
+  let t = state.threads.get(key);
+  if (!t) {
+    t = { epoch: 0 };
+    state.threads.set(key, t);
+  }
+  return t;
+}
+
+// Text Claude Code writes on the user's side that is not something they asked.
+const NOT_A_PROMPT =
+  /^\s*(<local-command|<bash-|<system-reminder|<task-notification|\[Request interrupted|Caveat: )/;
+
+/**
+ * Whether a user record is a prompt that starts a task: typed text or a slash
+ * command, not a tool result, an injected reminder or a compaction summary.
+ * Only its shape and opening characters are looked at; the text is not kept.
+ */
+function isPrompt(rec: {
+  isMeta?: boolean;
+  isCompactSummary?: boolean;
+  message?: { content?: unknown };
+}): boolean {
+  if (rec.isMeta || rec.isCompactSummary) return false;
+  const content = rec.message?.content;
+  let text: unknown;
+  if (typeof content === "string") text = content;
+  else if (Array.isArray(content)) {
+    const blocks = content as Array<{ type?: string; text?: unknown } | null>;
+    if (blocks.some((b) => b?.type === "tool_result")) return false;
+    text = blocks.find((b) => b?.type === "text")?.text;
+  }
+  return typeof text === "string" && text.trim() !== "" && !NOT_A_PROMPT.test(text);
 }
 
 function tokenWeight(u: RawUsage | undefined): number {
@@ -125,17 +187,42 @@ function tokenWeight(u: RawUsage | undefined): number {
   );
 }
 
+/** A short stable hash (FNV-1a), so a signature can tell inputs apart without holding them. */
+function hashOf(text: string): string {
+  let h = 0x811c9dc5;
+  for (let k = 0; k < text.length; k++) {
+    h ^= text.charCodeAt(k);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0).toString(16).padStart(8, "0");
+}
+
+/** The file a file tool works on. */
+function targetOf(input: unknown): string | undefined {
+  const i = (input ?? {}) as Record<string, unknown>;
+  const v = i.file_path ?? i.notebook_path;
+  return typeof v === "string" && v ? v : undefined;
+}
+
 /** `Read:/abs/path`, `Bash:npm run build`, ...: used to detect repeated work. */
 function signatureOf(name: string, input: unknown): string {
   const i = (input ?? {}) as Record<string, unknown>;
   const pick = (k: string) => (typeof i[k] === "string" ? (i[k] as string) : undefined);
   switch (name) {
-    case "Read":
+    case "Read": {
+      // Two different slices of one big file are not a repeat.
+      const slice = [i.offset, i.limit].some((v) => v !== undefined)
+        ? `#${String(i.offset ?? "")}:${String(i.limit ?? "")}`
+        : "";
+      return `Read:${pick("file_path") ?? ""}${slice}`;
+    }
     case "NotebookEdit":
-      return `${name}:${pick("file_path") ?? ""}`;
+      return `${name}:${pick("notebook_path") ?? pick("file_path") ?? ""}`;
     case "Edit":
     case "Write":
-      return `${name}:${pick("file_path") ?? ""}`;
+    case "MultiEdit":
+      // The change itself, hashed: two different edits to one file are not a retry.
+      return `${name}:${pick("file_path") ?? ""}#${hashOf(JSON.stringify(i))}`;
     case "Bash":
       return `Bash:${(pick("command") ?? "").trim().replace(/\s+/g, " ")}`;
     case "Grep":
@@ -178,8 +265,18 @@ export function consumeTranscriptLine(
     return false;
   }
 
+  // A compaction replaces the conversation with a summary: what was read before is gone.
+  if (rec.type === "system" && rec.subtype === "compact_boundary") {
+    threadOf(state, file, rec).epoch++;
+    return true;
+  }
+
   // Tool results live on the user side and tell us how much each tool pushed into context.
   if (rec.type === "user") {
+    if (isPrompt(rec)) {
+      threadOf(state, file, rec).turnId =
+        rec.uuid ?? `${file}:${state.threads.size}:${rec.timestamp}`;
+    }
     const content = rec.message?.content;
     if (Array.isArray(content)) {
       for (const block of content) {
@@ -208,6 +305,7 @@ export function consumeTranscriptLine(
   const usage: RawUsage = msg.usage ?? {};
   const weight = tokenWeight(usage);
 
+  const thread = threadOf(state, file, rec);
   let p = out.get(messageId);
   if (!p) {
     p = {
@@ -221,6 +319,8 @@ export function consumeTranscriptLine(
       effort: rec.effort ?? null,
       isSubagent: Boolean(rec.isSidechain),
       stopReason: msg.stop_reason ?? null,
+      turnId: thread.turnId,
+      contextEpoch: thread.epoch,
       tools: new Map(),
     };
     out.set(messageId, p);
@@ -240,10 +340,12 @@ export function consumeTranscriptLine(
       if (block?.type !== "tool_use") continue;
       const id = block.id ?? `${messageId}:${p.tools.size}`;
       if (!p.tools.has(id)) {
+        const target = targetOf(block.input);
         p.tools.set(id, {
           id,
           name: block.name ?? "unknown",
           signature: signatureOf(block.name ?? "unknown", block.input),
+          ...(target ? { target } : {}),
         });
       }
     }
@@ -296,7 +398,7 @@ export interface IngestOptions {
 }
 
 export async function ingestClaudeCode(opts: IngestOptions = {}): Promise<Dataset> {
-  const root = opts.root ?? CACHE_ROOT;
+  const root = opts.root ?? path.join(claudeConfigDir(), "projects");
   const warnings: string[] = [];
 
   if (!fs.existsSync(root)) {
@@ -389,6 +491,8 @@ export function buildTranscriptEvent(p: Partial, state: TranscriptState): CallEv
     speed: u.speed ?? null,
     serviceTier: u.service_tier ?? null,
     isSubagent: p.isSubagent,
+    ...(p.turnId ? { turnId: p.turnId } : {}),
+    ...(p.contextEpoch ? { contextEpoch: p.contextEpoch } : {}),
     tools,
     cost: costOf(u, p.model, { at: p.ts, speed: u.speed }),
   };

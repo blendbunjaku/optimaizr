@@ -12,6 +12,7 @@ export * from "./pricing.js";
 
 // Analysis.
 export * from "./analyze/classify.js";
+export * from "./analyze/tasks.js";
 export * from "./analyze/summary.js";
 export * from "./analyze/rules.js";
 export * from "./analyze/drilldown.js";
@@ -21,6 +22,7 @@ export * from "./analyze/plan.js";
 export * from "./analyze/codex-plan.js";
 // Live analysis: the same rules over a rolling window, for streaming hosts.
 export * from "./analyze/live.js";
+export * from "./analyze/context-watch.js";
 
 // Findings -> recommendations (decision persistence is injected).
 export * from "./recommend/recommendations.js";

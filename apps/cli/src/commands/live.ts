@@ -7,7 +7,9 @@ import {
   callActivity,
   type CallEvent,
   codexPlanView,
+  COMPACT_AT,
   createBudgetTracker,
+  createContextWatch,
   createCodexLimitTracker,
   createSessionTracker,
   dim,
@@ -22,6 +24,7 @@ import {
   red,
   renderBudgetCrossing,
   renderCodexCrossing,
+  renderContextNotice,
   renderLiveRecommendation,
   renderSessionCrossing,
   resetTime,
@@ -32,13 +35,19 @@ import {
 } from "@optimaizr/core";
 import {
   activeModSessions,
+  applyCompaction,
   autoEligible,
+  type CompactAgent,
+  compactionApplied,
+  compactionStatus,
+  undoCompaction,
   claudeModRewriter,
   claudeProjectsRoot,
   claudeSettingsRewriter,
   codexSessionsRoot,
   createLiveSession,
   describeClaudeOverride,
+  latestClaudeWindows,
   ledgerPath,
   type ModelOverride,
   overridesPath,
@@ -50,9 +59,10 @@ import {
   tailTranscripts,
 } from "@optimaizr/local";
 import { Args, num } from "../args.js";
-import { budgetOf, planOf } from "../config.js";
+import { budgetOf, planNote, resolvePlan } from "../config.js";
 import { load, readLimitHits, summaryOptions } from "../data.js";
 import { createLivePrompt } from "../live-prompt.js";
+import { createStatusLine, emptyStatus, recordCall, renderRunSummary } from "../live-status.js";
 
 /**
  * `optimaizr live`: the same rules as `scan`, run continuously over what the
@@ -94,6 +104,10 @@ export async function cmdLive(args: Args): Promise<void> {
   // Assigned once the run loop exists; Ctrl-C inside a prompt routes here so
   // it behaves exactly like Ctrl-C anywhere else.
   let requestExit: () => void = () => {};
+
+  // The line at the bottom that says it is working, and what it has seen.
+  const status = emptyStatus();
+  const statusLine = createStatusLine(status, { enabled: !json });
 
   // --auto: a confident model or effort finding about Claude Code is applied
   // through the mod with no question. Everything else still asks.
@@ -144,6 +158,8 @@ export async function cmdLive(args: Args): Promise<void> {
         ],
         render: (rec) => `\n${renderLiveRecommendation(rec, { replayed: backfill > 0 })}`,
         onExit: () => requestExit(),
+        onAsk: () => statusLine.hold(),
+        onAnswered: () => statusLine.release(),
       });
 
   const session = createLiveSession({
@@ -182,6 +198,10 @@ export async function cmdLive(args: Args): Promise<void> {
         }
       : {}),
     onRecommendation: (rec) => {
+      status.found.set(
+        rec.finding.rule,
+        Math.max(status.found.get(rec.finding.rule) ?? 0, rec.observedUsd),
+      );
       if (autoApply(rec)) return;
       if (json) {
         console.log(
@@ -219,7 +239,8 @@ export async function cmdLive(args: Args): Promise<void> {
   // once. Seeded ids are remembered so --backfill doesn't count them twice.
   const watchesAgents = source === "all" || source === "agents";
   const limitUsd = budgetOf(args);
-  const plan = planOf(args);
+  const planChoice = resolvePlan(args);
+  const plan = planChoice.plan;
   const dayOpts = summaryOptions(args);
   const seed =
     limitUsd !== null || plan !== null || watchesAgents
@@ -245,7 +266,12 @@ export async function cmdLive(args: Args): Promise<void> {
   let planNow: ReturnType<typeof planView> | null = null;
   let sessionTracker: ReturnType<typeof createSessionTracker> | null = null;
   if (plan !== null) {
-    planNow = planView(seed, [], { plan, limitHits: readLimitHits() });
+    planNow = planView(seed, [], {
+      plan,
+      source: planChoice.source ?? undefined,
+      limitHits: readLimitHits(),
+      windows: latestClaudeWindows(),
+    });
     if (planNow.limit) {
       sessionTracker = createSessionTracker({
         limitUsd: planNow.limit.usd,
@@ -266,10 +292,66 @@ export async function cmdLive(args: Args): Promise<void> {
     codexTracker = createCodexLimitTracker({ seed: latest?.rateLimits ?? null });
   }
 
+  // A conversation that jumps, or grows past the compaction line, is said once;
+  // crossing the line also offers to compact earlier from now on, once per agent.
+  const watch = createContextWatch();
+  const offered = new Set<CompactAgent>();
+  const onContext = (event: CallEvent): void => {
+    for (const n of watch.push(event)) {
+      if (json) {
+        console.log(
+          JSON.stringify({
+            context: {
+              kind: n.kind,
+              tokens: n.contextTokens,
+              added: n.added,
+              sessionId: event.sessionId,
+            },
+          }),
+        );
+        continue;
+      }
+      const agent = event.source as CompactAgent;
+      const set = compactionStatus()[agent];
+      if (n.kind !== "long" || offered.has(agent) || set !== null) {
+        console.log(`\n${renderContextNotice(n)}`);
+        continue;
+      }
+      offered.add(agent);
+      const name = agent === "claude-code" ? "Claude Code" : "Codex";
+      const card = [
+        "",
+        renderContextNotice(n),
+        "",
+        `  ${bold(`Compact ${name} conversations at ${Math.round(COMPACT_AT / 1000)}K from now on?`)}`,
+        `  ${dim(
+          agent === "claude-code"
+            ? `Sets CLAUDE_CODE_AUTO_COMPACT_WINDOW in ~/.claude/settings.json, from the next session.`
+            : `Sets model_auto_compact_token_limit in ~/.codex/config.toml, from the next session.`,
+        )}`,
+        `  ${dim("A summary can drop early details. Undo any time: optimaizr undo context-compaction")}`,
+      ].join("\n");
+      if (!prompt || !interactive) {
+        console.log(card);
+        console.log(`  ${dim("Apply with:")} ${blue("optimaizr apply context-compaction")}`);
+        continue;
+      }
+      prompt.confirm(card, () => {
+        if (dryRun) return `  ${dim("Dry run: nothing was changed.")}`;
+        return applyCompaction([agent])
+          .map((r) => `  ${r.ok ? green("Applied") : red("Could not apply")} ${dim(r.detail)}`)
+          .join("\n");
+      });
+    }
+  };
+
   const onEvent = (event: CallEvent): void => {
     session.onEvent(event);
     if (counted.has(event.id)) return;
     counted.add(event.id);
+    recordCall(status, event);
+    onContext(event);
+    statusLine.update();
     for (const c of codexTracker?.add(event) ?? []) {
       if (json) console.log(JSON.stringify({ codex: c }));
       else console.log(`\n${renderCodexCrossing(c)}`);
@@ -310,12 +392,23 @@ export async function cmdLive(args: Args): Promise<void> {
             c.limitShare === null ? "" : ` (~${Math.round(c.limitShare * 100)}% of your limit)`
           }`
         : "no session running";
-      const limit = planNow.limit
-        ? dim(`warns at 80% and 95% of ~${usd(planNow.limit.usd)}`)
-        : dim("limit unknown: run `optimaizr limit` when you hit it");
+      const five = planNow.windows?.fiveHour;
+      const week = planNow.windows?.sevenDay;
+      const limit = five
+        ? dim(
+            `5h ${Math.round(five.percentUsed)}%${five.resetsAt ? `, resets ${resetTime(five.resetsAt)}` : ""}${week ? ` · weekly ${Math.round(week.percentUsed)}%` : ""} (Claude Code's meter)`,
+          )
+        : planNow.limit
+          ? dim(`warns at 80% and 95% of ~${usd(planNow.limit.usd)}`)
+          : dim("limit unknown: run `optimaizr limit` when you hit it");
+      const detected = planNow.source === "detected" ? dim(" (detected)") : "";
       console.log(
-        `  ${bold(PLANS[planNow.plan].label.toLowerCase())} ${dim(where)} ${dim("·")} ${limit}`,
+        `  ${bold(PLANS[planNow.plan].label.toLowerCase())}${detected} ${dim(where)} ${dim("·")} ${limit}`,
       );
+    } else if (watchesAgents) {
+      for (const line of planNote(planChoice, seed) ?? []) {
+        console.log(`  ${line}`);
+      }
     }
     if (codexNow) {
       const windows = codexNow.windows
@@ -359,7 +452,7 @@ export async function cmdLive(args: Args): Promise<void> {
       `  ${dim(
         useJev
           ? "jev: on - route metadata only, no prompts or completions leave this machine"
-          : "fully local - nothing leaves this machine",
+          : "fully local - your usage never leaves this machine",
       )}`,
     );
     console.log(`  ${dim("amounts are observed over the live window, not projected to a month")}`);
@@ -382,6 +475,7 @@ export async function cmdLive(args: Args): Promise<void> {
     tails.push(tailCodex(onEvent, { keepAlive: true, ...(backfill > 0 ? { backfill } : {}) }));
   }
 
+  const detach = statusLine.attach();
   await new Promise<void>((resolve) => {
     let stopping = false;
     const stop = () => {
@@ -395,7 +489,13 @@ export async function cmdLive(args: Args): Promise<void> {
       session.flush();
       // Let any prompt already on screen be answered before exiting.
       void (prompt?.drain() ?? Promise.resolve()).then(() => {
-        if (!json) console.log("");
+        statusLine.stop();
+        detach();
+        if (!json) {
+          console.log("");
+          console.log(renderRunSummary(status));
+          console.log("");
+        }
         resolve();
       });
     };
@@ -421,7 +521,24 @@ export function cmdUndo(args: Args): void {
   const active = readOverrides();
   console.log("");
 
+  if (rule === "context-compaction") {
+    const results = undoCompaction();
+    if (results.length === 0)
+      console.log(`  ${dim("optimAIzr has not changed when anything compacts.")}`);
+    for (const r of results) {
+      console.log(`  ${r.ok ? green("Reverted") : red("Could not revert")} ${r.detail}`);
+    }
+    console.log("");
+    return;
+  }
+
   if (!rule) {
+    for (const agent of compactionApplied()) {
+      const name = agent === "claude-code" ? "Claude Code" : "Codex";
+      console.log(
+        `  ${name} compacts at ${Math.round(COMPACT_AT / 1000)}K ${dim("· optimaizr undo context-compaction")}`,
+      );
+    }
     if (active.length === 0) {
       console.log(`  ${dim("No live overrides are active.")}`);
     } else {

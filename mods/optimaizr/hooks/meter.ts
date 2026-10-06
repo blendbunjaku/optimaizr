@@ -42,6 +42,24 @@ export const fiveHour = (limits: readonly RateLimit[] | undefined) =>
 export const sevenDay = (limits: readonly RateLimit[] | undefined) =>
   limits?.find((l) => l.kind === "seven_day");
 
+/**
+ * The meters as the session file carries them, so `optimaizr profile` and
+ * `optimaizr live` can show Claude Code's real windows. Undefined when neither
+ * meter is reported (an API-key session has none).
+ */
+export function windowsOf(limits: readonly RateLimit[] | undefined, at: number) {
+  const pick = (l: RateLimit | undefined) =>
+    l ? { percentUsed: l.percentUsed, ...(l.resetsAt ? { resetsAt: l.resetsAt } : {}) } : undefined;
+  const five = pick(fiveHour(limits));
+  const seven = pick(sevenDay(limits));
+  if (!five && !seven) return undefined;
+  return {
+    at: new Date(at).toISOString(),
+    ...(five ? { fiveHour: five } : {}),
+    ...(seven ? { sevenDay: seven } : {}),
+  };
+}
+
 /** `claude-opus-5-5[1m]` and `claude-opus-5-5-20260915` are `claude-opus-5-5`. */
 export function baseModel(id: string): string {
   return id

@@ -1,5 +1,56 @@
 # Changelog
 
+## 0.9.0
+
+**optimAIzr knows your plan, counts only what holds up, and shows its work.**
+
+- **Your plan, detected.** `optimaizr profile` reads which Claude plan you are
+  signed in to (Pro, Max 5x or 20x, Team) from Claude Code's own account
+  details, so `--plan` is no longer needed. Only the plan fields are read. When
+  the tier isn't reported it says so and asks, it never guesses, and `--plan`
+  or the config still win. `CLAUDE_CONFIG_DIR` and `CODEX_HOME` are respected.
+- **Stricter detection.** Calls are grouped into tasks (a prompt and every
+  call it set off) and the rules judge the task. Fix-and-rerun debugging, files
+  being written, a subagent's own reads, re-reads after an edit or a
+  compaction, and model switches that would not pay back their cache reload
+  are no longer counted. Figures are lower than in 0.8 and hold up when
+  checked: on the author's own usage the headline went from $121/mo to $13/mo
+  of clear waste. The 0.8.1 note below quotes $89.56/mo for model-fit on a
+  month of real use; most of that was steps inside bigger tasks, and 0.9 puts
+  the same month at $1.74/mo.
+- **Savings in three tiers, in exact dollars.** Clear waste (fix it, nothing
+  to lose) is the headline. Likely savings that change what the model does
+  show as `+$X`. Trade-offs worth testing show as `up to $X` and are never
+  added in. `waste`, `recommend` and `profile` now agree on the total.
+- **Every recommendation says what happened, why it matters and what to do**,
+  and how sure it is: high confidence, likely or possible.
+- **Two levers, sized from your own usage**, for Claude Code and Codex.
+  Compact earlier: every call re-reads the conversation, which is usually the
+  biggest part of the bill, and compacting at 200K is replayed on your own
+  sessions, net of what the compactions cost. A smaller default model, for
+  work without heavy reasoning. `optimaizr apply context-compaction` sets
+  `CLAUDE_CODE_AUTO_COMPACT_WINDOW` for Claude Code and
+  `model_auto_compact_token_limit` for Codex; `optimaizr undo
+context-compaction` puts back what was there.
+- **A new profile.** It leads with what your plan does at API prices, then the
+  savings found, the biggest win (on a plan, as more work per 5-hour window)
+  and where the money goes. The share card follows it.
+- **`live` shows its work.** A status line with calls, spend, the last call
+  and what it found; a notice when a conversation's context jumps or passes
+  200K, with what re-reading costs on that call; `Y` to compact earlier from
+  then on; cards that say what happened, the change and the money; and a
+  summary when you stop.
+- **Codex** gets tasks, blind-retry detection (a non-zero exit now counts as
+  a failure), both levers and its own compactions. A model now steps down to
+  its own smaller variant: GPT-5.4 to GPT-5.4 mini, not GPT-5 mini.
+- **The mod** writes Claude Code's real 5-hour and weekly meters into its
+  session file, so `profile` and `live` show them instead of a learned limit.
+- **Update awareness.** Once a day a background request asks the npm registry
+  for the latest version number (nothing about you or your usage is sent, and
+  no command waits for it), and a later run says when there is a newer one.
+  `optimaizr changelog` shows what changed. Off with
+  `OPTIMAIZR_NO_UPDATE_CHECK=1` or `"updateCheck": false` in the config.
+
 ## 0.8.1
 
 - **`optimaizr live --auto`.** Confident model and effort findings about

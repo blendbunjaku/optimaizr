@@ -1,6 +1,6 @@
 {
   "name": "optimaizr",
-  "version": "0.8.1",
+  "version": "0.9.0",
   "description": "optimAIzr inside Claude Code: what the turn has cost and your 5-hour window while Claude works, what each model switch saved, the model and effort switches you accept in `optimaizr live` applied from the next request, and a guard against retry loops. Fully local.",
   "author": {
     "name": "Blend Bunjaku",

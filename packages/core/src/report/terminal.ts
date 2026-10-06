@@ -1,8 +1,10 @@
 import { modelLabel, usd, tokens as fmtTokens } from "../pricing.js";
 import { verificationModeOf } from "../verify/state.js";
+import { likelyMonthly, recoverableAnnual, recoverableMonthly } from "../analyze/rules.js";
 import type {
   ConfidenceLevel,
   EvidenceClass,
+  FindingTier,
   OptimizationFinding,
   Recommendation,
   UsageEvent,
@@ -55,12 +57,6 @@ function bar(value: number, max: number, width = 18): string {
   return blue("#".repeat(Math.min(width, filled))) + dim(".".repeat(Math.max(0, width - filled)));
 }
 
-const SEVERITY: Record<OptimizationFinding["severity"], string> = {
-  high: red("HIGH  "),
-  medium: yellow("MEDIUM"),
-  low: dim("LOW   "),
-};
-
 const IMPACT: Record<OptimizationFinding["impact"], string> = {
   none: green("none"),
   low: green("low"),
@@ -91,10 +87,67 @@ export function wrap(text: string, width: number): string[] {
   return lines;
 }
 
-/** Confidence as a word. A bar or percentage would imply calibration it doesn't have. */
+/** How sure a figure is, in words. A bar or percentage would imply calibration it doesn't have. */
+export const CONFIDENCE_WORD: Record<ConfidenceLevel, string> = {
+  high: "high confidence",
+  medium: "likely",
+  low: "possible",
+};
+
 function confidenceTag(level: ConfidenceLevel): string {
   const colour = level === "high" ? green : level === "medium" ? yellow : red;
-  return colour(level);
+  return colour(CONFIDENCE_WORD[level]);
+}
+
+/** What kind of move a finding asks for. */
+const TIER_TAG: Record<FindingTier, string> = {
+  fix: green("FIX "),
+  try: yellow("TRY "),
+  test: blue("TEST"),
+};
+
+/** A figure for its tier: a lever is only ever "up to". */
+function monthlyOf(tier: FindingTier, monthlyUsd: number): string {
+  return tier === "test" ? `up to ${usd(monthlyUsd)}/mo` : `${usd(monthlyUsd)}/mo`;
+}
+
+/** What happened, why it matters, what to do: the three lines every recommendation answers. */
+function story(
+  parts: { happened: string; why: string; fix: string },
+  indent: string,
+  width = 54,
+): string[] {
+  const out: string[] = [];
+  const rows: Array<[string, string]> = [
+    ["What happened", parts.happened],
+    ["Why it matters", parts.why],
+    ["What to do", parts.fix],
+  ];
+  for (const [label, text] of rows) {
+    const lines = wrap(text, width);
+    out.push(`${indent}${dim(pad(label, 16))}${lines[0] ?? ""}`);
+    for (const line of lines.slice(1)) out.push(`${indent}${" ".repeat(16)}${line}`);
+  }
+  return out;
+}
+
+/** The three tiers, never added together: clear waste, likely savings, and each lever on its own. */
+function tierLines(totals: { fix: number; try: number }, levers: OptimizationFinding[]): string[] {
+  const out: string[] = [];
+  out.push(
+    `  ${dim(pad("Clear waste", 16))}${bold(green(padLeft(`${usd(totals.fix)}/mo`, 17)))}  ${dim("each call counted once: fix it, nothing to lose")}`,
+  );
+  if (totals.try > 0.005) {
+    out.push(
+      `  ${dim(pad("Likely savings", 16))}${yellow(padLeft(`+${usd(totals.try)}/mo`, 17))}  ${dim("if you try the changes marked TRY")}`,
+    );
+  }
+  levers.forEach((f, i) => {
+    out.push(
+      `  ${dim(pad(i === 0 ? "Worth testing" : "", 16))}${blue(padLeft(monthlyOf("test", f.savings.monthlyUsd), 17))}  ${dim(RULE_LABEL[f.rule] ?? f.rule)}`,
+    );
+  });
+  return out;
 }
 
 export function renderSummary(s: Summary, opts: { title?: string } = {}): string {
@@ -253,50 +306,58 @@ function renderFinding(f: OptimizationFinding, opts: { verbose: boolean }): stri
   // be replayed has nothing for `verify` to run.
   const mode = verificationModeOf(f);
   const gate =
-    mode === "not-required"
-      ? green("safe to apply")
-      : mode === "replay"
-        ? magenta("needs verification")
-        : magenta("needs your sign-off");
+    f.tier === "test"
+      ? blue("test it, then compare")
+      : mode === "not-required"
+        ? green("safe to apply")
+        : mode === "replay"
+          ? magenta("needs verification")
+          : f.tier === "fix"
+            ? green("a change in habit")
+            : magenta("needs your sign-off");
 
-  out.push(`  ${SEVERITY[f.severity]}  ${bold(f.title)}`);
   out.push(
-    `          ${bold(green(`${usd(s.monthlyUsd)}/mo`))} ${dim("|")} ${green(usd(s.annualUsd))}${dim("/yr")} ${dim("|")} ${gate} ${dim("|")} ${dim(f.category)}`,
-  );
-  out.push("");
-  out.push(
-    `          ${dim("now")} ${padLeft(usd(s.currentUsd), 9)}  ${dim("->")}  ${dim("after")} ${padLeft(usd(s.optimizedUsd), 9)}  ${dim(`(${f.affected.calls} calls, ${(f.affected.share * 100).toFixed(0)}% of spend)`)}`,
+    `  ${TIER_TAG[f.tier]}  ${bold(RULE_LABEL[f.rule] ?? f.title)} ${dim("·")} ${confidenceTag(s.confidence)}`,
   );
   out.push(
-    `          ${dim("confidence")} ${confidenceTag(s.confidence)}   ${dim("impact")} ${IMPACT[f.impact]}   ${dim("basis")} ${EVIDENCE[s.evidence.kind]}`,
+    `        ${bold(green(monthlyOf(f.tier, s.monthlyUsd)))} ${dim("|")} ${green(usd(s.annualUsd))}${dim("/yr")} ${dim("|")} ${gate} ${dim("|")} ${dim(f.category)}`,
   );
   out.push("");
-
-  for (const line of wrap(f.detail, 72)) out.push(`          ${dim(line)}`);
+  out.push(...story({ happened: f.title, why: f.why, fix: f.fix }, "        "));
   out.push("");
-  for (const e of f.observations.slice(0, 4)) out.push(`          ${dim("-")} ${e}`);
-  out.push("");
-  for (const line of wrap(f.fix, 72)) out.push(`          ${green(">")} ${line}`);
+  out.push(
+    `        ${dim("now")} ${padLeft(usd(s.currentUsd), 9)}  ${dim("->")}  ${dim("after")} ${padLeft(usd(s.optimizedUsd), 9)}  ${dim(`(${f.affected.calls} calls, ${(f.affected.share * 100).toFixed(0)}% of spend)`)}  ${dim("basis")} ${EVIDENCE[s.evidence.kind]}`,
+  );
+  for (const e of f.observations.slice(0, 4)) out.push(`        ${dim("-")} ${dim(e)}`);
 
   if (opts.verbose) {
     out.push("");
-    out.push(`          ${dim(`Evidence: ${s.evidence.kind} - ${s.evidence.basis}`)}`);
+    for (const line of wrap(f.detail, 70)) out.push(`        ${dim(line)}`);
     out.push("");
-    out.push(`          ${dim("How this was calculated")}`);
-    for (const line of wrap(s.calculation, 70)) out.push(`            ${dim(line)}`);
+    out.push(`        ${dim(`Evidence: ${s.evidence.kind} - ${s.evidence.basis}`)}`);
+    out.push(`        ${dim(`Impact on output: ${f.impact}`)}`);
     out.push("");
-    out.push(`          ${dim("Assumptions")}`);
+    out.push(`        ${dim("How this was calculated")}`);
+    for (const line of wrap(s.calculation, 70)) out.push(`          ${dim(line)}`);
+    out.push("");
+    out.push(`        ${dim("Assumptions")}`);
     for (const a of s.assumptions) {
       const lines = wrap(a, 68);
-      out.push(`            ${dim("*")} ${dim(lines[0] ?? "")}`);
-      for (const line of lines.slice(1)) out.push(`              ${dim(line)}`);
+      out.push(`          ${dim("*")} ${dim(lines[0] ?? "")}`);
+      for (const line of lines.slice(1)) out.push(`            ${dim(line)}`);
     }
     out.push("");
-    out.push(`          ${dim(`Confidence basis: ${s.confidenceBasis}`)}`);
+    out.push(`        ${dim(`Confidence basis: ${s.confidenceBasis}`)}`);
   }
 
   return out;
 }
+
+const TIER_HEADING: Record<FindingTier, string> = {
+  fix: "Fix: clear waste, nothing to lose",
+  try: "Try: likely savings that change what the model does",
+  test: 'Test: trade-offs sized from your usage, shown as "up to"',
+};
 
 export function renderFindings(
   findings: OptimizationFinding[],
@@ -312,31 +373,39 @@ export function renderFindings(
     return out.join("\n");
   }
 
-  const recoverable = findings.filter((f) => !f.advisory);
+  const actionable = findings.filter((f) => !f.advisory);
   const advisories = findings.filter((f) => f.advisory);
-  const totalMonthly = recoverable.reduce((s, f) => s + f.savings.monthlyUsd, 0);
-  const totalAnnual = recoverable.reduce((s, f) => s + f.savings.annualUsd, 0);
-  const share = summary.perMonth > 0 ? (totalMonthly / summary.perMonth) * 100 : 0;
+  const fix = recoverableMonthly(findings, "fix");
+  const share = summary.perMonth > 0 ? (fix / summary.perMonth) * 100 : 0;
 
   out.push(rule());
   out.push("");
   out.push(
-    `  ${bold(red(usd(totalMonthly)))}${bold("/month")} ${dim("in estimated savings")} ${dim(`- ${share.toFixed(0)}% of your projected spend`)}`,
-  );
-  out.push(`  ${dim(`${usd(totalAnnual)}/year if the pattern holds`)}`);
-  out.push("");
-  out.push(
-    `  ${dim("Estimates, not guarantees. Each figure is labelled")} ${EVIDENCE.measured}${dim(",")}`,
-  );
-  out.push(
-    `  ${EVIDENCE.inferred} ${dim("or")} ${EVIDENCE.estimated}${dim(". Run with --why for every calculation.")}`,
+    ...tierLines(
+      { fix, try: likelyMonthly(findings) },
+      actionable.filter((f) => f.tier === "test"),
+    ),
   );
   out.push("");
+  out.push(
+    `  ${dim(`Clear waste is ${share.toFixed(0)}% of your projected spend (${usd(recoverableAnnual(findings))}/year). Estimates, each labelled`)}`,
+  );
+  out.push(
+    `  ${EVIDENCE.measured}${dim(",")} ${EVIDENCE.inferred} ${dim("or")} ${EVIDENCE.estimated}${dim(". Run with --why for every calculation.")}`,
+  );
 
-  recoverable.forEach((f, i) => {
-    out.push(...renderFinding(f, { verbose }));
-    if (i < recoverable.length - 1) out.push("");
-  });
+  for (const tier of ["fix", "try", "test"] as const) {
+    const group = actionable.filter((f) => f.tier === tier);
+    if (group.length === 0) continue;
+    out.push("");
+    out.push(rule());
+    out.push("");
+    out.push(`  ${bold(TIER_HEADING[tier])}`);
+    for (const f of group) {
+      out.push("");
+      out.push(...renderFinding(f, { verbose }));
+    }
+  }
 
   if (advisories.length > 0) {
     out.push("");
@@ -376,7 +445,12 @@ const STATUS_TAG: Record<Recommendation["status"], string> = {
   applied: green("applied"),
 };
 
-export function renderRecommendations(recs: Recommendation[], monthlySpend: number): string {
+export function renderRecommendations(
+  recs: Recommendation[],
+  monthlySpend: number,
+  /** De-overlapped totals per tier; without them each tier is summed as listed. */
+  totals?: { fix: number; try: number },
+): string {
   const out: string[] = [];
   out.push("");
   out.push(`  ${bold("optimAIzr")} ${dim("| recommendations")}`);
@@ -388,28 +462,32 @@ export function renderRecommendations(recs: Recommendation[], monthlySpend: numb
     return out.join("\n");
   }
 
-  const total = recs.reduce((s, r) => s + r.savings.monthlyUsd, 0);
-  const share = monthlySpend > 0 ? (total / monthlySpend) * 100 : 0;
+  const sum = (tier: FindingTier) =>
+    recs.filter((r) => r.tier === tier).reduce((s, r) => s + r.savings.monthlyUsd, 0);
+  const fix = totals?.fix ?? sum("fix");
+  const likely = totals?.try ?? sum("try");
+  const levers = recs.filter((r) => r.tier === "test");
+  const share = monthlySpend > 0 ? (fix / monthlySpend) * 100 : 0;
   out.push(
-    `  ${bold(green(usd(total)))}${bold("/month")} ${dim(`across ${recs.length} recommendations - ${share.toFixed(0)}% of spend`)}`,
+    `  ${bold(green(usd(fix)))}${bold("/month")} ${dim(`of clear waste - ${share.toFixed(0)}% of spend`)}${likely > 0.005 ? ` ${dim("·")} ${yellow(`+${usd(likely)}/mo`)} ${dim("likely if you try")}` : ""}`,
   );
+  for (const r of levers) {
+    out.push(
+      `  ${blue(monthlyOf("test", r.savings.monthlyUsd))} ${dim(`worth testing: ${RULE_LABEL[r.rule] ?? r.rule}`)}`,
+    );
+  }
   out.push("");
 
   recs.forEach((r, i) => {
-    out.push(`  ${bold(`${i + 1}. ${r.action}`)}  ${STATUS_TAG[r.status]}`);
-    out.push("");
     out.push(
-      `     ${dim("Potential savings")}  ${bold(green(`${usd(r.savings.monthlyUsd)}/month`))} ${dim(`(${usd(r.savings.annualUsd)}/year)`)}`,
-    );
-    out.push(`     ${dim("Why")}                ${r.rationale}`);
-    out.push(`     ${dim("Expected impact")}    ${IMPACT[r.impact]}`);
-    out.push(
-      `     ${dim("Confidence")}         ${confidenceTag(r.savings.confidence)} ${dim(`(${r.savings.evidence.kind})`)}`,
-    );
-    out.push(
-      `     ${dim("Affects")}            ${r.affected.calls.toLocaleString()} requests on ${r.affected.models.map(modelLabel).join(", ")}`,
+      `  ${bold(`${i + 1}. ${r.action}`)}  ${TIER_TAG[r.tier]} ${dim("·")} ${confidenceTag(r.savings.confidence)}  ${STATUS_TAG[r.status]}`,
     );
     out.push("");
+    out.push(...story(r, "     "));
+    out.push("");
+    out.push(
+      `     ${dim("Saves")} ${bold(green(monthlyOf(r.tier, r.savings.monthlyUsd)))} ${dim(`(${usd(r.savings.annualUsd)}/year) · ${r.affected.calls.toLocaleString()} requests on ${r.affected.models.map(modelLabel).join(", ")} · impact ${r.impact}`)}`,
+    );
     const cta: string[] = [];
     if (r.actions.includes("view-affected")) cta.push(blue(`optimaizr show ${r.id}`));
     if (r.actions.includes("simulate")) cta.push(blue(`optimaizr simulate ${r.id}`));
@@ -515,17 +593,29 @@ const RULE_LABEL: Record<string, string> = {
   "oversized-tool-output": "Oversized tool output",
   "error-loops": "Error loops",
   "reasoning-effort": "Excess reasoning",
+  "context-compaction": "Compact earlier",
+  "model-default": "Smaller default model",
 };
 
 export function ruleLabel(rule: string): string {
   return RULE_LABEL[rule] ?? rule;
 }
 
+/** A share of spend as a plain bar: no warning colours, it's a breakdown. */
+function shareBar(share: number, width = 20): string {
+  const filled = Math.max(0, Math.min(width, Math.round(share * width)));
+  return blue("█".repeat(filled)) + dim("░".repeat(width - filled));
+}
+
+function pct(share: number): string {
+  return `${Math.round(share * 100)}%`;
+}
+
+/** Below this a month, an opportunity is folded into "+N smaller" on the profile. */
+const WORTH_LISTING_USD = 0.25;
+
 export function renderProfile(p: Profile): string {
   const out: string[] = [];
-  const row = (k: string, v: string, note = "") =>
-    out.push(`  ${dim(pad(k, 20))} ${padLeft(v, 12)}${note ? `  ${dim(note)}` : ""}`);
-
   out.push("");
   out.push(`  ${bold("optimAIzr")} ${dim("|")} profile`);
   out.push(
@@ -535,88 +625,140 @@ export function renderProfile(p: Profile): string {
   out.push(rule());
   out.push("");
 
-  out.push(`  ${bold("AI usage")}`);
-  out.push("");
-  row(
-    "Spend",
-    bold(usd(p.spendUsd)),
-    `${usd(p.perMonthUsd)}/month ${p.pace === "last-30-days" ? "at the last 30 days' rate" : "at this rate"}`,
-  );
-  row("Calls", bold(p.calls.toLocaleString()));
-  row(
-    "Tokens",
-    bold(fmtTokens(p.tokens.total)),
-    `${fmtTokens(p.tokens.input)} in / ${fmtTokens(p.tokens.output)} out`,
-  );
-  out.push(`  ${dim("List rates applied to recorded tokens. Not a bill.")}`);
-  out.push("");
-
-  if (p.plan) out.push(...renderPlan(p.plan), "");
-  if (p.codex) out.push(...renderCodexPlan(p.codex), "");
-  if (p.budget) out.push(...renderBudget(p.budget), "");
-
-  out.push(`  ${bold("Optimization")}`);
-  out.push("");
-  row(
-    "Flagged calls",
-    bold(p.flaggedCalls.toLocaleString()),
-    `${(p.flaggedShare * 100).toFixed(1)}% of calls`,
-  );
-  row("Potential waste", bold(red(usd(p.wasteWindowUsd))), "in this window");
-  row(
-    "Potential savings",
-    bold(green(`${usd(p.savingsMonthlyUsd)}/mo`)),
-    `${usd(p.savingsAnnualUsd)}/year`,
-  );
-  out.push("");
-
-  const top = p.bottleneck;
-  if (!top) {
-    out.push(rule());
-    out.push("");
-    out.push(`  ${green("No recoverable waste found above the reporting threshold.")}`);
-    out.push("");
-    out.push(`  ${bold("Next step")}`);
-    out.push(`    ${blue(p.nextCommand)}   ${dim("see where the money goes instead")}`);
-    out.push("");
-    return out.join("\n");
-  }
-
-  out.push(rule());
-  out.push("");
-  out.push(`  ${bold("Biggest opportunity")}`);
-  out.push("");
-  out.push(`  ${yellow("!")} ${bold(ruleLabel(top.rule))}`);
-  out.push("");
-  for (const line of wrap(top.rationale, 62)) out.push(`    ${line}`);
-  for (const line of wrap(`${top.affected.calls.toLocaleString()} calls affected.`, 62))
-    out.push(`    ${dim(line)}`);
-  out.push("");
-  out.push(
-    `    ${dim("Estimated savings")} ${bold(green(`${usd(top.savings.monthlyUsd)}/month`))} ${dim("|")} ${confidenceTag(top.savings.confidence)} ${dim("confidence,")} ${EVIDENCE[top.savings.evidence.kind]}`,
-  );
-  out.push("");
-
-  out.push(`  ${bold("Top opportunities")}`);
-  out.push("");
-  p.opportunities.forEach((r, i) => {
+  // The headline: what the plan is worth, else what the usage costs.
+  const multiple = (m: number) => `${m >= 10 ? Math.round(m) : m.toFixed(1)}x`;
+  const codexPriced = p.codex?.priceUsd && p.codex.multiple !== null ? p.codex : null;
+  if (p.plan) {
     out.push(
-      `  ${dim(`${i + 1}.`)} ${pad(ruleLabel(r.rule), 24)} ${padLeft(green(`${usd(r.savings.monthlyUsd)}/mo`), 12)}  ${dim(r.rule)}`,
+      `  Your ${bold(p.plan.label)} did ${bold(green(`${usd(p.plan.valueMonthlyUsd)}/mo`))} of work at API prices: ${bold(green(multiple(p.plan.multiple)))} what you pay`,
+    );
+  } else if (codexPriced) {
+    out.push(
+      `  Your ${bold(codexPriced.label)} did ${bold(green(`${usd(codexPriced.valueMonthlyUsd)}/mo`))} of work at API prices: ${bold(green(multiple(codexPriced.multiple!)))} what you pay`,
+    );
+  } else {
+    out.push(
+      `  You use ${bold(`${usd(p.perMonthUsd)}/mo`)} of AI at list prices ${dim(p.pace === "last-30-days" ? "(the last 30 days' rate)" : "(at this rate)")}`,
+    );
+  }
+  out.push(
+    `  ${dim(`${usd(p.spendUsd)} in this window · ${p.calls.toLocaleString()} calls · ${fmtTokens(p.tokens.total)} tokens · list rates, not a bill`)}`,
+  );
+  // The money first: each tier on its own line, exact, and never added up.
+  const fact = (rule: string) => p.habits.find((h) => h.rule === rule)?.note;
+  const tried = p.opportunities.filter((r) => r.tier === "try");
+  const money = (label: string, value: string, note: string) =>
+    out.push(`    ${dim(pad(label, 20))}${padLeft(value, 13)}  ${dim(note)}`);
+  out.push("");
+  out.push(`  ${bold("Savings found")}`);
+  money(
+    "Clear waste",
+    bold(green(`${usd(p.savingsMonthlyUsd)}/mo`)),
+    p.savingsMonthlyUsd > 0.005
+      ? `${usd(p.savingsAnnualUsd)}/yr · fix it, nothing to lose`
+      : "none worth fixing",
+  );
+  if (p.likelyMonthlyUsd > 0.005) {
+    money(
+      "Likely, if you try",
+      yellow(`+${usd(p.likelyMonthlyUsd)}/mo`),
+      tried.map((r) => ruleLabel(r.rule).toLowerCase()).join(", "),
+    );
+  }
+  p.levers.forEach((r, i) => {
+    const why = fact(r.rule);
+    money(
+      i === 0 ? "Up to, if you test" : "",
+      blue(`${usd(r.savings.monthlyUsd)}/mo`),
+      `${ruleLabel(r.rule).toLowerCase()}${why ? ` · ${why}` : ""}`,
     );
   });
-  if (p.overlapping) {
+  out.push("");
+
+  // The biggest single win, whatever its tier, labelled for what it is.
+  const windowed = Boolean(p.plan || p.codex);
+  const win = p.biggestWin;
+  if (win) {
+    const r = win.recommendation;
+    out.push(
+      `  ${bold("Biggest win")}  ${bold(ruleLabel(r.rule))}  ${TIER_TAG[r.tier]} ${dim("·")} ${confidenceTag(r.savings.confidence)}`,
+    );
+    const work = windowed ? `, about ${win.moreWork.toFixed(1)}x the work per 5-hour window` : "";
+    out.push(
+      r.tier === "test"
+        ? `    ${blue(`Up to ${pct(win.share)} less usage`)} ${dim(`(~${usd(r.savings.monthlyUsd)}/mo)${work}`)}`
+        : `    ${green(`${usd(r.savings.monthlyUsd)}/mo`)} ${dim(`, ${pct(win.share)} of your usage${work}`)}`,
+    );
     out.push("");
-    out.push(`  ${dim("These overlap on some calls; the savings total counts each call once.")}`);
+    out.push(...story(r, "    "));
+  } else {
+    out.push(`  ${green("No clear waste and no levers worth testing were found.")}`);
   }
   out.push("");
+  out.push(rule());
+  out.push("");
+
+  // Where the money goes: most of it is usually the conversation, re-read.
+  out.push(`  ${bold("Where it goes")}`);
+  out.push("");
+  const parts: Array<[string, number]> = [
+    ["Re-reading the conversation", p.breakdown.reread],
+    ["Answers, code and thinking", p.breakdown.output],
+    ["Loading context into cache", p.breakdown.cacheWrite],
+    ["New input", p.breakdown.input],
+    ["Web search and tools", p.breakdown.tools],
+  ];
+  for (const [label, share] of parts.filter(([, v]) => v >= 0.005).sort((a, b) => b[1] - a[1])) {
+    out.push(`    ${pad(label, 30)}${padLeft(pct(share), 4)}  ${shareBar(share)}`);
+  }
+  out.push("");
+
+  // Everything worth doing, clear waste first, levers last and never added.
+  const all = p.opportunities;
+  // Cents a month are noise on this screen; `recommend` lists everything.
+  const ways = all.filter((r) => r.savings.monthlyUsd >= WORTH_LISTING_USD);
+  const smaller = all.length - ways.length;
+  if (all.length > 0) {
+    out.push(`  ${bold("Clear waste and likely savings, item by item")}`);
+    out.push("");
+    for (const r of ways) {
+      out.push(
+        `    ${TIER_TAG[r.tier]}  ${pad(ruleLabel(r.rule), 24)}${padLeft(monthlyOf(r.tier, r.savings.monthlyUsd), 17)}  ${confidenceTag(r.savings.confidence)}`,
+      );
+    }
+    if (smaller > 0) {
+      out.push(
+        `    ${dim(`+${smaller} smaller, under $${WORTH_LISTING_USD.toFixed(2)}/mo each: optimaizr recommend`)}`,
+      );
+    }
+    out.push("");
+    out.push(
+      `  ${dim(`Clear waste ${usd(p.savingsMonthlyUsd)}/mo${p.likelyMonthlyUsd > 0.005 ? ` · likely +${usd(p.likelyMonthlyUsd)}/mo` : ""}. Each call is counted once; the "up to" figures above are never added in.`)}`,
+    );
+    out.push("");
+  }
+
+  if (p.plan || p.codex || p.budget) {
+    out.push(rule());
+    out.push("");
+    if (p.plan) out.push(...renderPlan(p.plan), "");
+    if (p.codex) out.push(...renderCodexPlan(p.codex), "");
+    if (p.budget) out.push(...renderBudget(p.budget), "");
+  }
 
   out.push(rule());
   out.push("");
   out.push(`  ${bold("Next step")}`);
+  const target = win?.recommendation ?? p.bottleneck;
+  if (!target) {
+    out.push(`    ${blue(p.nextCommand)}   ${dim("see where the money goes instead")}`);
+    out.push("");
+    return out.join("\n");
+  }
   out.push(`    ${blue(p.nextCommand)}`);
   const also: Array<[string, string]> = [
-    [`optimaizr show ${top.id}`, "the requests it touches"],
-    ["optimaizr recommend", "every opportunity, ranked"],
+    [`optimaizr show ${target.id}`, "the requests it touches"],
+    ["optimaizr recommend", "every opportunity, with what to do"],
   ];
   const width = Math.max(...also.map(([cmd]) => cmd.length)) + 3;
   for (const [cmd, what] of also) out.push(`    ${dim(pad(cmd, width) + what)}`);
@@ -739,7 +881,15 @@ export function renderPlan(v: PlanView): string[] {
   const row = (k: string, val: string, note = "") =>
     out.push(`  ${dim(pad(k, 20))} ${padLeft(val, 12)}${note ? `  ${note}` : ""}`);
 
-  out.push(`  ${bold("Plan")}`);
+  const from =
+    v.source === "detected"
+      ? "detected from your Claude Code sign-in"
+      : v.source === "flag"
+        ? "from --plan"
+        : v.source === "config"
+          ? "from your config"
+          : "";
+  out.push(`  ${bold("Plan")}${from ? ` ${dim(`· ${from}`)}` : ""}`);
   out.push("");
   row(
     v.label,
@@ -775,13 +925,26 @@ export function renderPlan(v: PlanView): string[] {
         : dim("nothing worth cutting"),
     );
   }
+  const meter = (name: string, r: { percentUsed: number; resetsAt?: string } | undefined) => {
+    if (!r) return;
+    const pct = Math.round(r.percentUsed);
+    const color = pct >= 95 ? red : pct >= 80 ? yellow : green;
+    row(
+      name,
+      bold(color(`${pct}%`)),
+      dim(`Claude Code's meter${r.resetsAt ? ` · resets ${resetTime(r.resetsAt)}` : ""}`),
+    );
+  };
+  meter("5-hour window", v.windows?.fiveHour);
+  meter("Weekly window", v.windows?.sevenDay);
   if (v.limit) {
     row(
       "Your session limit",
       bold(`~${usd(v.limit.usd)}`),
       dim(`learned from ${v.limit.hits} recorded hit${v.limit.hits === 1 ? "" : "s"}`),
     );
-  } else {
+  } else if (!v.windows?.fiveHour) {
+    // Claude Code's own meter makes a learned limit unnecessary.
     row("Your session limit", dim("unknown"), dim("run `optimaizr limit` when you hit it"));
   }
   if (v.current) {
@@ -793,10 +956,15 @@ export function renderPlan(v: PlanView): string[] {
       dim(`since ${localTime(v.current.start)}, resets ${localTime(v.current.end)}${share}`),
     );
   }
-  out.push(
-    `  ${dim("Sessions are rebuilt from timestamps; the limit is not published, only learned.")}`,
-    `  ${dim("The weekly limit on top of it is not tracked.")}`,
-  );
+  if (v.windows) {
+    out.push(`  ${dim("Window figures are Claude Code's own, read by the optimAIzr mod.")}`);
+    out.push(`  ${dim("Sessions and their spend are rebuilt from timestamps.")}`);
+  } else {
+    out.push(
+      `  ${dim("Sessions are rebuilt from timestamps; the limit is not published, only learned.")}`,
+      `  ${dim("The optimAIzr mod adds Claude Code's real 5-hour and weekly meters: optimaizr mod")}`,
+    );
+  }
   return out;
 }
 
@@ -883,12 +1051,6 @@ function span(ms: number): string {
   return `${Math.round(m / 60)}h`;
 }
 
-const SEVERITY_TAG: Record<OptimizationFinding["severity"], string> = {
-  high: red("HIGH"),
-  medium: yellow("MED "),
-  low: dim("LOW "),
-};
-
 function clip(s: string, n: number): string {
   return s.length > n ? `${s.slice(0, n - 3)}...` : s;
 }
@@ -939,6 +1101,38 @@ export function callActivity(e: UsageEvent, width = 48): string {
  * One streamed recommendation. Quotes `observedUsd`, never `monthlyUsd`: a
  * window of minutes can't be projected to a month.
  */
+/** A context notice from `live`: a big jump in one call, or a conversation past the compaction line. */
+export function renderContextNotice(n: {
+  kind: "jump" | "long";
+  event: UsageEvent;
+  contextTokens: number;
+  added?: number;
+  rereadUsd: number;
+}): string {
+  const out: string[] = [];
+  const e = n.event;
+  const at = new Date(e.ts).toLocaleTimeString();
+  const where = `${callSession(e)} ${dim(projectName(e.project))}`;
+  if (n.kind === "jump") {
+    out.push(
+      `  ${yellow("⚠")}  ${dim(at)}  ${bold("Context jump")} ${dim(`+${fmtTokens(n.added ?? 0)} tokens in one call, now ${fmtTokens(n.contextTokens)}`)}`,
+    );
+    out.push(`        ${where} ${callActivity(e, 40)}`);
+    out.push(
+      `        ${dim("Every later call in this conversation re-reads it, until it is compacted.")}`,
+    );
+  } else {
+    out.push(
+      `  ${yellow("⚠")}  ${dim(at)}  ${bold("Long conversation")} ${dim(`now ${fmtTokens(n.contextTokens)} of context`)}`,
+    );
+    out.push(`        ${where}`);
+    out.push(
+      `        ${dim("Every call re-reads all of it:")} ${bold(usd(n.rereadUsd))} ${dim(`on this call alone, before any work (${modelLabel(e.model)}).`)}`,
+    );
+  }
+  return out.join("\n");
+}
+
 export function renderLiveRecommendation(
   rec: {
     recommendation: Recommendation;
@@ -962,21 +1156,24 @@ export function renderLiveRecommendation(
     ? dim("HELD")
     : rec.repeatOf !== undefined
       ? yellow("GREW")
-      : SEVERITY_TAG[f.severity];
+      : TIER_TAG[f.tier];
 
-  out.push(`  ${tag}  ${dim(at)}  ${bold(rec.recommendation.action)}`);
+  out.push(
+    `  ${tag}  ${dim(at)}  ${bold(rec.recommendation.action)} ${dim("·")} ${confidenceTag(f.savings.confidence)}`,
+  );
 
   const where = rec.trigger.route ? ` ${dim("via")} ${blue(rec.trigger.route)}` : "";
   // Say which kind of window this is: `--backfill` replays history, so its span
   // is real but it isn't live traffic.
   out.push(
     opts.replayed
-      ? `        ${bold(red(usd(rec.observedUsd)))} ${dim("observed over")} ` +
+      ? `        ${bold(green(usd(rec.observedUsd)))} ${dim("could have been saved over")} ` +
           `${rec.windowEvents} ${dim("calls")} ${dim(`- replayed from history, not live traffic`)}${where}`
-      : `        ${bold(red(usd(rec.observedUsd)))} ${dim("observed over")} ` +
+      : `        ${bold(green(usd(rec.observedUsd)))} ${dim("could have been saved over")} ` +
           `${rec.windowEvents} ${dim("calls /")} ${span(rec.windowMs)} ${dim("of traffic")}${where}`,
   );
 
+  for (const line of wrap(f.title, 66)) out.push(`        ${line}`);
   for (const line of wrap(rec.recommendation.rationale, 66)) out.push(`        ${dim(line)}`);
 
   // Name the calls behind the number, so it can be traced to an agent.

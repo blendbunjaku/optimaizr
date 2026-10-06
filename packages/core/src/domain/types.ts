@@ -137,6 +137,16 @@ export interface UsageEvent {
   route?: string;
   /** Coarse workload class for the drill-down. Derived, not reported. */
   category?: WorkloadCategory;
+  /**
+   * The user prompt this call answered, for agent transcripts. Calls sharing it
+   * are one task (see `analyze/tasks.ts`). Absent for SDK and imported calls,
+   * which are independent requests.
+   */
+  turnId?: string;
+  /** Compactions before this call in its session: a re-read after one is not a repeat. */
+  contextEpoch?: number;
+  /** What the whole task this call belongs to was doing. Derived, not reported. */
+  taskKind?: TaskKind;
 
   inputTokens: number;
   outputTokens: number;
@@ -177,6 +187,19 @@ export interface UsageEvent {
 /** Older name for `UsageEvent`. */
 export type CallEvent = UsageEvent;
 
+/**
+ * What a whole task (one prompt and every call it set off) was doing, from its
+ * shape: calls, files edited, failures, output, reasoning. Never from prompt text.
+ * - `quick-edit`: a short task that edited one or two files.
+ * - `lookup`: a short task that only read, searched or ran read-only commands.
+ * - `conversation`: an answer with no tools at all.
+ * - `multi-step`: many calls, several files, or substantial output.
+ * - `debugging`: repeated failures along the way.
+ * - `reasoning`: real thinking tokens were spent.
+ */
+export type TaskKind =
+  "quick-edit" | "lookup" | "conversation" | "multi-step" | "debugging" | "reasoning";
+
 /** What a call was doing, inferred from token counts and tool use (not intent). */
 export type WorkloadCategory =
   | "reasoning" // spent real thinking tokens
@@ -196,6 +219,8 @@ export interface ToolCall {
   resultTokens?: number;
   imageCount?: number;
   isError?: boolean;
+  /** The file a file tool read or changed, so an edit can retire earlier reads of it. */
+  target?: string;
 }
 
 /** The money a call cost, broken out by what drove it. */
@@ -217,6 +242,18 @@ export type Category =
 
 /** How much a fix could change model behaviour. */
 export type Impact = "none" | "low" | "medium" | "high";
+
+/**
+ * What kind of move a finding asks for, which decides whether it counts in the
+ * headline:
+ * - `fix`: clear waste; removing it leaves the work as it was. The headline.
+ * - `try`: likely fine, but it changes what the model does.
+ * - `test`: a trade-off sized from your own usage (compact earlier, a smaller
+ *   default model). Shown as "up to", never added to anything.
+ */
+export type FindingTier = "fix" | "try" | "test";
+
+export const TIER_RANK: Record<FindingTier, number> = { fix: 0, try: 1, test: 2 };
 
 /**
  * How much to trust a finding's dollar figure. Ordinal on purpose: nothing
@@ -281,6 +318,9 @@ export interface OptimizationFinding {
   title: string;
   /** What is happening and why it costs money. */
   detail: string;
+  /** Why it matters, in one sentence: what makes this cost money. */
+  why: string;
+  tier: FindingTier;
 
   savings: SavingsEstimate;
   affected: AffectedTraffic;
@@ -378,8 +418,15 @@ export interface Recommendation {
   category: Category;
   /** Imperative, e.g. "Switch eligible requests from Sonnet 5 to Haiku 4.5". */
   action: string;
-  /** One sentence answering "why is this being suggested to me?". */
+  /** One sentence answering "why is this being suggested to me?". Same as `why`. */
   rationale: string;
+  tier: FindingTier;
+  /** What happened, in the user's own numbers. */
+  happened: string;
+  /** Why it matters. */
+  why: string;
+  /** What to do about it, in full. */
+  fix: string;
   savings: SavingsEstimate;
   affected: AffectedTraffic;
   impact: Impact;

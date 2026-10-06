@@ -598,7 +598,7 @@ test(
 
     const env = {
       HOME: home,
-      CLAUDE_CONFIG_DIR: home,
+      CLAUDE_CONFIG_DIR: path.join(home, ".claude"),
       OPTIMAIZR_DIR: path.join(home, ".optimaizr"),
     };
 
@@ -650,7 +650,7 @@ test(
 
     const env = {
       HOME: home,
-      CLAUDE_CONFIG_DIR: home,
+      CLAUDE_CONFIG_DIR: path.join(home, ".claude"),
       OPTIMAIZR_DIR: path.join(home, ".optimaizr"),
     };
 

@@ -10,6 +10,7 @@ import {
   drillTo,
   findWaste,
   green,
+  likelyMonthly,
   recoverableAnnual,
   recoverableMonthly,
   red,
@@ -46,8 +47,12 @@ export async function cmdScan(args: Args): Promise<void> {
           savings: {
             monthlyUsd: recoverableMonthly(findings),
             annualUsd: recoverableAnnual(findings),
+            likelyMonthlyUsd: likelyMonthly(findings),
+            levers: findings
+              .filter((f) => f.tier === "test")
+              .map((f) => ({ rule: f.rule, upToMonthlyUsd: f.savings.monthlyUsd })),
             overlap: savingsOverlap(findings),
-            note: "Estimates. Each finding carries its own assumptions and confidence. Findings that claim the same call are counted once, at the largest claim, so the total is at or below their sum.",
+            note: "Estimates. monthlyUsd is clear waste (tier fix) only; likelyMonthlyUsd is what tier try findings add; each lever is an 'up to' on its own and is never added. Findings that claim the same call are counted once, at the largest claim.",
           },
           findings: stripFns(findings),
           errors,
@@ -180,13 +185,19 @@ export async function cmdRecommend(args: Args): Promise<void> {
   if (data.events.length === 0) return emptyNotice();
 
   const summary = summarize(data, summaryOptions(args));
-  const recs = toRecommendations(findWaste(data), data.events.length);
+  const findings = findWaste(data);
+  const recs = toRecommendations(findings, data.events.length);
 
   if (args.flags.json) {
     console.log(JSON.stringify(recs, null, 2));
     return;
   }
-  console.log(renderRecommendations(recs, summary.perMonth));
+  console.log(
+    renderRecommendations(recs, summary.perMonth, {
+      fix: recoverableMonthly(findings),
+      try: likelyMonthly(findings),
+    }),
+  );
 }
 
 /** `optimaizr audit`: what you spend, what's recoverable, and the top reasons. */

@@ -3,6 +3,8 @@ import path from "node:path";
 
 import { priceFor, projectName } from "@optimaizr/core";
 import type {
+  ClaudeWindowReading,
+  ClaudeWindows,
   OptimizationFinding,
   ProposedChange,
   RequestRewriter,
@@ -31,6 +33,8 @@ export interface ModSession {
   startedAt: string;
   seenAt: string;
   endedAt?: string;
+  /** Claude Code's own 5-hour and weekly meters, from 0.9.0 of the mod. */
+  windows?: ClaudeWindows;
 }
 
 export function modSessionsDir(): string {
@@ -86,6 +90,39 @@ export function activeModSessions(opts: { dir?: string; now?: Date } = {}): ModS
   return readModSessions(opts.dir, now).filter(
     (s) => !s.endedAt && now.getTime() - Date.parse(s.seenAt) < ALIVE_MS,
   );
+}
+
+// A reading older than this says little about the window now.
+const WINDOWS_FRESH_MS = 15 * 60_000;
+
+function isReading(v: unknown): v is ClaudeWindowReading {
+  const r = v as ClaudeWindowReading;
+  return typeof r === "object" && r !== null && Number.isFinite(r.percentUsed);
+}
+
+/**
+ * Claude Code's real plan meters, from the newest recent reading any mod session
+ * wrote. A meter whose reset time has passed is dropped: it has started over.
+ */
+export function latestClaudeWindows(opts: { dir?: string; now?: Date } = {}): ClaudeWindows | null {
+  const now = (opts.now ?? new Date()).getTime();
+  const readings = readModSessions(opts.dir, opts.now)
+    .map((s) => s.windows)
+    .filter((w): w is ClaudeWindows => {
+      const at = Date.parse(w?.at ?? "");
+      return Number.isFinite(at) && now - at < WINDOWS_FRESH_MS;
+    })
+    .sort((a, b) => b.at.localeCompare(a.at));
+  const live = (r: unknown) =>
+    isReading(r) && (!r.resetsAt || Date.parse(r.resetsAt) > now) ? r : undefined;
+  for (const w of readings) {
+    const fiveHour = live(w.fiveHour);
+    const sevenDay = live(w.sevenDay);
+    if (fiveHour || sevenDay) {
+      return { at: w.at, ...(fiveHour ? { fiveHour } : {}), ...(sevenDay ? { sevenDay } : {}) };
+    }
+  }
+  return null;
 }
 
 const label = (id: string) => priceFor(id)?.label ?? id;
@@ -241,6 +278,7 @@ export function autoEligible(
   const kind = rec.finding.candidate?.kind;
   return (
     !rec.withheld &&
+    rec.finding.tier !== "test" &&
     (kind === "swap-model" || kind === "lower-effort") &&
     rec.finding.savings.confidence !== "low" &&
     rec.traffic.slices.some((s) => s.source === "claude-code") &&

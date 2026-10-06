@@ -8,9 +8,9 @@
 **Spend fewer tokens on the same work.**
 
 optimAIzr is a local CLI that finds wasted tokens in Claude Code, Codex and your
-own API calls, shows what each fix would save, and checks it on your own
-traffic before you switch. No account, no upload, no telemetry. It reads token
-counts, never your prompts.
+own API calls, shows in exact dollars what each fix saves, applies the ones you
+accept, and checks them on your own traffic. No account, no upload, no
+telemetry. It reads token counts, never your prompts.
 
 ```bash
 npm i -g optimaizr
@@ -19,7 +19,36 @@ optimaizr profile
 
 Or try it once without installing: `npx optimaizr profile`.
 
-## New in 0.8.0: inside Claude Code
+## New in 0.9.0
+
+optimAIzr now knows your plan, counts only what holds up, and shows its work.
+
+```
+  Your Claude Pro did $938.12/mo of work at API prices: 47x what you pay
+
+  Savings found
+    Clear waste             $13.07/mo  $159.01/yr · fix it, nothing to lose
+    Likely, if you try      +$1.54/mo  model mismatch, excess reasoning
+    Up to, if you test     $263.14/mo  compact earlier · 48% of calls carry over 200K of conversation
+                            $54.45/mo  smaller default model · 16% of Opus 5.5 spend is light work
+```
+
+- **No setup.** Your Claude plan (Pro, Max, Team) is read from Claude Code
+  itself, so `optimaizr profile` needs no flags.
+- **Savings in exact dollars, by how sure they are.** Clear waste you can fix
+  for free, likely savings, and the levers worth testing, each with the
+  measured fact behind it. The tiers are never added together.
+- **The biggest lever is usually the conversation itself.** Every call
+  re-reads it. `optimaizr apply context-compaction` makes Claude Code and Codex
+  compact at 200K, and `optimaizr undo context-compaction` puts it back.
+- **`live` shows its work:** a status line, a notice when context jumps or
+  passes 200K, and **Y** to compact earlier from then on.
+- **Stricter detection.** Whole tasks are judged, not single calls, so
+  debugging, file writes and switches that would not pay back are no longer
+  counted. The figures are lower than in 0.8 and hold up when checked. See the
+  [changelog](CHANGELOG.md).
+
+## Inside Claude Code
 
 Claude Code now runs mods, plugins that work inside it. The optimAIzr mod puts
 the numbers where you work, lets **Y** in `optimaizr live` switch the session
@@ -71,42 +100,55 @@ and `optimaizr mod` shows whether it is running.
 
 ### See where your tokens go
 
-`optimaizr profile` reads the sessions already on your machine and puts spend,
-waste and the biggest fix on one screen. On a Claude plan, add `--plan pro`.
+`optimaizr profile` reads the sessions already on your machine and puts what
+your plan does, the savings found, the biggest win and where the money goes on
+one screen. Your Claude plan is detected; `--plan` is only for overriding it.
 
 ```
   optimAIzr | profile
-  2026-04-08 to 2026-09-22  (167.1 days)
+  2026-04-08 to 2026-10-05  (180.2 days)
 
-  AI usage
+------------------------------------------------------------------
 
-  Spend                     $476.70  $452.56/month at the last 30 days' rate
-  Calls                       4,062
-  Tokens                     743.4M  739.7M in / 3.7M out
+  Your Claude Pro did $938.12/mo of work at API prices: 47x what you pay
+  $974.52 in this window · 7,693 calls · 1.98B tokens · list rates, not a bill
 
-  Plan
+  Savings found
+    Clear waste             $13.07/mo  $159.01/yr · fix it, nothing to lose
+    Likely, if you try      +$1.54/mo  model mismatch, excess reasoning
+    Up to, if you test     $263.14/mo  compact earlier · 48% of calls carry over 200K of conversation
+                            $54.45/mo  smaller default model · 16% of Opus 5.5 spend is light work
 
-  Claude Pro              $20.00/mo  what you pay
-  API-equivalent         $452.56/mo  23x what you pay
-  5-hour sessions                18  in the last 30 days
-  Waste per session             10%  fix it and you'd hit the limit ~11% later
-  This session               $35.97  since 20:00, resets 01:00
+  Biggest win  Compact earlier  TEST · possible
+    Up to 28% less usage (~$263.14/mo), about 1.4x the work per 5-hour window
 
-  Optimization
+    What happened   48% of your Claude Code calls carried over 200K of
+                    conversation
+    Why it matters  Every call re-reads the whole conversation, so each
+                    call costs more than the last: re-reading took 56% of
+                    your Claude Code spend.
+    What to do      Compact at 200K. Claude Code: add "env": {
+                    "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "200000" } to
+                    ~/.claude/settings.json. Or compact by hand (/compact)
+                    when you change topic. A summary can drop details from
+                    early in a long conversation, so try it for a week and
+                    compare.
 
-  Flagged calls                 931  22.9% of calls
-  Potential savings       $44.59/mo  $542.48/year
+------------------------------------------------------------------
 
-  Biggest opportunity
+  Where it goes
 
-  ! Model mismatch
+    Re-reading the conversation    56%  ███████████░░░░░░░░░
+    Loading context into cache     24%  █████░░░░░░░░░░░░░░░
+    Answers, code and thinking     20%  ████░░░░░░░░░░░░░░░░
 
-    17% of your requests use a model whose capabilities exceed the
-    detected workload requirements.
-    671 calls affected.
+  Clear waste and likely savings, item by item
 
-  Next step
-    optimaizr simulate model-fit
+    FIX   Oversized context               $12.15/mo  likely
+    FIX   Oversized tool output           $0.847/mo  likely
+    TRY   Model mismatch                   $1.75/mo  likely
+    TRY   Excess reasoning                $0.415/mo  likely
+    +1 smaller, under $0.25/mo each: optimaizr recommend
 ```
 
 ### Find out why
@@ -127,53 +169,46 @@ each level as a share of the one above.
 
 ### Catch waste while you work
 
-`optimaizr live` runs beside your agent and raises a fix the moment a pattern
-shows up.
+`optimaizr live` runs beside your agent, says what it sees and raises a fix the
+moment a pattern shows up. Press **Y** and your app switches from its next
+request, and so does Claude Code with the [optimAIzr mod](#inside-claude-code).
+Without it, Claude Code switches from its next session.
 
 ```
-  ⚡ optimAIzr
+◉ optimAIzr live · 1 call · $0.031 this run · last Opus 5.5 $0.031, 120.5K context · no issues · checked 3s ago
 
-  This task looks suitable for a cheaper model.
+  ⚠  12:31:07  Long conversation now 215.5K of context
+        Every call re-reads all of it: $0.043 on this call alone, before any work (Opus 5.5).
 
-  Current:       Sonnet 5
-  Suggested:     Haiku 4.5
-  Observed cost: $0.202 / 26 calls
+  ⚡ optimAIzr · Switch eligible requests from Sonnet 5 to Haiku 4.5 · likely
 
-  [Y] Apply optimization
-  [N] Continue
-  [D] Why?
+  What happened   11 simple calls ran on Sonnet 5
+  Why it matters  These jobs were within reach of a model one tier
+                  down, so the bigger model's price bought nothing
+                  extra: the same work costs 50% less there.
+  Change          Sonnet 5 -> Haiku 4.5
+  Saving          $0.110 could have been saved on 11 calls in the last 10 min
+
+  [Y] Apply   [N] Not now   [D] Why?
 ```
-
-Pressing **Y** changes what comes next, never the call already billed:
-
-- **Your app (`wrap()`)** switches from its next request, with no restart. If
-  the provider rejects the new model, the original request is sent instead.
-  `optimaizr undo <rule>` reverts it.
-- **Claude Code with the optimAIzr mod** switches the running session from
-  its next request, and each answer then says what the switch saved. The
-  switch is as narrow as the finding: one project, and only subagents when that
-  is what it covered. If the API refuses the new model, the request goes out on
-  the original.
-- **Claude Code without the mod** reads its model at session start, so `Y`
-  updates `~/.claude/settings.json` for your next session and prints the
-  `/model` command that switches the current one.
-- **Codex:** `Y` records your decision; type `/model` in Codex to switch.
-
-Amounts in `live` are what the window actually cost, never projected to a
-month. Low-confidence findings are printed rather than prompted.
 
 ### Know what a fix is worth
 
-Every finding comes with its own arithmetic: what the traffic costs now, what it
-would cost after, and how far to trust the figure. `--why` prints the full
-calculation and every assumption.
+Every finding says what happened, why it matters and what to do, with its own
+arithmetic and how sure it is. Clear waste (FIX) is the headline; what changes
+the model's output is TRY; trade-offs are TEST and only ever "up to". `--why`
+prints the full calculation and every assumption.
 
 ```
-MEDIUM  441 mechanical calls ran on an over-specified model
-        $5.76/mo est.  |  $70.12/yr  |  needs verification  |  model-selection
+  FIX   Oversized context · likely
+        $12.14/mo | $147.69/yr | a change in habit | context-bloat
 
-        now    $14.07  ->  after     $6.75  (441 calls, 12% of spend)
-        confidence medium   quality impact medium   basis estimated
+        What happened   25 small tasks started with ~449.4K of context;
+                        similar tasks start near 65.9K
+        Why it matters  Every call in those tasks re-reads the whole history,
+                        so a small job costs as much as a big one.
+        What to do      Start small, unrelated jobs in a fresh conversation
+                        (/clear), or /compact when you change topic.
 ```
 
 ### Prove it before you switch
@@ -196,10 +231,10 @@ output.
 
 ### Stay under your limits
 
-- **Claude Pro, Max or Team:** `--plan pro` (or `max5`, `max20`, `team`,
-  `team-premium`) shows each 5-hour session and how much of it goes on waste.
-  Anthropic doesn't publish the limit, so run `optimaizr limit` when you hit it
-  and optimAIzr learns yours.
+- **Claude Pro, Max or Team:** detected from Claude Code, nothing to set. It
+  shows each 5-hour session and how much of it goes on waste; with the mod
+  running, Claude Code's own 5-hour and weekly meters. Without the mod, run
+  `optimaizr limit` when you hit the limit and optimAIzr learns yours.
 - **ChatGPT plans:** nothing to set. Codex records OpenAI's own meter.
 - **A monthly budget:** `--budget 300` names the day the cap runs out at this
   pace, and how many days the fixes buy back.
@@ -213,17 +248,21 @@ output.
 ```
 
 `live` warns at 80% and 95% of a plan limit, and at 50, 80, 95 and 100% of a
-budget. Save your plan or budget once in `~/.optimaizr/config.json`:
-`{ "plan": "pro", "budget": 300 }`.
+budget. To override the detected plan or set a budget, save it once in
+`~/.optimaizr/config.json`: `{ "plan": "max20", "budget": 300 }`.
 
 ## Works with
 
-| Source                     | Setup                             |
-| -------------------------- | --------------------------------- |
-| Claude Code                | None. Reads `~/.claude/projects`. |
-| Codex                      | None. Reads `~/.codex/sessions`.  |
-| Your Anthropic/OpenAI app  | One line with `wrap()`, below     |
-| A usage export (CSV, JSON) | `optimaizr import usage.csv`      |
+| Source                     | Setup                                                               |
+| -------------------------- | ------------------------------------------------------------------- |
+| Claude Code                | None. Reads `~/.claude/projects`, or `$CLAUDE_CONFIG_DIR/projects`. |
+| Codex                      | None. Reads `~/.codex/sessions`, or `$CODEX_HOME/sessions`.         |
+| Your Anthropic/OpenAI app  | One line with `wrap()`, below                                       |
+| A usage export (CSV, JSON) | `optimaizr import usage.csv`                                        |
+
+Two Claude accounts? Point it at each one:
+`CLAUDE_CONFIG_DIR=~/.claude-personal optimaizr profile`. The plan, the
+transcripts and any setting it applies all follow that folder.
 
 ### In your app
 
@@ -263,11 +302,13 @@ route.
 | `optimaizr simulate <rule>` | What would the change save?                  |
 | `optimaizr verify <rule>`   | Does the output still hold up on my traffic? |
 | `optimaizr apply <rule>`    | What exactly do I change?                    |
+| `optimaizr undo <rule>`     | How do I take it back?                       |
 | `optimaizr report`          | A shareable HTML report                      |
 | `optimaizr card`            | Your last 30 days as an image to post        |
+| `optimaizr changelog`       | What changed in this version?                |
 
 Also `mod` (the Claude Code mod), `audit`, `tokens`, `guide` (which model for
-which job), `limit`, `import`, `undo`, `providers` and `privacy`. Run
+which job), `limit`, `import`, `providers` and `privacy`. Run
 `optimaizr --help` for everything.
 
 ## Privacy
@@ -277,7 +318,9 @@ which job), `limit`, `import`, `undo`, `providers` and `privacy`. Run
 - Keeps its data in `~/.optimaizr/` as plain JSON. `rm -rf ~/.optimaizr`
   removes everything.
 - Makes network calls only in `verify` (to your own provider, with your own
-  key) and in the optional Jev second opinion, which sends route metadata only.
+  key), in the optional Jev second opinion, which sends route metadata only,
+  and once a day to the npm registry for the latest version number, which
+  sends nothing about you. `OPTIMAIZR_NO_UPDATE_CHECK=1` turns that off.
 - The Claude Code mod reads usage figures and the commands Claude runs, never
   your prompts or file contents, and makes no network calls.
 

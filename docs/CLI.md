@@ -79,7 +79,7 @@ in the same report.
 |                             |                                                                 |
 | --------------------------- | --------------------------------------------------------------- |
 | `optimaizr audit`           | The savings audit: what you spend, what is recoverable, and why |
-| `optimaizr profile`         | One-screen snapshot: usage, waste, and your biggest bottleneck  |
+| `optimaizr profile`         | One screen: what your plan does, savings found, the biggest win |
 | `optimaizr scan`            | Spend, savings, and what to do about it                         |
 | `optimaizr why`             | Drill into where the money actually goes                        |
 | `optimaizr live`            | Watch calls as they happen and surface fixes interactively      |
@@ -91,12 +91,14 @@ in the same report.
 | `optimaizr tokens`          | Token analytics and the priciest individual calls               |
 | `optimaizr verify <rule>`   | Prove a fix against your quality bar before applying it         |
 | `optimaizr apply <rule>`    | Get the exact change, gated on a passing verification           |
+| `optimaizr undo <rule>`     | Take back a switch or a setting optimAIzr applied               |
 | `optimaizr import <file>`   | Load a CSV or JSON usage export you already have                |
 | `optimaizr report`          | Write a shareable HTML dashboard                                |
 | `optimaizr guide`           | Which model for which job, with the arithmetic                  |
 | `optimaizr providers`       | What can be read, and from where                                |
 | `optimaizr privacy`         | What is collected, stored and sent                              |
 | `optimaizr metrics`         | How much has been analysed, and how much found                  |
+| `optimaizr changelog`       | What changed in this version (`--all` for every version)        |
 
 Flags: `--why` (show every calculation and assumption), `--days N`,
 `--project STR`, `--source all|agents|sdk`, `--tz utc|local|<IANA>`, `--json`.
@@ -208,6 +210,32 @@ There is a test asserting exactly that.
 
 ---
 
+## Three tiers of saving, never added together
+
+Each finding says what kind of move it asks for:
+
+|          |                                                                                                      |
+| -------- | ---------------------------------------------------------------------------------------------------- |
+| **FIX**  | Clear waste. Removing it leaves the work as it was. The only tier in the headline ("Clear waste").   |
+| **TRY**  | Likely savings that change what the model does, such as a smaller model for quick tasks. Shown as +. |
+| **TEST** | Trade-offs sized from your own usage: compact earlier, a smaller default model. Only ever "up to ".  |
+
+"Likely +" counts only calls that clear waste did not already claim, and a
+TEST lever is never added to anything. Each figure also says how sure it is:
+**high confidence**, **likely** or **possible** (the `high`, `medium` and
+`low` confidence levels below).
+
+**Tasks, not calls.** For Claude Code and Codex, calls are grouped into tasks: a
+prompt and every call it set off. One step of a long debugging session looks
+like a quick job on its own, so the rules judge the whole task, from its shape
+only (calls, files edited, failures, thinking tokens, the closing answer's
+length), never from prompt text. A quick task has at most 8 calls, edits at
+most 2 files, fails at most once, thinks for under 2K tokens, and ends with an
+answer under 1,500 tokens. Fix-and-rerun debugging, files being written, a
+subagent's own reads and re-reads after an edit or compaction are not waste.
+
+---
+
 ## Your profile at a glance
 
 ```bash
@@ -216,42 +244,61 @@ npx optimaizr profile
 
 ```
   optimAIzr | profile
-  2026-09-01 to 2026-09-28  (27.0 days)
+  2026-04-08 to 2026-10-05  (180.2 days)
 
-  AI usage
+------------------------------------------------------------------
 
-  Spend                      $0.993  $1.10/month at this rate
-  Calls                          50
-  Tokens                       4.2M  4.2M in / 5.2K out
+  Your Claude Pro did $938.12/mo of work at API prices: 47x what you pay
+  $974.52 in this window · 7,693 calls · 1.98B tokens · list rates, not a bill
 
-  Optimization
+  Savings found
+    Clear waste             $13.07/mo  $159.01/yr · fix it, nothing to lose
+    Likely, if you try      +$1.54/mo  model mismatch, excess reasoning
+    Up to, if you test     $263.14/mo  compact earlier · 48% of calls carry over 200K of conversation
+                            $54.45/mo  smaller default model · 16% of Opus 5.5 spend is light work
 
-  Flagged calls                  50  100.0% of calls
-  Potential waste            $0.858  in this window
-  Potential savings       $0.954/mo  $11.60/year
+  Biggest win  Compact earlier  TEST · possible
+    Up to 28% less usage (~$263.14/mo), about 1.4x the work per 5-hour window
 
-  Biggest opportunity
+    What happened   48% of your Claude Code calls carried over 200K of
+                    conversation
+    Why it matters  Every call re-reads the whole conversation, so each
+                    call costs more than the last: re-reading took 56% of
+                    your Claude Code spend.
+    What to do      Compact at 200K. Claude Code: add "env": {
+                    "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "200000" } to
+                    ~/.claude/settings.json. Or compact by hand (/compact)
+                    when you change topic. A summary can drop details from
+                    early in a long conversation, so try it for a week and
+                    compare.
 
-  ! Oversized context
+------------------------------------------------------------------
 
-    Small jobs are inheriting a whole session's context to do
-    their work.
-    10 calls affected.
+  Where it goes
 
-    Estimated savings $0.881/month | medium confidence, inferred
+    Re-reading the conversation    56%  ███████████░░░░░░░░░
+    Loading context into cache     24%  █████░░░░░░░░░░░░░░░
+    Answers, code and thinking     20%  ████░░░░░░░░░░░░░░░░
 
-  Top opportunities
+  Clear waste and likely savings, item by item
 
-  1. Oversized context           $0.881/mo  oversized-input
-  2. Model mismatch              $0.073/mo  model-fit
-
-  Next step
-    optimaizr simulate oversized-input
+    FIX   Oversized context               $12.15/mo  likely
+    FIX   Oversized tool output           $0.847/mo  likely
+    TRY   Model mismatch                   $1.75/mo  likely
+    TRY   Excess reasoning                $0.415/mo  likely
+    +1 smaller, under $0.25/mo each: optimaizr recommend
 ```
 
-Every figure is the same one `scan`, `audit` and `recommend` report; `profile`
-only picks the three things worth seeing first. It is read-only and fully
-local, and takes the same `--days`, `--project`, `--source` and `--json` flags.
+The money comes first, by tier, and is never added up. The biggest win is the
+largest opportunity of any tier; on a plan it is also put as more work per
+5-hour window (cutting a share s of usage leaves room for 1 / (1 - s) as much).
+"Where it goes" splits spend into re-reading context, loading it into the
+cache, output and new input. Below the screen shown here: each clear-waste and
+likely item, your plan block and the next step.
+
+Every figure is the same one `waste`, `audit` and `recommend` report. It is
+read-only and fully local, and takes the same `--days`, `--project`,
+`--source` and `--json` flags.
 
 ---
 
@@ -297,8 +344,16 @@ what the same work would cost on the API. They are still the right measure of a
 session, because a larger model drains a session faster in roughly the
 proportion it costs more.
 
+**Your plan is detected.** Claude Code keeps your account's plan in its own
+config after sign-in (`~/.claude.json`, or under `CLAUDE_CONFIG_DIR`).
+optimAIzr reads only the plan fields from it, never your name or email. When
+the tier isn't reported (Max without 5x or 20x, Team without the seat type) it
+says so and asks; it never guesses. `--plan` wins over the config file, and
+both win over what was detected:
+
 ```bash
-optimaizr profile --plan pro       # or "plan": "pro" in config
+optimaizr profile                  # detected
+optimaizr profile --plan max20     # or "plan": "max20" in config, to override
 ```
 
 | `--plan`       | Plan                 | Price used   | Per session        |
@@ -311,7 +366,7 @@ optimaizr profile --plan pro       # or "plan": "pro" in config
 
 Prices are monthly list prices, the multiple's denominator. Billed annually,
 Pro is $17 and Team seats $20 and $100, so on an annual plan the multiple reads
-a little low. Two plans have no session view, and `--plan` says so:
+a little low. Two plans have no session view, and optimAIzr says so:
 
 - **Enterprise** is $20 a seat plus usage billed at API rates, under a spend
   limit your admin sets. The dollars are the bill, so read it as a cap:
@@ -341,8 +396,10 @@ optimaizr limit undo        # remove the last one
 ```
 
 Each hit records what that session had used by then. The median over your hits
-is your limit, and `optimaizr live --plan pro` warns at 80% and 95% of it, once
-each per session.
+is your limit, and `optimaizr live` warns at 80% and 95% of it, once each per
+session. With the optimAIzr mod running none of this is needed: the mod writes
+Claude Code's own 5-hour and weekly meters into its session file, and
+`profile` and `live` show those instead.
 
 **What is approximate.** Sessions are rebuilt from timestamps: one opens at the
 top of the hour of the first message after the previous one closed, and lasts
@@ -380,8 +437,8 @@ latest one and shows it:
 - **API-key sessions** carry no meter and show as plain spend.
 - The section appears only when Codex reported a meter in the last 30 days.
 
-Until a plan is set, `profile` ends with a one-line reminder that `--plan`
-exists. If you pay per token, `{ "plan": "api" }` in config turns it off.
+When no plan can be detected, `profile` says so in one line and how to set
+one. If you pay per token, `{ "plan": "api" }` in config turns it off.
 
 ---
 
@@ -416,14 +473,22 @@ connected, the provider level is where the comparison starts.
 ## Every opportunity carries its own economics
 
 A savings number with nothing behind it is a guess with a dollar sign on it.
-So each finding reports:
+So each finding says what happened, why it matters and what to do, and reports
+its own arithmetic:
 
 ```
-MEDIUM  441 mechanical calls ran on an over-specified model
-        $5.76/mo est.  |  $70.12/yr  |  needs verification  |  model-selection
+  FIX   Oversized context · likely
+        $12.14/mo | $147.69/yr | a change in habit | context-bloat
 
-        now    $14.07  ->  after     $6.75  (441 calls, 12% of spend)
-        confidence medium   quality impact medium   basis estimated
+        What happened   25 small tasks started with ~449.4K of context;
+                        similar tasks start near 65.9K
+        Why it matters  Every call in those tasks re-reads the whole history,
+                        so a small job costs as much as a big one.
+        What to do      Start small, unrelated jobs in a fresh conversation
+                        (/clear), or /compact when you change topic. A
+                        subagent also starts with an empty context.
+
+        now    $13.54  ->  after    $0.921  (82 calls, 1% of spend)  basis inferred
 ```
 
 **Confidence and impact measure different things, deliberately.**
@@ -549,6 +614,49 @@ uploaded:
 ```ts
 optimaizr.wrap(client, { service: "checkout-api", capture: { rate: 0.02 } });
 ```
+
+---
+
+## Two levers: compact earlier, a smaller default
+
+Most of a Claude Code or Codex bill is the conversation being re-read on every
+call. Two levers are sized from your own sessions and shown as TEST, "up to":
+
+- **Compact earlier.** Each conversation is replayed as if the agent compacted
+  at 200K (it otherwise compacts near the model's window, 1M on current
+  models): the compaction's summary call and reload are charged, and every
+  later call re-reads less. Where the agent compacted on its own, the replay
+  starts over from there.
+- **A smaller default model.** Finished tasks on a frontier model without heavy
+  reasoning or repeated failures, re-priced one tier down. Whether the smaller
+  model does them as well is what `optimaizr verify model-default` checks.
+
+Applying the first one is a setting, with an exact undo:
+
+```bash
+optimaizr apply context-compaction              # Claude Code and/or Codex, whichever you use
+optimaizr apply context-compaction --agent codex
+optimaizr undo context-compaction               # puts back what was there
+```
+
+For Claude Code it sets `"env": { "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "200000" }`
+in `~/.claude/settings.json`; for Codex, `model_auto_compact_token_limit = 200000`
+in `~/.codex/config.toml`. Both are read when a session starts. The previous
+values are kept in `~/.optimaizr/settings-changes.json`.
+
+---
+
+## Watching live
+
+`optimaizr live` follows Claude Code, Codex and your wrapped apps as they run.
+On a terminal it keeps one status line at the bottom (calls, spend this run,
+the last call and its context, what it found, when it last checked). It says
+when a conversation's context jumps by 50K or more in one call, or passes 200K,
+with what re-reading it costs on that call, and the first time a conversation
+passes 200K it offers to compact earlier from then on. Findings come as cards
+with what happened, the change, the money and how sure it is; press **Y** to
+apply, **N** to skip, **D** for the evidence. On Ctrl-C it prints what the run
+saw and found.
 
 ---
 
@@ -729,7 +837,11 @@ Analysis is entirely local. No backend, no account, no telemetry, no upload.
 Reports are self-contained files that fetch nothing when opened.
 
 Network calls happen only in `verify` (to your own provider, with your own key,
-which optimAIzr never stores or logs) and in Jev, if you enable it. See
+which optimAIzr never stores or logs), in Jev if you enable it, and once a day
+in a background request to registry.npmjs.org for the latest optimaizr version
+number. That request sends nothing about you or your usage, never runs in CI,
+with `--json` or when output is piped, and is off with
+`OPTIMAIZR_NO_UPDATE_CHECK=1` or `"updateCheck": false` in the config. See
 [SECURITY.md](../SECURITY.md).
 
 Prompt contents are not stored unless you explicitly enable capture, which is

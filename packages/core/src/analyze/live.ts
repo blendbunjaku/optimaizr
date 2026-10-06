@@ -163,6 +163,8 @@ export function createLiveAnalyzer(opts: LiveOptions = {}): LiveAnalyzer {
     const out: LiveRecommendation[] = [];
     for (const finding of findings) {
       if (finding.advisory) continue; // a rate change is news, not an action
+      // A lever is sized over weeks of history; a few minutes of it says nothing.
+      if (finding.tier === "test") continue;
 
       const observedUsd = finding.savings.windowUsd;
       if (observedUsd < minUsd) continue;

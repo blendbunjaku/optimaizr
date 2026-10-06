@@ -1,5 +1,6 @@
 import { priceFor, usd } from "../pricing.js";
 import { verificationModeOf } from "../verify/state.js";
+import { TIER_RANK } from "../domain/types.js";
 import type {
   OptimizationFinding,
   Recommendation,
@@ -17,6 +18,7 @@ import type {
 /** Turn a finding's fix into an imperative action line. */
 function actionFor(f: OptimizationFinding): string {
   const c = f.candidate;
+  if (f.rule === "model-default") return leverAction(f);
   if (c?.kind === "swap-model" && c.to) {
     const from = f.affected.models.map((m) => priceFor(m)?.label ?? m).join(" / ");
     const to = priceFor(c.to)?.label ?? c.to;
@@ -26,11 +28,18 @@ function actionFor(f: OptimizationFinding): string {
   if (c?.kind === "enable-cache") return "Stabilise and cache the request prefix";
   if (c?.kind === "trim-prompt") return "Trim the system prompt";
   // Rules without a mechanical candidate still need an imperative line.
-  if (f.rule === "oversized-input") return "Give mechanical steps their own short context";
+  if (f.rule === "context-compaction") return "Compact conversations earlier";
+  if (f.rule === "oversized-input") return "Start small jobs in a fresh context";
   if (f.rule === "oversized-output") return "Cap response length on outlier requests";
   if (f.rule === "oversized-tool-output") return "Filter oversized tool output at the source";
   if (f.rule === "error-loops") return "Stop retrying identical failing calls";
   return f.title;
+}
+
+/** The default-model lever names its target, not every model it moves from. */
+function leverAction(f: OptimizationFinding): string {
+  const to = f.candidate?.to ? (priceFor(f.candidate.to)?.label ?? f.candidate.to) : null;
+  return `Make ${to ?? "a smaller model"} your default and switch up for hard problems`;
 }
 
 /**
@@ -152,7 +161,11 @@ export function toRecommendations(
         rule: f.rule,
         category: f.category,
         action: actionFor(f),
-        rationale: rationaleFor(f, totalCalls),
+        rationale: f.why || rationaleFor(f, totalCalls),
+        tier: f.tier,
+        happened: f.title,
+        why: f.why || rationaleFor(f, totalCalls),
+        fix: f.fix,
         savings: f.savings,
         affected: f.affected,
         impact: f.impact,
@@ -161,6 +174,11 @@ export function toRecommendations(
         actions: actionsFor(f),
         status: decisions[f.rule]?.status ?? "new",
       }))
+      // Clear waste first, then what to try, then what to test.
+      .sort(
+        (a, b) =>
+          TIER_RANK[a.tier] - TIER_RANK[b.tier] || b.savings.monthlyUsd - a.savings.monthlyUsd,
+      )
   );
 }
 

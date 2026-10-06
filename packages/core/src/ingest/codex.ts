@@ -4,6 +4,7 @@ import os from "node:os";
 import readline from "node:readline";
 
 import { costOf, providerOf } from "../pricing.js";
+import { userPath } from "./claudecode.js";
 import type {
   CallEvent,
   Dataset,
@@ -26,10 +27,14 @@ import type {
  * so they go through `normalizeUsage` rather than being unpicked here.
  */
 
-const CODEX_ROOT = path.join(os.homedir(), ".codex", "sessions");
+/** Codex's own folder: `CODEX_HOME` when set, else ~/.codex. */
+export function codexHome(): string {
+  const set = process.env.CODEX_HOME?.trim();
+  return set ? userPath(set) : path.join(os.homedir(), ".codex");
+}
 
 export interface CodexIngestOptions {
-  /** Defaults to `~/.codex/sessions`. */
+  /** Defaults to `$CODEX_HOME/sessions`, i.e. `~/.codex/sessions`. */
   root?: string;
   days?: number;
   project?: string;
@@ -119,6 +124,11 @@ export interface CodexState {
   lastTotal: number;
   /** Tool calls seen since the previous billable event, by call id. */
   pending: Map<string, ToolCall>;
+  /** The prompt being answered: calls sharing it are one task. */
+  turnId?: string;
+  turns: number;
+  /** Compactions so far: what was read before one is gone from context. */
+  epoch: number;
   /** The latest limit meter, including one from a refresh that billed nothing. */
   limits?: RateLimitSnapshot;
 }
@@ -133,7 +143,16 @@ export function createCodexState(file: string): CodexState {
     seq: 0,
     lastTotal: 0,
     pending: new Map(),
+    turns: 0,
+    epoch: 0,
   };
+}
+
+/** Codex reports a command's exit status inside its output text. */
+function failed(output: unknown): boolean {
+  const text = typeof output === "string" ? output : JSON.stringify(output ?? "");
+  const m = /Process exited with code (\d+)|"exit_code":\s*(\d+)/.exec(text ?? "");
+  return Boolean(m && Number(m[1] ?? m[2]) !== 0);
 }
 
 /**
@@ -173,8 +192,21 @@ export function consumeCodexLine(state: CodexState, line: string): CallEvent | n
     } else if (kind === "function_call_output" || kind === "custom_tool_call_output") {
       const id = typeof p.call_id === "string" ? p.call_id : "";
       const tool = state.pending.get(id);
-      if (tool) tool.resultChars = outputChars(p.output);
+      if (tool) {
+        tool.resultChars = outputChars(p.output);
+        if (failed(p.output)) tool.isError = true;
+      }
     }
+    return null;
+  }
+
+  if (row.type === "event_msg" && p.type === "context_compacted") {
+    state.epoch++;
+    return null;
+  }
+
+  if (row.type === "event_msg" && p.type === "user_message") {
+    state.turnId = `${state.sessionId}:t${state.turns++}`;
     return null;
   }
 
@@ -223,6 +255,8 @@ export function consumeCodexLine(state: CodexState, line: string): CallEvent | n
     cacheWrite5mTokens: 0,
     cacheWrite1hTokens: 0,
     effort: state.effort,
+    ...(state.turnId ? { turnId: state.turnId } : {}),
+    ...(state.epoch ? { contextEpoch: state.epoch } : {}),
     tools,
     ...(state.limits ? { rateLimits: state.limits } : {}),
     cost: costOf(usage, resolved, { at: ts }),
@@ -286,7 +320,7 @@ async function readRollout(file: string, warnings: string[]): Promise<CallEvent[
 }
 
 export async function ingestCodex(opts: CodexIngestOptions = {}): Promise<Dataset> {
-  const root = opts.root ?? CODEX_ROOT;
+  const root = opts.root ?? path.join(codexHome(), "sessions");
   const warnings: string[] = [];
 
   if (!fs.existsSync(root)) {

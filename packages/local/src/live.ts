@@ -1,9 +1,10 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
 
 import {
+  claudeConfigDir,
+  codexHome,
   createLiveAnalyzer,
   createTranscriptState,
   consumeTranscriptLine,
@@ -197,12 +198,12 @@ export function tailLedger(
 
 /** Where Claude Code keeps its session transcripts. */
 export function claudeProjectsRoot(): string {
-  return path.join(os.homedir(), ".claude", "projects");
+  return path.join(claudeConfigDir(), "projects");
 }
 
 /** Where Codex keeps its session rollouts. */
 export function codexSessionsRoot(): string {
-  return path.join(os.homedir(), ".codex", "sessions");
+  return path.join(codexHome(), "sessions");
 }
 
 export interface TranscriptTailOptions {

@@ -47,40 +47,21 @@ export interface PromptOptions {
    * without a pty. Defaults to a real keypress read and `console.log`.
    */
   io?: { read: () => Promise<string>; write: (line: string) => void };
+  /** Around every question, so a status line can step aside while one is open. */
+  onAsk?: () => void;
+  onAnswered?: () => void;
 }
 
 export interface LivePrompt {
   /** Queue a recommendation for display. Never rejects. */
   offer: (rec: LiveRecommendation) => void;
+  /**
+   * Ask a yes/no question in turn with the recommendations, run `act` on Y and
+   * print what it returns. Printed without asking when not interactive.
+   */
+  confirm: (card: string, act: () => string) => void;
   /** Resolves once every queued prompt has been answered. */
   drain: () => Promise<void>;
-}
-
-/** One sentence naming what was noticed, in the user's terms rather than the rule's. */
-function headline(f: OptimizationFinding): string {
-  switch (f.rule) {
-    case "model-fit":
-      return "This task looks suitable for a cheaper model.";
-    case "reasoning-effort":
-    case "thinking-spend":
-      return "This task is spending more on deliberation than on its answer.";
-    case "cache-churn":
-    case "repeated-context":
-      return "This request is sending a large amount of repeated context.";
-    case "repeat-tool-calls":
-      return "Content already in this session is being fetched and billed again.";
-    case "error-loops":
-      return "You appear to be repeating a failing request.";
-    case "prompt-bloat":
-      return "A large system prompt is being charged on every request.";
-    case "oversized-output":
-      return "These responses are much longer than your typical call.";
-    case "oversized-input":
-    case "oversized-tool-output":
-      return "This call is carrying far more context than it needs.";
-    default:
-      return f.title;
-  }
 }
 
 /**
@@ -123,39 +104,45 @@ function readKey(): Promise<string> {
   });
 }
 
+const CONFIDENCE_WORD = { high: "high confidence", medium: "likely", low: "possible" } as const;
+
+/** A labelled line with a hanging indent, the way every card in optimAIzr reads. */
+function line(out: string[], label: string, value: string, width = 52): void {
+  const lines = wrapText(value, width);
+  out.push(`  ${dim(label.padEnd(15))} ${lines[0] ?? ""}`);
+  for (const rest of lines.slice(1)) out.push(`  ${" ".repeat(15)} ${rest}`);
+}
+
 function renderCard(rec: LiveRecommendation): string {
   const f = rec.finding;
   const change = proposedChange(f);
   const out: string[] = [];
+  const mins = Math.max(1, Math.round(rec.windowMs / 60_000));
 
   out.push("");
-  out.push(`  ${yellow("⚡")} ${bold("optimAIzr")}`);
+  out.push(
+    `  ${yellow("⚡")} ${bold("optimAIzr")} ${dim("·")} ${bold(rec.recommendation.action)} ${dim("·")} ${CONFIDENCE_WORD[f.savings.confidence]}`,
+  );
   out.push("");
-  for (const line of wrapText(headline(f), 66)) out.push(`  ${line}`);
-  out.push("");
-
+  line(out, "What happened", f.title);
+  line(out, "Why it matters", f.why);
   if (change.from && change.to) {
-    out.push(`  ${dim("Current:")}       ${change.from}`);
-    out.push(`  ${dim("Suggested:")}     ${green(change.to)}`);
+    out.push(`  ${dim("Change".padEnd(15))} ${change.from} ${dim("->")} ${green(change.to)}`);
   } else {
-    const [first = "", ...rest] = wrapText(change.label, 52);
-    out.push(`  ${dim("Change:")}        ${first}`);
-    for (const line of rest) out.push(`                 ${line}`);
+    line(out, "Change", change.label);
   }
   out.push(
-    `  ${dim("Observed cost:")} ${bold(red(usd(rec.observedUsd)))} ${dim("/")} ${f.affected.calls} ${dim("calls")}`,
+    `  ${dim("Saving".padEnd(15))} ${bold(green(usd(rec.observedUsd)))} ${dim(`could have been saved on ${f.affected.calls} call${f.affected.calls === 1 ? "" : "s"} in the last ${mins} min`)}`,
   );
   const latest = rec.examples[0];
   if (latest) {
     const more = rec.sessions > 1 ? dim(` (+${rec.sessions - 1} more sessions)`) : "";
     out.push(
-      `  ${dim("Latest:")}        ${callSession(latest)} ${dim(projectName(latest.project))} ${callActivity(latest, 36)}${more}`,
+      `  ${dim("Latest".padEnd(15))} ${callSession(latest)} ${dim(projectName(latest.project))} ${callActivity(latest, 36)}${more}`,
     );
   }
   out.push("");
-  out.push(`  ${bold("[Y]")} Apply optimization`);
-  out.push(`  ${bold("[N]")} Continue`);
-  out.push(`  ${bold("[D]")} Why?`);
+  out.push(`  ${bold("[Y]")} Apply   ${bold("[N]")} Not now   ${bold("[D]")} Why?`);
   return out.join("\n");
 }
 
@@ -283,6 +270,38 @@ export function createLivePrompt(opts: PromptOptions): LivePrompt {
   const read = opts.io?.read ?? readKey;
   const write = opts.io?.write ?? ((line: string) => console.log(line));
 
+  /** Run one question with the status line out of the way. */
+  async function asking(q: () => Promise<void>): Promise<void> {
+    opts.onAsk?.();
+    try {
+      await q();
+    } finally {
+      opts.onAnswered?.();
+    }
+  }
+
+  async function yesNo(card: string, act: () => string): Promise<void> {
+    write(card);
+    for (;;) {
+      write(`\n  ${dim("[Y/N]")} `);
+      const key = await read();
+      const k = key.toLowerCase();
+      if (key === "\u0003") {
+        opts.onExit();
+        return;
+      }
+      if (k === "y") {
+        write(act());
+        return;
+      }
+      if (k === "n" || key === "\r" || key === "\n") {
+        write(`  ${dim("Not now. It won't be asked again this session.")}`);
+        return;
+      }
+      write(`  ${dim("Press Y or N.")}`);
+    }
+  }
+
   async function ask(rec: LiveRecommendation): Promise<void> {
     write(renderCard(rec));
 
@@ -341,7 +360,14 @@ export function createLivePrompt(opts: PromptOptions): LivePrompt {
         return;
       }
       seen.add(key);
-      chain = chain.then(() => ask(rec)).catch(() => undefined);
+      chain = chain.then(() => asking(() => ask(rec))).catch(() => undefined);
+    },
+    confirm(card: string, act: () => string): void {
+      if (!opts.interactive) {
+        write(card);
+        return;
+      }
+      chain = chain.then(() => asking(() => yesNo(card, act))).catch(() => undefined);
     },
     drain(): Promise<void> {
       return chain;

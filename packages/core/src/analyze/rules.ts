@@ -18,9 +18,24 @@ import type {
   EvidenceClass,
   Impact,
   OptimizationFinding,
+  FindingTier,
   UsageEvent,
 } from "../domain/types.js";
 import { classifyAll } from "./classify.js";
+import {
+  buildTasks,
+  commandOf,
+  contextOf,
+  isEdit,
+  isMutating,
+  MECHANICAL_TASKS,
+  QUICK_MAX_CALLS,
+  QUICK_MAX_FILES,
+  stampTasks,
+  TASK_REASONING_TOKENS,
+  TASK_KIND_LABEL,
+  type Task,
+} from "./tasks.js";
 import { inputRateOf, projectionDays, summarize } from "./summary.js";
 
 /**
@@ -55,10 +70,15 @@ interface Ctx {
   days: number;
   totalCost: number;
   sessions: Map<string, UsageEvent[]>;
+  /** Agent calls grouped by prompt. */
+  tasks: Task[];
+  taskOf: Map<string, Task>;
 }
 
 function buildCtx(data: Dataset): Ctx {
   classifyAll(data.events);
+  const tasks = buildTasks(data.events);
+  const taskOf = stampTasks(tasks);
   const sessions = new Map<string, UsageEvent[]>();
   let totalCost = 0;
   for (const e of data.events) {
@@ -71,7 +91,7 @@ function buildCtx(data: Dataset): Ctx {
     arr.push(e);
   }
   for (const arr of sessions.values()) arr.sort((a, b) => a.ts.localeCompare(b.ts));
-  return { data, days: projectionDays(data), totalCost, sessions };
+  return { data, days: projectionDays(data), totalCost, sessions, tasks, taskOf };
 }
 
 const perMonth = (ctx: Ctx, observed: number) => (observed / ctx.days) * MONTH_DAYS;
@@ -137,6 +157,9 @@ function build(
     category: Category;
     title: string;
     detail: string;
+    why: string;
+    /** Defaults from impact: a fix that can't change output (or barely) is `fix`. */
+    tier?: FindingTier;
     currentUsd: number;
     optimizedUsd: number;
     events: UsageEvent[];
@@ -205,6 +228,8 @@ function build(
     category: base.category,
     title: base.title,
     detail: base.detail,
+    why: base.why,
+    tier: base.tier ?? (base.impact === "none" || base.impact === "low" ? "fix" : "try"),
     savings: {
       currentUsd: base.currentUsd,
       optimizedUsd,
@@ -248,15 +273,36 @@ const evidence = (kind: EvidenceClass, basis: string): Evidence => ({ kind, basi
  * ------------------------------------------------------------------ */
 
 /**
- * The same read-only tool call repeated in a session. The duplicate is written
- * into the cacheable prefix and re-read by every later call, so it compounds.
+ * The calls that share one context: the main conversation between compactions,
+ * or one subagent run. A subagent starts empty, so reading what the main
+ * conversation read is not a repeat; neither is re-reading after a compaction.
+ */
+function contexts(ctx: Ctx): UsageEvent[][] {
+  const out = new Map<string, UsageEvent[]>();
+  for (const events of ctx.sessions.values()) {
+    for (const e of events) {
+      const who = e.isSubagent ? `sub:${e.turnId ?? ""}` : "main";
+      const key = `${e.sessionId}|${who}|${e.contextEpoch ?? 0}`;
+      const arr = out.get(key);
+      if (arr) arr.push(e);
+      else out.set(key, [e]);
+    }
+  }
+  return [...out.values()];
+}
+
+/**
+ * The same read-only tool call repeated in one context, with nothing changed in
+ * between. The duplicate is written into the cacheable prefix and re-read by
+ * every later call, so it compounds. An edit to the file, or any change for a
+ * search, makes the next read a fresh one.
  */
 function repeatToolCalls(ctx: Ctx): OptimizationFinding | null {
   let wasted = 0;
   const perSignature = new Map<string, { count: number; cost: number; tokens: number }>();
   const touched = new Set<UsageEvent>();
 
-  for (const events of ctx.sessions.values()) {
+  for (const events of contexts(ctx)) {
     const seen = new Map<string, number>();
     for (let i = 0; i < events.length; i++) {
       const e = events[i]!;
@@ -264,6 +310,16 @@ function repeatToolCalls(ctx: Ctx): OptimizationFinding | null {
       const rate = inputRateOf(e);
       const policy = cachePolicyOf(e);
       for (const t of e.tools) {
+        if (!t.isError && isMutating(t)) {
+          // A change retires reads of the file it touched, and every search.
+          for (const sig of [...seen.keys()]) {
+            const file = sig.startsWith("Read:") ? sig.slice(5).replace(/#[^#]*$/, "") : null;
+            if (file === null ? !sig.startsWith("WebFetch:") : !t.target || t.target === file) {
+              seen.delete(sig);
+            }
+          }
+          continue;
+        }
         if (!READ_ONLY_TOOLS.has(t.name)) continue;
         const prior = seen.get(t.signature) ?? 0;
         seen.set(t.signature, prior + 1);
@@ -293,10 +349,11 @@ function repeatToolCalls(ctx: Ctx): OptimizationFinding | null {
 
   return build(ctx, {
     rule: "repeat-tool-calls",
+    why: "A repeat is written into the conversation again and re-read by every later call, so it keeps costing until the conversation ends or is compacted.",
     category: "context-bloat",
     title: `${totalRepeats} redundant re-reads of content already in context`,
     detail:
-      "The same file or search was fetched again inside a single session. Each duplicate is re-written into the cacheable prefix and then re-read by every subsequent call in that session, so the cost compounds with session length rather than being a one-off.",
+      "The same file or search was fetched again in the same conversation, with nothing edited in between. Re-reads after an edit, after a compaction or by a subagent are not counted. Each duplicate is re-written into the cacheable prefix and then re-read by every later call, so the cost compounds with conversation length.",
     currentUsd,
     optimizedUsd: currentUsd - wasted,
     events,
@@ -308,8 +365,8 @@ function repeatToolCalls(ctx: Ctx): OptimizationFinding | null {
     impact: "none",
     risk: "safe",
     assumptions: [
-      "A duplicate read returns the same content the session already had.",
-      "The duplicate stays in the prefix for the remainder of the session.",
+      "A duplicate read returns the same content the conversation already had: no edit to that file, and no change at all for a search, came in between.",
+      "The duplicate stays in the prefix until the conversation ends or is compacted.",
       "Removing it changes nothing else about the call.",
     ],
     calculation:
@@ -325,7 +382,11 @@ function repeatToolCalls(ctx: Ctx): OptimizationFinding | null {
 /** Calls that did no reasoning and produced little output, on an expensive model. */
 const OVERSPEC_TIERS = new Set(["frontier", "balanced"]);
 
-function isMechanical(e: UsageEvent): boolean {
+/**
+ * One independent request (SDK, imports) judged by its own shape. Agent calls
+ * are judged by their task instead: one step of a hard task looks like this too.
+ */
+function isMechanicalCall(e: UsageEvent): boolean {
   return (
     OVERSPEC_TIERS.has(priceFor(e.model)?.tier ?? "") &&
     e.thinkingTokens === 0 &&
@@ -358,14 +419,18 @@ function downgradeTargetFor(modelId: string): ModelPrice | null {
   const ceiling = blendedRate(from);
   for (const tier of STEP_DOWN[from.tier] ?? []) {
     let best: ModelPrice | null = null;
+    let sibling: ModelPrice | null = null;
     for (const m of allModels()) {
       if (m.provider !== from.provider || m.tier !== tier) continue;
       const rate = blendedRate(m);
       if (rate >= ceiling) continue;
+      // The model's own smaller variant (gpt-5.4 to gpt-5.4-mini) beats a
+      // cheaper one from an older generation.
+      if (m.id.startsWith(`${from.id}-`) && !sibling) sibling = m;
       // Ties keep the first listed, which is the newest.
       if (!best || rate < blendedRate(best)) best = m;
     }
-    if (best) return best;
+    if (sibling ?? best) return sibling ?? best;
   }
   return null;
 }
@@ -376,62 +441,167 @@ function listOf(items: string[]): string {
   return `${items.slice(0, -1).join(", ")} and ${items[items.length - 1]}`;
 }
 
+/** A call's recorded tokens priced on another model, on the rate card of its day. */
+function repriced(e: UsageEvent, from: ModelPrice, to: ModelPrice) {
+  const now = ratesFor(from, { at: e.ts, speed: e.speed, batch: e.batch });
+  const then = ratesFor(to, { at: e.ts, batch: e.batch });
+  const priceWith = (r: typeof now) =>
+    (e.inputTokens * r.inputPerM +
+      e.outputTokens * r.outputPerM +
+      e.cacheReadTokens * r.cachedInputPerM +
+      e.cacheWrite5mTokens * r.cacheWrite5mPerM +
+      e.cacheWrite1hTokens * r.cacheWrite1hPerM) /
+    M;
+  return { before: priceWith(now), after: priceWith(then) };
+}
+
+/**
+ * What switching the main conversation to `to` costs up front: its cache is
+ * the old model's, so the first call writes the whole context again instead of
+ * reading it. A subagent starts empty and writes its cache on either model.
+ */
+function reloadCost(to: ModelPrice, contextTokens: number, at: string): number {
+  const r = ratesFor(to, { at });
+  return (contextTokens * (Math.max(r.inputPerM, r.cacheWrite5mPerM) - r.cachedInputPerM)) / M;
+}
+
+/** "23 quick edits and 14 lookups". */
+function kindMix(tasks: Task[]): string {
+  const counts = new Map<string, number>();
+  for (const t of tasks) counts.set(t.kind, (counts.get(t.kind) ?? 0) + 1);
+  return listOf(
+    [...counts]
+      .sort((a, b) => b[1] - a[1])
+      .map(([k, n]) => `${n} ${TASK_KIND_LABEL[k as Task["kind"]]}${n === 1 ? "" : "s"}`),
+  );
+}
+
 function modelFit(ctx: Ctx): OptimizationFinding | null {
   let currentUsd = 0;
   let optimizedUsd = 0;
   const events: UsageEvent[] = [];
   const samples: { desc: string; saved: number }[] = [];
-  // Targets actually used, so the advice can name them rather than guess.
+  // Targets and sources actually used, so the advice can name them rather than guess.
   const targets = new Map<string, ModelPrice>();
+  const sources = new Set<string>();
+  // "Opus 5.5 to Sonnet 5.5": each source with its own step down.
+  const pairs = new Map<string, string>();
+  let calls = 0;
 
+  // Independent requests, one at a time.
   for (const e of ctx.data.events) {
+    if (ctx.taskOf.has(e.id) || !isMechanicalCall(e)) continue;
     const price = priceFor(e.model);
-    if (!price || !isMechanical(e)) continue;
-
-    const targetPrice = downgradeTargetFor(e.model);
-    if (!targetPrice) continue;
-
-    const contextUsed =
-      e.inputTokens + e.cacheReadTokens + e.cacheWrite5mTokens + e.cacheWrite1hTokens;
-    if (contextUsed > targetPrice.contextTokens * 0.9) continue;
-
-    const now = ratesFor(price, { at: e.ts, speed: e.speed, batch: e.batch });
-    const then = ratesFor(targetPrice, { at: e.ts, batch: e.batch });
-    const priceWith = (r: typeof now) =>
-      (e.inputTokens * r.inputPerM +
-        e.outputTokens * r.outputPerM +
-        e.cacheReadTokens * r.cachedInputPerM +
-        e.cacheWrite5mTokens * r.cacheWrite5mPerM +
-        e.cacheWrite1hTokens * r.cacheWrite1hPerM) /
-      M;
-
-    const before = priceWith(now);
-    const after = priceWith(then);
+    const target = downgradeTargetFor(e.model);
+    if (!price || !target || contextOf(e) > target.contextTokens * 0.9) continue;
+    const { before, after } = repriced(e, price, target);
     if (after >= before) continue;
-
     currentUsd += before;
     optimizedUsd += after;
     events.push(e);
-    targets.set(targetPrice.id, targetPrice);
+    calls++;
+    targets.set(target.id, target);
+    sources.add(price.label);
+    pairs.set(price.label, target.label);
     if (samples.length < 5) {
       samples.push({
-        desc: `${modelLabel(e.model)} -> ${targetPrice.label} · ${fmtTokens(contextUsed)} ctx · ${e.outputTokens} out · ${e.tools[0]?.name ?? "no tool"}`,
+        desc: `${modelLabel(e.model)} -> ${target.label} · ${fmtTokens(contextOf(e))} ctx · ${e.outputTokens} out · ${e.tools[0]?.name ?? "no tool"}`,
         saved: before - after,
       });
     }
   }
 
-  const saving = currentUsd - optimizedUsd;
-  if (saving < 0.01 || events.length < 5) return null;
+  // Agent work, by finished task. Consecutive quick tasks in one conversation
+  // switch together and pay one reload; a subagent pays none.
+  const counted: Task[] = [];
+  const taskSamples: { desc: string; saved: number }[] = [];
+  const eligible = (t: Task): ModelPrice | null => {
+    const price = priceFor(t.model);
+    if (!t.done || !MECHANICAL_TASKS.has(t.kind) || !price || !OVERSPEC_TIERS.has(price.tier)) {
+      return null;
+    }
+    const target = downgradeTargetFor(t.model);
+    return target && t.maxContext <= target.contextTokens * 0.9 ? target : null;
+  };
+  const runs: Task[][] = [];
+  const open = new Map<string, Task[]>();
+  for (const t of ctx.tasks) {
+    const fits = eligible(t) !== null;
+    if (t.isSubagent) {
+      if (fits) runs.push([t]);
+      continue;
+    }
+    const run = open.get(t.sessionId);
+    if (!fits) open.delete(t.sessionId);
+    else if (run) run.push(t);
+    else {
+      const fresh = [t];
+      open.set(t.sessionId, fresh);
+      runs.push(fresh);
+    }
+  }
+  for (const run of runs) {
+    const first = run[0]!;
+    const target = eligible(first)!;
+    let before = 0;
+    let after = 0;
+    const perTask: { t: Task; saved: number }[] = [];
+    for (const t of run) {
+      let b = 0;
+      let a = 0;
+      for (const e of t.events) {
+        const fromPrice = priceFor(e.model);
+        const to = downgradeTargetFor(e.model);
+        if (!fromPrice || !to) continue;
+        const r = repriced(e, fromPrice, to);
+        b += r.before;
+        a += Math.min(r.after, r.before);
+      }
+      before += b;
+      after += a;
+      perTask.push({ t, saved: b - a });
+    }
+    const reload = first.isSubagent ? 0 : reloadCost(target, first.firstContext, first.start);
+    if (before - after - reload <= 0) continue;
 
-  const share = ctx.data.events.length ? (events.length / ctx.data.events.length) * 100 : 0;
+    currentUsd += before;
+    optimizedUsd += after + reload;
+    for (const { t, saved } of perTask) {
+      events.push(...t.events);
+      counted.push(t);
+      targets.set(eligible(t)!.id, eligible(t)!);
+      sources.add(priceFor(t.model)!.label);
+      pairs.set(priceFor(t.model)!.label, eligible(t)!.label);
+      taskSamples.push({
+        desc: `${TASK_KIND_LABEL[t.kind]} · ${t.calls} call${t.calls === 1 ? "" : "s"}${t.filesEdited ? ` · ${t.filesEdited} file${t.filesEdited === 1 ? "" : "s"}` : ""} · ${fmtTokens(t.firstContext)} ctx${t.isSubagent ? " · subagent" : ""} · ${modelLabel(t.model)} -> ${eligible(t)!.label}`,
+        saved,
+      });
+    }
+  }
+
+  const saving = currentUsd - optimizedUsd;
+  const tasks = counted.length;
+  if (saving < 0.01 || (calls < 5 && tasks < 5)) return null;
+
   const names = listOf([...targets.values()].map((t) => t.label));
+  const from = listOf([...sources]);
+  const pairText = listOf([...pairs].map(([a, b]) => `${a} to ${b}`));
+  const subagents = counted.filter((t) => t.isSubagent).length;
+  const what =
+    tasks > 0
+      ? `${tasks} quick task${tasks === 1 ? "" : "s"}${calls >= 5 ? ` and ${calls} simple calls` : ""}`
+      : `${calls} simple calls`;
+  const shapeNote =
+    tasks > 0
+      ? `Each task took at most ${QUICK_MAX_CALLS} calls, edited at most ${QUICK_MAX_FILES} files, failed at most once, thought for under ${fmtTokens(TASK_REASONING_TOKENS)} tokens and ended with a short answer (${kindMix(counted)}${subagents ? `; ${subagents} in subagents` : ""}).`
+      : "Each call had no reasoning tokens, a short output and at most one tool call.";
 
   return build(ctx, {
     rule: "model-fit",
+    why: `These jobs were within reach of a model one tier down, so the bigger model's price bought nothing extra: the same work costs ${currentUsd > 0 ? Math.round((1 - optimizedUsd / currentUsd) * 100) : 0}% less there.`,
     category: "model-selection",
-    title: `${events.length} mechanical calls ran on an over-specified model`,
-    detail: `${share.toFixed(0)}% of your requests use a model whose capabilities exceed the detected workload: no reasoning tokens, short output, at most one tool call. Re-priced on ${names}, that same traffic costs ${usd(optimizedUsd)} instead of ${usd(currentUsd)}.`,
+    title: `${what} ran on ${from}`,
+    detail: `${shapeNote} Re-priced on ${names}${tasks > 0 ? ", including reloading a conversation into its cache where it would switch mid-way" : ""}, the same work costs ${usd(optimizedUsd)} instead of ${usd(currentUsd)}.`,
     currentUsd,
     optimizedUsd,
     events,
@@ -441,28 +611,43 @@ function modelFit(ctx: Ctx): OptimizationFinding | null {
     ),
     confidence: confidenceOf({
       measured: true,
-      sample: events.length,
+      sample: tasks + calls,
       tokenProfileStable: false,
     }),
     impact: "medium",
     risk: "needs-verification",
     assumptions: [
       "The cheaper model produces a comparable token profile. A different model may be more or less verbose.",
-      "The affected calls remain mechanical in future traffic at the same rate.",
+      ...(tasks > 0
+        ? [
+            "A task is judged by its shape (calls, files edited, failures, output), never by what was asked. Tasks still running are left out.",
+            "Switching back afterwards finds the bigger model's cache still warm.",
+          ]
+        : []),
+      "Similar work keeps arriving at the same rate.",
       "Every affected call fits inside the context window of the model it would move to.",
       "Quality is unverified until `optimaizr verify model-fit` replays this traffic.",
     ],
-    calculation: `Each call re-priced one tier down on the cheapest model from its own provider (${names}) using its recorded token counts and the rate cards in force on the day of the call, then summed.`,
-    observations: samples.map((s) => `${s.desc}, would save ${usd(s.saved)}`),
-    fix: `Route mechanical steps to ${names} and keep the bigger model for planning and multi-step reasoning. In agent setups this is usually a sub-agent model override, not a change to your main model.`,
+    calculation: `Each call re-priced one tier down on the cheapest model from its own provider (${names}) using its recorded token counts and the rate cards in force on the day of the call.${tasks > 0 ? " Consecutive quick tasks in one conversation switch together and pay one cache reload of the context the first one started with; a run whose reload outweighs its saving is left out. Subagents pay no reload." : ""}`,
+    observations: [...taskSamples, ...samples]
+      .sort((a, b) => b.saved - a.saved)
+      .slice(0, 5)
+      .map((s) => `${s.desc}, would save ${usd(s.saved)}`),
+    fix:
+      tasks > 0
+        ? `Move quick edits and lookups one model down (${pairText}) and keep the bigger model for planning, debugging and multi-step work: /model before a run of small tasks, or a subagent for them.`
+        : `Route mechanical steps to ${names} and keep the bigger model for planning and multi-step reasoning.`,
     candidate: {
       kind: "swap-model",
       // A single target collapses to `to`; mixed-provider traffic resolves
       // per call instead, so nothing is ever re-routed across vendors.
       to: targets.size === 1 ? [...targets.keys()][0] : undefined,
       targetFor: (modelId: string) => downgradeTargetFor(modelId)?.id,
-      matches: isMechanical,
-      description: `Route mechanical calls to ${names}`,
+      matches: (e) => {
+        const task = ctx.taskOf.get(e.id);
+        return task ? counted.includes(task) : isMechanicalCall(e);
+      },
+      description: `Route ${tasks > 0 ? "quick tasks" : "mechanical calls"} to ${names}`,
     },
   });
 }
@@ -505,6 +690,7 @@ function cacheChurn(ctx: Ctx): OptimizationFinding | null {
 
   return build(ctx, {
     rule: "cache-churn",
+    why: "Input served from cache costs a fraction of the normal rate; this traffic pays full price for a prefix it has sent before.",
     category: "caching",
     title: `Only ${(summary.cacheHitRate * 100).toFixed(0)}% of input tokens are served from cache`,
     detail:
@@ -587,6 +773,7 @@ function repeatedContext(ctx: Ctx): OptimizationFinding | null {
 
   return build(ctx, {
     rule: "repeated-context",
+    why: "Context that recurs across requests could be cached at a fraction of the price, but is paid in full every time.",
     category: "caching",
     title: `The same context is re-sent across ${recurring.length} recurring prompt pattern${recurring.length === 1 ? "" : "s"}`,
     detail:
@@ -647,6 +834,7 @@ function promptBloat(ctx: Ctx): OptimizationFinding | null {
 
   return build(ctx, {
     rule: "prompt-bloat",
+    why: "The system prompt is billed on every request, so its size is multiplied across all of your traffic.",
     category: "context-bloat",
     title: `System prompt averages ${fmtTokens(avgTokens)} tokens on every call`,
     detail:
@@ -684,73 +872,135 @@ function promptBloat(ctx: Ctx): OptimizationFinding | null {
   });
 }
 
-/** Mechanical calls in the top decile of context size: a large bill for a small job. */
+/** Below this many quick tasks there is no "typical" to compare against. */
+const CONTEXT_BASELINE_TASKS = 20;
+
+/**
+ * Small jobs that carried far more context than similar small jobs usually do:
+ * a long conversation's history dragged into a quick edit or lookup. Agent work
+ * is compared task to task; independent requests by their own top decile.
+ */
 function oversizedInput(ctx: Ctx): OptimizationFinding | null {
-  const contextOf = (e: UsageEvent) =>
-    e.inputTokens + e.cacheReadTokens + e.cacheWrite5mTokens + e.cacheWrite1hTokens;
-
-  const sizes = ctx.data.events.map(contextOf).sort((a, b) => a - b);
-  if (sizes.length < 20) return null;
-  const p90 = sizes[Math.floor(sizes.length * 0.9)]!;
-  if (p90 < 50_000) return null;
-
-  const heavy = ctx.data.events.filter((e) => contextOf(e) >= p90 && e.category === "mechanical");
-  if (heavy.length < 5) return null;
-
-  // Charge the context above the median as the avoidable part.
-  const median = sizes[Math.floor(sizes.length * 0.5)]!;
   let saving = 0;
-  for (const e of heavy) {
-    const excess = Math.max(0, contextOf(e) - median);
-    const rate = inputRateOf(e);
-    const policy = cachePolicyOf(e);
-    // Most of it is cached, so credit it at the cache-read rate.
-    saving += (excess * rate * policy.read) / M;
-  }
-  if (saving < 0.01) return null;
+  const events: UsageEvent[] = [];
+  const observations: string[] = [];
 
-  const currentUsd = heavy.reduce((s, e) => s + e.cost.total, 0);
+  // Agent tasks, against the quick tasks around them.
+  const quick = ctx.tasks.filter((t) => t.done && MECHANICAL_TASKS.has(t.kind));
+  let flagged: Task[] = [];
+  let baseline = 0;
+  if (quick.length >= CONTEXT_BASELINE_TASKS) {
+    const starts = quick.map((t) => t.firstContext).sort((a, b) => a - b);
+    baseline = starts[Math.floor(starts.length / 2)]!;
+    const bar = Math.max(50_000, baseline * 3, baseline + 50_000);
+    flagged = quick.filter((t) => t.firstContext >= bar);
+    if (flagged.length < 5) flagged = [];
+    for (const t of flagged) {
+      for (const e of t.events) {
+        // Most of it is cached, so credit it at the cache-read rate.
+        saving +=
+          (Math.max(0, contextOf(e) - baseline) * inputRateOf(e) * cachePolicyOf(e).read) / M;
+      }
+      events.push(...t.events);
+    }
+    observations.push(
+      ...[...flagged]
+        .sort((a, b) => b.firstContext - a.firstContext)
+        .slice(0, 5)
+        .map(
+          (t) =>
+            `${TASK_KIND_LABEL[t.kind]} · started at ${fmtTokens(t.firstContext)} ctx · ${t.calls} call${t.calls === 1 ? "" : "s"} · ${modelLabel(t.model)} · ${usd(t.costUsd)}`,
+        ),
+    );
+  }
+
+  // Independent requests in the top decile that did mechanical work.
+  const loose = ctx.data.events.filter((e) => !ctx.taskOf.has(e.id));
+  const sizes = loose.map(contextOf).sort((a, b) => a - b);
+  let heavy: UsageEvent[] = [];
+  let p90 = 0;
+  let median = 0;
+  if (sizes.length >= 20) {
+    p90 = sizes[Math.floor(sizes.length * 0.9)]!;
+    median = sizes[Math.floor(sizes.length * 0.5)]!;
+    if (p90 >= 50_000) {
+      heavy = loose.filter((e) => contextOf(e) >= p90 && e.category === "mechanical");
+      if (heavy.length < 5) heavy = [];
+    }
+    for (const e of heavy) {
+      saving += (Math.max(0, contextOf(e) - median) * inputRateOf(e) * cachePolicyOf(e).read) / M;
+    }
+    events.push(...heavy);
+    observations.push(
+      ...[...heavy]
+        .sort((a, b) => contextOf(b) - contextOf(a))
+        .slice(0, Math.max(0, 5 - observations.length))
+        .map(
+          (e) =>
+            `${modelLabel(e.model)} · ${fmtTokens(contextOf(e))} ctx → ${e.outputTokens} out · ${usd(e.cost.total)}`,
+        ),
+    );
+  }
+
+  if (saving < 0.01 || events.length === 0) return null;
+  const currentUsd = events.reduce((s, e) => s + e.cost.total, 0);
+  const tasks = flagged.length;
+  const typicalStart = tasks
+    ? [...flagged].sort((a, b) => a.firstContext - b.firstContext)[Math.floor(tasks / 2)]!
+        .firstContext
+    : 0;
 
   return build(ctx, {
     rule: "oversized-input",
+    why: "Every call in those tasks re-reads the whole history, so a small job costs as much as a big one.",
     category: "context-bloat",
-    title: `${heavy.length} mechanical calls carried ${fmtTokens(p90)}+ of context`,
-    detail: `These requests sit in the top 10% by context size but did mechanical work: short output, no reasoning, at most one tool. They are paying to carry a whole session's history to do a small job.`,
+    title: tasks
+      ? `${tasks} small tasks started with ~${fmtTokens(typicalStart)} of context; similar tasks start near ${fmtTokens(baseline)}`
+      : `${heavy.length} mechanical calls carried ${fmtTokens(p90)}+ of context`,
+    detail: tasks
+      ? `Quick edits and lookups in your usage typically start with about ${fmtTokens(baseline)} of context. These ${tasks} started with ${fmtTokens(typicalStart)} or more: history from earlier work in the same conversation, carried into a small job that did not use it. Long conversations doing substantial work are not counted.${heavy.length ? ` ${heavy.length} independent API calls show the same pattern.` : ""}`
+      : `These requests sit in the top 10% by context size but did mechanical work: short output, no reasoning, at most one tool. They are paying to carry a whole session's history to do a small job.`,
     currentUsd,
     optimizedUsd: currentUsd - saving,
-    events: heavy,
+    events,
     evidence: evidence(
       "inferred",
-      "Context sizes are measured; that the excess was unnecessary is inferred from workload class",
+      "Context sizes are measured; that the excess was unnecessary is inferred from what the task did",
     ),
-    confidence: confidenceOf({ measured: true, sample: heavy.length, tokenProfileStable: true }),
+    confidence: confidenceOf({
+      measured: true,
+      sample: tasks + heavy.length,
+      tokenProfileStable: true,
+    }),
     impact: "low",
     risk: "needs-verification",
     assumptions: [
-      `Context above the median (${fmtTokens(median)}) was not needed for these specific calls.`,
+      tasks
+        ? `Context above what similar small tasks start with (${fmtTokens(baseline)}) was not needed for these tasks.`
+        : `Context above the median (${fmtTokens(median)}) was not needed for these specific calls.`,
       "The excess is served from cache, so it is credited at the cache-read rate.",
-      "Workload class is inferred from call shape, not from intent.",
+      "What a task was doing is inferred from its shape (calls, files edited, output), not from what was asked.",
     ],
-    calculation: `For each top-decile mechanical call: (context tokens - median ${fmtTokens(median)}) x input rate x cache-read multiplier.`,
-    observations: heavy
-      .sort((a, b) => contextOf(b) - contextOf(a))
-      .slice(0, 5)
-      .map(
-        (e) =>
-          `${modelLabel(e.model)} · ${fmtTokens(contextOf(e))} ctx → ${e.outputTokens} out · ${usd(e.cost.total)}`,
-      ),
-    fix: "Split long-running sessions, or dispatch mechanical steps to a fresh short context instead of inheriting the whole conversation. In agent harnesses this is a sub-agent with its own context.",
+    calculation: tasks
+      ? `For each call of a flagged task: (context tokens - ${fmtTokens(baseline)}, the median start of ${quick.length} quick tasks) x input rate x cache-read multiplier. A task is flagged when it started at 3x that median or more, and at least 50K.`
+      : `For each top-decile mechanical call: (context tokens - median ${fmtTokens(median)}) x input rate x cache-read multiplier.`,
+    observations,
+    fix: tasks
+      ? "Start small, unrelated jobs in a fresh conversation (/clear), or /compact when you change topic. A subagent also starts with an empty context."
+      : "Split long-running sessions, or dispatch mechanical steps to a fresh short context instead of inheriting the whole conversation. In agent harnesses this is a sub-agent with its own context.",
   });
 }
 
 /** Rule: unusually large model outputs. */
 function oversizedOutput(ctx: Ctx): OptimizationFinding | null {
-  const outputs = ctx.data.events.map((e) => e.outputTokens).sort((a, b) => a - b);
+  // A call that wrote a file put the file in its output: that length is the work.
+  const prose = ctx.data.events.filter((e) => !e.tools.some(isEdit));
+  const outputs = prose.map((e) => e.outputTokens).sort((a, b) => a - b);
   if (outputs.length < 20) return null;
   const p95 = outputs[Math.floor(outputs.length * 0.95)]!;
   if (p95 < 4000) return null;
 
-  const big = ctx.data.events.filter((e) => e.outputTokens >= p95);
+  const big = prose.filter((e) => e.outputTokens >= p95);
   if (big.length < 5) return null;
 
   const median = outputs[Math.floor(outputs.length * 0.5)]!;
@@ -772,6 +1022,7 @@ function oversizedOutput(ctx: Ctx): OptimizationFinding | null {
 
   return build(ctx, {
     rule: "oversized-output",
+    why: "Output tokens are the most expensive tokens, around five times the input rate, and these answers are outliers in length.",
     category: "context-bloat",
     title: `${big.length} responses exceeded ${fmtTokens(p95)} output tokens`,
     detail: `Output tokens are the most expensive tokens you buy, typically five times the input rate. These responses are in the top 5% by length against a median of ${fmtTokens(median)}.${truncated > 0 ? ` ${truncated} hit the max_tokens ceiling, so they were cut off mid-answer and paid for in full.` : ""}`,
@@ -785,6 +1036,7 @@ function oversizedOutput(ctx: Ctx): OptimizationFinding | null {
     assumptions: [
       `Output beyond the median (${fmtTokens(median)}) was longer than the task required.`,
       "Reasoning tokens are excluded here; they are covered by the reasoning-effort rule.",
+      "Calls that wrote or edited a file are left out: their output is the file.",
       "A shorter response would still have satisfied the request.",
     ],
     calculation: `Responses above the 95th percentile (${fmtTokens(p95)}) are selected, then charged (visible output tokens - median ${fmtTokens(median)}) x the model's output rate.`,
@@ -799,45 +1051,73 @@ function oversizedOutput(ctx: Ctx): OptimizationFinding | null {
   });
 }
 
-/** Rule: failing tool calls repeated with the same arguments. */
+/** Fewer blind retries than this across the window reads as bad luck, not a habit. */
+const MIN_BLIND_RETRIES = 3;
+
+/**
+ * Rule: a failed tool call run again unchanged, with nothing changed in between
+ * (no edit, no command that changes state), so it could only fail the same way.
+ * Fix-and-rerun is normal debugging and is not counted.
+ */
 function errorLoops(ctx: Ctx): OptimizationFinding | null {
   let wasted = 0;
-  const loops = new Map<string, number>();
+  const loops = new Map<
+    string,
+    { repeats: number; streak: number; label: string; sessions: Set<string> }
+  >();
   const touched = new Set<UsageEvent>();
 
-  for (const events of ctx.sessions.values()) {
-    const failed = new Map<string, number>();
+  for (const events of contexts(ctx)) {
+    let changes = 0;
+    const failed = new Map<string, { at: number; streak: number }>();
     for (let i = 0; i < events.length; i++) {
       const e = events[i]!;
       const remaining = events.length - i - 1;
       const rate = inputRateOf(e);
       const policy = cachePolicyOf(e);
       for (const t of e.tools) {
-        if (!t.isError) continue;
-        const n = (failed.get(t.signature) ?? 0) + 1;
-        failed.set(t.signature, n);
-        if (n < 2) continue;
+        if (!t.isError) {
+          if (isMutating(t)) changes++;
+          failed.delete(t.signature);
+          continue;
+        }
+        const prev = failed.get(t.signature);
+        if (!prev || prev.at !== changes) {
+          failed.set(t.signature, { at: changes, streak: 1 });
+          continue;
+        }
+        prev.streak++;
         const tk = resultTokensOf(t);
         wasted +=
           (tk * rate * (policy.write5m + remaining * policy.read)) / M + e.cost.output * 0.25;
-        loops.set(t.signature, (loops.get(t.signature) ?? 0) + 1);
+        const agg = loops.get(t.signature) ?? {
+          repeats: 0,
+          streak: 0,
+          label: commandOf(t) ?? `${t.name} ${shortPath(t.target ?? t.signature)}`,
+          sessions: new Set<string>(),
+        };
+        agg.repeats++;
+        agg.streak = Math.max(agg.streak, prev.streak);
+        agg.sessions.add(e.sessionId);
+        loops.set(t.signature, agg);
         touched.add(e);
       }
     }
   }
 
-  if (wasted < 0.005 || loops.size === 0) return null;
+  const total = [...loops.values()].reduce((a, b) => a + b.repeats, 0);
+  if (wasted < 0.005 || total < MIN_BLIND_RETRIES) return null;
   const events = [...touched];
   const currentUsd = events.reduce((s, e) => s + e.cost.total, 0);
-  const top = [...loops.entries()].sort((a, b) => b[1] - a[1]).slice(0, 5);
-  const total = [...loops.values()].reduce((a, b) => a + b, 0);
+  const top = [...loops.values()].sort((a, b) => b.repeats - a.repeats).slice(0, 5);
+  const worst = top[0]!;
 
   return build(ctx, {
     rule: "error-loops",
+    why: "A blind retry can only fail the same way: you pay for the error and for the turn that produced it, and both stay in context.",
     category: "retries",
-    title: `${total} repeated failures of the same command`,
-    detail:
-      "The same tool call failed and was retried unchanged. Each attempt pays for the error output entering context and for the reasoning that produced the retry, and the failed output stays in the prefix for the rest of the session.",
+    title: `${total} retries of a failing command with nothing changed in between`,
+    detail: `A command failed and was run again exactly as before, with no edit or other change in between, so it could only fail the same way. The worst ran ${worst.streak} times in a row. Retrying after a fix is normal debugging and is not counted. Each blind retry pays for the error output entering context and for the turn that produced it.`,
     currentUsd,
     optimizedUsd: currentUsd - wasted,
     events,
@@ -846,13 +1126,16 @@ function errorLoops(ctx: Ctx): OptimizationFinding | null {
     impact: "none",
     risk: "safe",
     assumptions: [
-      "An identical retry of a failed call was avoidable.",
+      "A retry with the same arguments and nothing changed since the last failure was avoidable.",
       "A quarter of the retry turn's output tokens are attributable to the retry.",
     ],
     calculation:
-      "Per repeat: error tokens x input rate x (cache-write + remaining calls x cache-read), plus 25% of that turn's output cost.",
-    observations: top.map(([sig, n]) => `${shortPath(sig).slice(0, 60)}: failed ${n + 1}x`),
-    fix: "Cap identical retries at one, and require the arguments to change before a second attempt. Truncate long error output before it enters context.",
+      "Per blind retry: error tokens x input rate x (cache-write + remaining calls x cache-read), plus 25% of that turn's output cost.",
+    observations: top.map(
+      (l) =>
+        `${l.label.slice(0, 60)}: ${l.repeats} blind retr${l.repeats === 1 ? "y" : "ies"}, up to ${l.streak} in a row${l.sessions.size > 1 ? `, in ${l.sessions.size} sessions` : ""}`,
+    ),
+    fix: "When something fails twice, stop and change the approach: read the error, fix the cause, or ask Claude to try a different route. Starting a fresh conversation also clears the failed attempts from context. The optimAIzr mod holds a third identical attempt automatically.",
   });
 }
 
@@ -888,6 +1171,7 @@ function oversizedResults(ctx: Ctx): OptimizationFinding | null {
 
   return build(ctx, {
     rule: "oversized-tool-output",
+    why: "A huge tool result stays in context and is re-read by every call after it.",
     category: "context-bloat",
     title: `${offenders.length} tool results larger than 10K tokens`,
     detail:
@@ -927,7 +1211,11 @@ function thinkingSpend(ctx: Ctx): OptimizationFinding | null {
     const cost = e.cost.output * (e.thinkingTokens / e.outputTokens);
     thinkingCost += cost;
     const visible = e.outputTokens - e.thinkingTokens;
-    if (e.thinkingTokens > 500 && visible < 150 && e.tools.length <= 1) {
+    // An agent thinks before most steps; that is waste only if the whole task
+    // turned out to be a quick job.
+    const task = ctx.taskOf.get(e.id);
+    const quickJob = task ? task.done && MECHANICAL_TASKS.has(task.shape) : true;
+    if (quickJob && e.thinkingTokens > 500 && visible < 150 && e.tools.length <= 1) {
       shallowCost += cost;
       events.push(e);
     }
@@ -938,6 +1226,7 @@ function thinkingSpend(ctx: Ctx): OptimizationFinding | null {
 
   return build(ctx, {
     rule: "reasoning-effort",
+    why: "Thinking is billed as output, the most expensive tokens, and here it led to a short answer.",
     category: "reasoning",
     title: `${events.length} calls spent heavy reasoning on trivial output`,
     detail: `Reasoning tokens bill at the output rate. These calls thought for 500+ tokens and then produced under 150 tokens of visible output with at most one tool call: deliberation that did not change what the model did. Total reasoning spend in the window was ${usd(thinkingCost)}.`,
@@ -1015,6 +1304,7 @@ function spendConcentration(ctx: Ctx): OptimizationFinding | null {
 
   return build(ctx, {
     rule: "spend-concentration",
+    why: "A few workloads decide most of your bill, so that is where any change moves it.",
     category: "concentration",
     title: `${(shareOfWorkloads * 100).toFixed(0)}% of your workloads drive 80% of spend`,
     detail: `${count} of ${ranked.length} sessions account for ${usd(running)} of ${usd(ctx.totalCost)}. That is not waste: it is where optimisation effort actually pays back. A fix applied to these sessions is worth several times the same fix applied anywhere else.`,
@@ -1076,6 +1366,7 @@ function costSpike(ctx: Ctx): OptimizationFinding | null {
 
   return build(ctx, {
     rule: "cost-spike",
+    why: "A spike usually has one cause, such as a runaway loop or a huge input, and it recurs until that cause is found.",
     category: "anomaly",
     title: `Spend on ${worst.key} was ${costRatio.toFixed(1)}x the daily median`,
     detail: `${usd(worst.cost.total)} against a median day of ${usd(median)}, but only ${callRatio.toFixed(1)}x the usual call volume, so the cost per call rose to ${usd(perCall)} against ${usd(overallPerCall)} overall. Volume does not explain this one. optimAIzr cannot tell you why from usage data alone; it can only tell you it happened.`,
@@ -1150,6 +1441,7 @@ function pricingChange(ctx: Ctx): OptimizationFinding | null {
 
     return build(ctx, {
       rule: "pricing-change",
+      why: "The same traffic now costs a different amount, whatever you do.",
       category: "pricing",
       title: `${price.label} ${oldCard.label ?? "previous pricing"} ended ${oldCard.until ?? newCard.from}`,
       detail: `Your ${price.label} traffic in this window was largely billed at $${oldCard.inputPerM}/$${oldCard.outputPerM} per million. At the current $${newCard.inputPerM}/$${newCard.outputPerM} the same usage costs ${usd(atCurrentRates)} instead of ${usd(billed)}, a ${((delta / billed) * 100).toFixed(0)}% increase that arrives without any change on your side.`,
@@ -1186,6 +1478,230 @@ function pricingChange(ctx: Ctx): OptimizationFinding | null {
  * Every detector. Entries are named so a failure can say which one failed
  * (minification rewrites `Function.name`).
  */
+/* ------------------------------------------------------------------ *
+ * Levers: trade-offs sized from the user's own usage
+ * ------------------------------------------------------------------ */
+
+/** What a lever's figure rests on: the arithmetic is solid, the outcome is untested. */
+const LEVER_CONFIDENCE = {
+  level: "low" as const,
+  basis:
+    "the arithmetic uses recorded tokens, but the saving depends on a change in how you work, and its effect on quality is untested; possible until a before/after shows it",
+};
+
+/** Compact here: the window Claude Code is set to (it accepts 100K to 1M). */
+export const COMPACT_AT = 200_000;
+/** What a compacted conversation starts again with: summary, system prompt, re-attached files. */
+const AFTER_COMPACT = 40_000;
+/** The summary a compaction writes. */
+const SUMMARY_TOKENS = 8_000;
+/** Below this share of calls over the window, long conversations are not a habit. */
+const LONG_CALL_SHARE = 0.2;
+
+/** The agents whose settings a lever can name. */
+type Agent = "claude-code" | "codex";
+const AGENTS: Agent[] = ["claude-code", "codex"];
+const AGENT_NAME: Record<Agent, string> = { "claude-code": "Claude Code", codex: "Codex" };
+
+function compactSetting(agent: Agent): string {
+  return agent === "claude-code"
+    ? `Claude Code: add "env": { "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "${COMPACT_AT}" } to ~/.claude/settings.json`
+    : `Codex: set model_auto_compact_token_limit = ${COMPACT_AT} in ~/.codex/config.toml`;
+}
+
+/**
+ * Lever: compact earlier. Every call re-reads the conversation so far, and the
+ * agents only compact near the model's window, so long sessions get dearer with
+ * every call. Simulated per conversation: compact when it passes COMPACT_AT,
+ * restart at AFTER_COMPACT, and pay for each compaction's summary and reload.
+ */
+function contextCompaction(ctx: Ctx): OptimizationFinding | null {
+  const compactAt = `${Math.round(COMPACT_AT / 1000)}K`;
+  const agents = AGENTS.filter((a) => {
+    const calls = ctx.data.events.filter((e) => e.source === a);
+    const long = calls.filter((e) => contextOf(e) > COMPACT_AT).length;
+    return calls.length >= 50 && long / calls.length >= LONG_CALL_SHARE;
+  });
+  if (agents.length === 0) return null;
+  const mine = ctx.data.events.filter((e) => agents.includes(e.source as Agent));
+  const long = mine.filter((e) => contextOf(e) > COMPACT_AT).length;
+
+  let saved = 0;
+  let compactionCost = 0;
+  let compactions = 0;
+  let rereadUsd = 0;
+  const events: UsageEvent[] = [];
+  for (const conversation of contexts(ctx)) {
+    const first = conversation[0];
+    if (!first || !agents.includes(first.source as Agent) || first.isSubagent) continue;
+    let dropped = 0;
+    let last = 0;
+    for (const e of conversation) {
+      const price = priceFor(e.model);
+      if (!price) continue;
+      const r = ratesFor(price, { at: e.ts, speed: e.speed, batch: e.batch });
+      rereadUsd += (e.cacheReadTokens * r.cachedInputPerM) / M;
+      const actual = contextOf(e);
+      // The agent compacted on its own: the simulation starts over with it.
+      if (actual < last * 0.5) dropped = 0;
+      last = actual;
+      if (actual - dropped > COMPACT_AT) {
+        compactions++;
+        compactionCost +=
+          (COMPACT_AT * r.cachedInputPerM +
+            SUMMARY_TOKENS * r.outputPerM +
+            AFTER_COMPACT * (Math.max(r.inputPerM, r.cacheWrite5mPerM) - r.cachedInputPerM)) /
+          M;
+        dropped = actual - AFTER_COMPACT;
+      }
+      const fewer = Math.max(0, Math.min(dropped, actual - AFTER_COMPACT, e.cacheReadTokens));
+      if (fewer > 0) {
+        saved += (fewer * r.cachedInputPerM) / M;
+        events.push(e);
+      }
+    }
+  }
+  const net = saved - compactionCost;
+  if (net < 0.5 || events.length === 0) return null;
+
+  const names = listOf(agents.map((a) => AGENT_NAME[a]));
+  const sizes = mine.map(contextOf).sort((a, b) => a - b);
+  const median = sizes[Math.floor(sizes.length / 2)]!;
+  const p90 = sizes[Math.floor(sizes.length * 0.9)]!;
+  const spend = mine.reduce((t, e) => t + e.cost.total, 0);
+  const currentUsd = events.reduce((t, e) => t + e.cost.total, 0);
+
+  return build(ctx, {
+    rule: "context-compaction",
+    why: `Every call re-reads the whole conversation, so each call costs more than the last: re-reading took ${spend > 0 ? Math.round((rereadUsd / spend) * 100) : 0}% of your ${names} spend.`,
+    tier: "test",
+    category: "context-bloat",
+    title: `${Math.round((long / mine.length) * 100)}% of your ${names} calls carried over ${compactAt} of conversation`,
+    detail: `Your median call re-read ${fmtTokens(median)} of conversation and 1 in 10 re-read ${fmtTokens(p90)}: ${agents.length > 1 ? "both agents compact" : `${names} compacts`} only near the model's context window. Compacting at ${compactAt} would have meant about ${compactions} compaction${compactions === 1 ? "" : "s"} and ${usd(net)} less over this window, after paying for them.`,
+    currentUsd,
+    optimizedUsd: currentUsd - net,
+    events,
+    evidence: evidence(
+      "estimated",
+      "Context sizes are measured; the compactions and what they keep are simulated",
+    ),
+    confidence: LEVER_CONFIDENCE,
+    impact: "medium",
+    risk: "needs-verification",
+    assumptions: [
+      `A compacted conversation starts again at about ${fmtTokens(AFTER_COMPACT)}: the summary, the system prompt and recently read files.`,
+      `Each compaction costs one summary call over ${compactAt} of context, writing about ${fmtTokens(SUMMARY_TOKENS)} tokens, and one uncached reload of what remains.`,
+      "The work after a compaction takes as many calls as it did. A summary can lose details from early in the conversation, which can cost calls back.",
+      "Subagents are left out: they start with a fresh context.",
+    ],
+    calculation: `Each main conversation replayed in order: when its context passes ${compactAt}, it compacts to ${fmtTokens(AFTER_COMPACT)} and the compaction is charged; every later call re-reads that much less, priced at its own cache-read rate. Where the agent compacted on its own, the replay starts over from there.`,
+    observations: [
+      `median call: ${fmtTokens(median)} of conversation, 90th percentile: ${fmtTokens(p90)}`,
+      `${compactions} compaction${compactions === 1 ? "" : "s"} at ${compactAt} would have cost ${usd(compactionCost)} and saved ${usd(saved)} of re-reading`,
+    ],
+    fix: `Compact at ${compactAt}. ${agents.map(compactSetting).join("; ")}. Or compact by hand (/compact) when you change topic. A summary can drop details from early in a long conversation, so try it for a week and compare.`,
+  });
+}
+
+/** `claude-sonnet-5-5` -> `sonnet`, the alias Claude Code's /model and settings take. */
+function familyAlias(modelId: string): string {
+  return /haiku|sonnet|opus|fable/.exec(modelId.toLowerCase())?.[0] ?? modelId;
+}
+
+function defaultSetting(agent: Agent, target: ModelPrice): string {
+  if (agent === "claude-code") {
+    const alias = familyAlias(target.id);
+    return `Claude Code: /model ${alias}, or "model": "${alias}" in ~/.claude/settings.json`;
+  }
+  return `Codex: model = "${target.id}" in ~/.codex/config.toml, or /model`;
+}
+
+/**
+ * Lever: a smaller default model. Agent tasks on a frontier model that did no
+ * heavy reasoning and did not get stuck, re-priced one tier down. Whether the
+ * smaller model does them as well is the open question, so it is a test.
+ */
+function modelDefault(ctx: Ctx): OptimizationFinding | null {
+  let before = 0;
+  let after = 0;
+  let frontierSpend = 0;
+  const counted: Task[] = [];
+  const targets = new Map<string, ModelPrice>();
+  const sources = new Set<string>();
+  const byAgent = new Map<Agent, ModelPrice>();
+  for (const t of ctx.tasks) {
+    if (!AGENTS.includes(t.source as Agent)) continue;
+    const price = priceFor(t.model);
+    if (!price || price.tier !== "frontier") continue;
+    frontierSpend += t.costUsd;
+    if (!t.done || t.kind === "reasoning" || t.kind === "debugging") continue;
+    const target = downgradeTargetFor(t.model);
+    if (!target || t.maxContext > target.contextTokens * 0.9) continue;
+    for (const e of t.events) {
+      const from = priceFor(e.model);
+      const to = downgradeTargetFor(e.model);
+      if (!from || !to) continue;
+      const r = repriced(e, from, to);
+      before += r.before;
+      after += Math.min(r.after, r.before);
+    }
+    counted.push(t);
+    targets.set(target.id, target);
+    sources.add(price.label);
+    if (!byAgent.has(t.source as Agent)) byAgent.set(t.source as Agent, target);
+  }
+  const saving = before - after;
+  if (counted.length < 10 || saving < 0.5) return null;
+
+  const events = counted.flatMap((t) => t.events);
+  const names = listOf([...targets.values()].map((t) => t.label));
+  const from = listOf([...sources]);
+  const spentOn = counted.reduce((s, t) => s + t.costUsd, 0);
+  const settings = AGENTS.filter((a) => byAgent.has(a)).map((a) =>
+    defaultSetting(a, byAgent.get(a)!),
+  );
+
+  return build(ctx, {
+    rule: "model-default",
+    why: `${names} ${targets.size > 1 ? "do" : "does"} the same tokens for ${before > 0 ? Math.round((saving / before) * 100) : 0}% less, and work without heavy reasoning is where a smaller model most often keeps up.`,
+    tier: "test",
+    category: "model-selection",
+    title: `${frontierSpend > 0 ? Math.round((spentOn / frontierSpend) * 100) : 0}% of your ${from} spend went to tasks without heavy reasoning`,
+    detail: `${counted.length} tasks on ${from} (${kindMix(counted)}) thought for under ${fmtTokens(TASK_REASONING_TOKENS)} tokens and failed at most once. On ${names} the same tokens cost ${usd(after)} instead of ${usd(before)}, ${before > 0 ? Math.round((saving / before) * 100) : 0}% less, if ${names} does the work as well.`,
+    currentUsd: before,
+    optimizedUsd: after,
+    events,
+    evidence: evidence(
+      "estimated",
+      `Recorded tokens re-priced on ${names}; whether the work comes out as well is untested`,
+    ),
+    confidence: LEVER_CONFIDENCE,
+    impact: "high",
+    risk: "needs-verification",
+    assumptions: [
+      `${names} does these tasks as well, in a similar number of tokens.`,
+      "Sessions start on the smaller model, so there is no cache reload; switching up for a hard task costs one.",
+      "Tasks with heavy reasoning or repeated failures stay on the bigger model and are not counted.",
+    ],
+    calculation: `Every finished agent task on ${from} without heavy reasoning or repeated failures, each call re-priced one tier down (${names}) at the rates of its day.`,
+    observations: [
+      `${counted.length} of your ${from} tasks qualify: ${kindMix(counted)}`,
+      `kept on ${from}: tasks with ${fmtTokens(TASK_REASONING_TOKENS)}+ thinking tokens or two or more failures`,
+    ],
+    fix: `Make the smaller model your default and switch up for debugging, design and hard problems. ${settings.join("; ")}. \`optimaizr verify model-default\` replays a sample of your own calls on it first${byAgent.has("claude-code") ? "; `optimaizr live --auto` with the mod switches Claude Code as you go" : ""}.`,
+    candidate: {
+      kind: "swap-model",
+      to: targets.size === 1 ? [...targets.keys()][0] : undefined,
+      targetFor: (modelId: string) => downgradeTargetFor(modelId)?.id,
+      matches: (e) => {
+        const task = ctx.taskOf.get(e.id);
+        return task ? counted.includes(task) : false;
+      },
+      description: `Make ${names} the default for work without heavy reasoning`,
+    },
+  });
+}
+
 const RULES: Array<{ name: string; run: (ctx: Ctx) => OptimizationFinding | null }> = [
   { name: "pricing-change", run: pricingChange },
   { name: "cost-spike", run: costSpike },
@@ -1200,6 +1716,8 @@ const RULES: Array<{ name: string; run: (ctx: Ctx) => OptimizationFinding | null
   { name: "oversized-output", run: oversizedOutput },
   { name: "oversized-tool-output", run: oversizedResults },
   { name: "error-loops", run: errorLoops },
+  { name: "context-compaction", run: contextCompaction },
+  { name: "model-default", run: modelDefault },
 ];
 
 /** What one analysis pass produced, including what went wrong during it. */
@@ -1259,8 +1777,11 @@ export function findWaste(data: Dataset): OptimizationFinding[] {
  * often claim the same call, so each call counts once, at its largest claim.
  * Fixing both would save a bit more, so this is a floor.
  */
-export function recoverableWindow(findings: OptimizationFinding[]): number {
-  const { byEvent, unattributed } = recoverableByEvent(findings);
+export function recoverableWindow(
+  findings: OptimizationFinding[],
+  tiers: FindingTier | FindingTier[] = "fix",
+): number {
+  const { byEvent, unattributed } = recoverableByEvent(findings, tiers);
   let total = unattributed;
   for (const usd of byEvent.values()) total += usd;
   return total;
@@ -1269,17 +1790,23 @@ export function recoverableWindow(findings: OptimizationFinding[]): number {
 /**
  * The de-overlapped recoverable amount on each call, keyed by event id: the
  * per-call view of `recoverableWindow`, for totals over any subset of calls.
- * `unattributed` is what findings without call-level attribution claim.
+ * `unattributed` is what findings without call-level attribution claim. One
+ * tier at a time: the headline is `fix`, and `test` levers are never totalled.
  */
-export function recoverableByEvent(findings: OptimizationFinding[]): {
+export function recoverableByEvent(
+  findings: OptimizationFinding[],
+  tiers: FindingTier | FindingTier[] = "fix",
+): {
   byEvent: Map<string, number>;
   unattributed: number;
 } {
   const byEvent = new Map<string, number>();
   let unattributed = 0;
 
+  const wanted = new Set(Array.isArray(tiers) ? tiers : [tiers]);
   for (const f of findings) {
-    if (f.advisory) continue;
+    // A finding from before tiers existed is treated as clear waste.
+    if (f.advisory || !wanted.has(f.tier ?? "fix")) continue;
     if (f.claimByEvent.size === 0) {
       // No per-call attribution, so nothing can overlap with it: count it whole.
       unattributed += f.savings.windowUsd;
@@ -1301,13 +1828,30 @@ function windowDaysOf(findings: OptimizationFinding[]): number {
   return 1;
 }
 
-/** Total recoverable saving per month, de-overlapped and excluding advisories. */
-export function recoverableMonthly(findings: OptimizationFinding[]): number {
-  return (recoverableWindow(findings) / windowDaysOf(findings)) * MONTH_DAYS;
+/** Total recoverable saving per month for one tier, de-overlapped and excluding advisories. */
+export function recoverableMonthly(
+  findings: OptimizationFinding[],
+  tiers: FindingTier | FindingTier[] = "fix",
+): number {
+  return (recoverableWindow(findings, tiers) / windowDaysOf(findings)) * MONTH_DAYS;
 }
 
-export function recoverableAnnual(findings: OptimizationFinding[]): number {
-  return (recoverableWindow(findings) / windowDaysOf(findings)) * YEAR_DAYS;
+export function recoverableAnnual(
+  findings: OptimizationFinding[],
+  tiers: FindingTier | FindingTier[] = "fix",
+): number {
+  return (recoverableWindow(findings, tiers) / windowDaysOf(findings)) * YEAR_DAYS;
+}
+
+/**
+ * What `try` findings add on top of clear waste, per month: fix and try
+ * combined (each call once) minus fix alone, so "+$X" never counts a call twice.
+ */
+export function likelyMonthly(findings: OptimizationFinding[]): number {
+  return Math.max(
+    0,
+    recoverableMonthly(findings, ["fix", "try"]) - recoverableMonthly(findings, "fix"),
+  );
 }
 
 /** Where two or more detectors claim the same calls. */
@@ -1323,8 +1867,11 @@ export interface SavingsOverlap {
 }
 
 /** Explains the gap between the findings added up and the headline total. */
-export function savingsOverlap(findings: OptimizationFinding[]): SavingsOverlap {
-  const active = findings.filter((f) => !f.advisory);
+export function savingsOverlap(
+  findings: OptimizationFinding[],
+  tiers: FindingTier[] = ["fix", "try"],
+): SavingsOverlap {
+  const active = findings.filter((f) => !f.advisory && tiers.includes(f.tier ?? "fix"));
 
   const claimants = new Map<string, OptimizationFinding[]>();
   for (const f of active) {
@@ -1349,7 +1896,7 @@ export function savingsOverlap(findings: OptimizationFinding[]): SavingsOverlap 
   }
 
   const naiveWindowUsd = active.reduce((s, f) => s + f.savings.windowUsd, 0);
-  const recoverableWindowUsd = recoverableWindow(findings);
+  const recoverableWindowUsd = recoverableWindow(findings, tiers);
 
   return {
     naiveWindowUsd,

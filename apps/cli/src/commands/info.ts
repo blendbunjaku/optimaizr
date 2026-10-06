@@ -114,13 +114,17 @@ export function cmdPrivacy(): void {
     ],
     [
       "Network calls",
-      "During 'verify', to your own model providers. To api.typesafe.ai only when you pass --jev.",
+      "During 'verify', to your own model providers. To api.typesafe.ai only when you pass --jev. Once a day, a background request to registry.npmjs.org for the latest optimaizr version number.",
+    ],
+    [
+      "Version check",
+      'Sends nothing about you or your usage; never in CI, with --json or when output is piped. Off with OPTIMAIZR_NO_UPDATE_CHECK=1 or "updateCheck": false in the config.',
     ],
     [
       "Jev (live --jev)",
       "Off by default. Sends route names, model ids, token medians and tool names - never prompts, completions or tool payloads. Run 'live --jev --dry-run' to print the exact bytes first.",
     ],
-    ["Telemetry", "None. No analytics, no phone-home, no crash reporting."],
+    ["Telemetry", "None. No analytics, no usage reporting, no crash reporting."],
     ["Usage records", `${optimaizrDir()}/events.jsonl - tokens, cost, latency, model.`],
     [
       "Live overrides",
@@ -128,13 +132,17 @@ export function cmdPrivacy(): void {
     ],
     [
       "Claude Code mod",
-      `Reads usage figures and the commands Claude runs (in memory, for the retry guard), never prompts or file contents, and makes no network calls. Each session it runs in keeps ${optimaizrDir()}/mod/sessions/<id>.json: id, folder, version, times.`,
+      `Reads usage figures and the commands Claude runs (in memory, for the retry guard), never prompts or file contents, and makes no network calls. Each session it runs in keeps ${optimaizrDir()}/mod/sessions/<id>.json: id, folder, version, times and Claude Code's own plan meters.`,
     ],
     ["Prompt contents", "Not stored unless you explicitly enable capture."],
     ["Capture", "Off by default. Sampled, redacted and local-only when on."],
     ["Redaction", "Emails, API keys, bearer tokens and long digit runs are masked before write."],
     ["API keys", "Never read, stored or logged. verify uses your environment variable directly."],
     ["Model training", "Your data is never used to train anything."],
+    [
+      "Settings changes",
+      `${optimaizrDir()}/settings-changes.json - what 'apply context-compaction' changed in Claude Code or Codex, so 'undo' can put it back.`,
+    ],
     ["Retention", `Until you delete it. 'rm -rf ${optimaizrDir()}' removes everything.`],
   ];
   for (const [k, v] of rows) {
@@ -222,14 +230,14 @@ export const HELP_COMMANDS: Array<[string, string]> = [
   ["optimaizr recommend", "ranked actions with impact and confidence"],
   ["optimaizr live", "watch calls as they happen and surface fixes"],
   ["optimaizr mod", "the Claude Code mod: install it, see it running"],
-  ["optimaizr limit", "record a Claude session-limit hit (with --plan)"],
+  ["optimaizr limit", "record a Claude session-limit hit"],
   ["optimaizr show <rule>", "the requests a recommendation touches"],
   ["optimaizr simulate <rule>", "what the change would cost"],
   ["optimaizr waste", "just the opportunities"],
   ["optimaizr tokens", "token analytics and the priciest calls"],
   ["optimaizr verify <rule>", "prove a fix against your quality bar first"],
   ["optimaizr apply <rule>", "get the exact change, once verified"],
-  ["optimaizr undo <rule>", "revert a model swap accepted in live"],
+  ["optimaizr undo <rule>", "revert a switch or setting optimAIzr applied"],
   ["optimaizr import <file>", "load a CSV or JSON usage export"],
   ["optimaizr report", "write a shareable dashboard"],
   ["optimaizr card", "your last 30 days as an image to post"],
@@ -238,6 +246,7 @@ export const HELP_COMMANDS: Array<[string, string]> = [
   ["optimaizr privacy", "what is collected, stored and sent"],
   ["optimaizr metrics", "how much analysed, how much found"],
   ["optimaizr feedback", "report a bug or a wrong number"],
+  ["optimaizr changelog", "what changed in this version (--all for every one)"],
 ];
 
 export function cmdHelp(): void {
