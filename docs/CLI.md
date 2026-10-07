@@ -64,41 +64,48 @@ await withRoute("summarise-ticket", () => client.messages.create({ ... }));
 **Your coding agents: nothing to change.**
 
 ```bash
-npx optimaizr scan
+npm i -g optimaizr
+optimaizr                      # your profile: what your plan does, savings found
+optimaizr live                 # in a second terminal while you work
+optimaizr statusline on        # Claude Code: context and cache countdown under the prompt
 ```
 
 Reads Claude Code transcripts straight from `~/.claude/projects` and Codex
 sessions from `~/.codex/sessions`. No instrumentation, no config, no production
 changes, and both land in one dataset, so Anthropic and OpenAI agent spend sit
-in the same report.
+in the same report. The [Claude Code mod](#inside-claude-code) is optional: it
+adds switching models mid-session and `/optimaizr handoff`, and nothing above
+needs it.
 
 ---
 
 ## Commands
 
-|                             |                                                                 |
-| --------------------------- | --------------------------------------------------------------- |
-| `optimaizr audit`           | The savings audit: what you spend, what is recoverable, and why |
-| `optimaizr profile`         | One screen: what your plan does, savings found, the biggest win |
-| `optimaizr scan`            | Spend, savings, and what to do about it                         |
-| `optimaizr why`             | Drill into where the money actually goes                        |
-| `optimaizr live`            | Watch calls as they happen and surface fixes interactively      |
-| `optimaizr mod`             | Install steps and status of the Claude Code mod                 |
-| `optimaizr recommend`       | Ranked actions with impact and confidence                       |
-| `optimaizr show <rule>`     | The individual requests a recommendation touches                |
-| `optimaizr simulate <rule>` | What the change would cost, arithmetically                      |
-| `optimaizr waste`           | Just the opportunities                                          |
-| `optimaizr tokens`          | Token analytics and the priciest individual calls               |
-| `optimaizr verify <rule>`   | Prove a fix against your quality bar before applying it         |
-| `optimaizr apply <rule>`    | Get the exact change, gated on a passing verification           |
-| `optimaizr undo <rule>`     | Take back a switch or a setting optimAIzr applied               |
-| `optimaizr import <file>`   | Load a CSV or JSON usage export you already have                |
-| `optimaizr report`          | Write a shareable HTML dashboard                                |
-| `optimaizr guide`           | Which model for which job, with the arithmetic                  |
-| `optimaizr providers`       | What can be read, and from where                                |
-| `optimaizr privacy`         | What is collected, stored and sent                              |
-| `optimaizr metrics`         | How much has been analysed, and how much found                  |
-| `optimaizr changelog`       | What changed in this version (`--all` for every version)        |
+|                             |                                                                      |
+| --------------------------- | -------------------------------------------------------------------- |
+| `optimaizr audit`           | The savings audit: what you spend, what is recoverable, and why      |
+| `optimaizr profile`         | One screen: what your plan does, savings found, the biggest win      |
+| `optimaizr scan`            | Spend, savings, and what to do about it                              |
+| `optimaizr sessions`        | How your sessions run: length, size, where re-reading takes over     |
+| `optimaizr why`             | Drill into where the money actually goes                             |
+| `optimaizr live`            | Watch calls as they happen and surface fixes interactively           |
+| `optimaizr statusline on`   | Context, re-read cost and cache countdown under Claude Code's prompt |
+| `optimaizr mod`             | Install steps and status of the Claude Code mod                      |
+| `optimaizr recommend`       | Ranked actions with impact and confidence                            |
+| `optimaizr show <rule>`     | The individual requests a recommendation touches                     |
+| `optimaizr simulate <rule>` | What the change would cost, arithmetically                           |
+| `optimaizr waste`           | Just the opportunities                                               |
+| `optimaizr tokens`          | Token analytics and the priciest individual calls                    |
+| `optimaizr verify <rule>`   | Prove a fix against your quality bar before applying it              |
+| `optimaizr apply <rule>`    | Get the exact change, gated on a passing verification                |
+| `optimaizr undo <rule>`     | Take back a switch or a setting optimAIzr applied                    |
+| `optimaizr import <file>`   | Load a CSV or JSON usage export you already have                     |
+| `optimaizr report`          | Write a shareable HTML dashboard                                     |
+| `optimaizr guide`           | Which model for which job, with the arithmetic                       |
+| `optimaizr providers`       | What can be read, and from where                                     |
+| `optimaizr privacy`         | What is collected, stored and sent                                   |
+| `optimaizr metrics`         | How much has been analysed, and how much found                       |
+| `optimaizr changelog`       | What changed in this version (`--all` for every version)             |
 
 Flags: `--why` (show every calculation and assumption), `--days N`,
 `--project STR`, `--source all|agents|sdk`, `--tz utc|local|<IANA>`, `--json`.
@@ -114,8 +121,11 @@ never prompts.
 ## Inside Claude Code
 
 Claude Code 2.1.287 and later runs mods, plugins that work inside it. The
-optimAIzr mod lives in [`mods/optimaizr`](../mods/optimaizr) and installs from
-this repository's marketplace, in a Claude Code session:
+optimAIzr mod is optional: the CLI, `live` and the status line work without it.
+It adds what only code inside the session can do, switching the model of the
+session you are in and `/optimaizr handoff`. It lives in
+[`mods/optimaizr`](../mods/optimaizr) and installs from this repository's
+marketplace, in a Claude Code session:
 
 ```
 /plugin marketplace add blendbunjaku/optimaizr
@@ -468,6 +478,26 @@ limitation of the method rather than a hidden one.
 Narrow with `optimaizr why anthropic sonnet-5`. With more than one vendor
 connected, the provider level is where the comparison starts.
 
+### How your sessions run
+
+`optimaizr sessions` answers the questions a re-reading figure raises: are the
+costs in a few long sessions or many medium ones, and at what size does
+re-reading take over? All of it is measured, nothing is estimated:
+
+- calls, prompts and peak context per session (median and the top 1 in 10)
+- the cache hit rate
+- main-conversation calls by context size (0-50K up to 500K+), each band's
+  share of spend and how much of its cost was re-reading, with the size where
+  re-reading becomes half the cost of a call
+- the costliest tenth of sessions and their share, the sessions that passed
+  200K, and spend by session length
+- cold cache returns: how often a long conversation was picked up after its
+  cache expired, and what rewriting it cost against reading it warm
+
+Re-reading is priced at the cache-read rate, already the cheapest rate there
+is. It is the biggest share because every call pays it. `--json` prints the
+same numbers, and `profile --json` carries them as `sessions`.
+
 ---
 
 ## Every opportunity carries its own economics
@@ -625,8 +655,10 @@ call. Two levers are sized from your own sessions and shown as TEST, "up to":
 - **Compact earlier.** Each conversation is replayed as if the agent compacted
   at 200K (it otherwise compacts near the model's window, 1M on current
   models): the compaction's summary call and reload are charged, and every
-  later call re-reads less. Where the agent compacted on its own, the replay
-  starts over from there.
+  later call re-reads less. The reload is a cache rebuild, priced at the write
+  rate the conversation uses (Claude Code writes 1-hour cache, 2x the input
+  rate). Where the agent compacted on its own, the replay starts over from
+  there.
 - **A smaller default model.** Finished tasks on a frontier model without heavy
   reasoning or repeated failures, re-priced one tier down. Whether the smaller
   model does them as well is what `optimaizr verify model-default` checks.
@@ -658,6 +690,43 @@ with what happened, the change, the money and how sure it is; press **Y** to
 apply, **N** to skip, **D** for the evidence. On Ctrl-C it prints what the run
 saw and found.
 
+It also follows each long conversation's cache (50K tokens or more). The status
+line shows the warm cache that expires first (`cache 161.0K warm 42m`, or for
+Codex, whose cache lifetime OpenAI decides, how long it has sat idle). Five
+minutes before a cache expires it says what coming back after will cost, when
+that is 50 cents or more, and a call that did come back to an expired cache is
+shown with what it paid against a warm read. With `--json` these arrive as
+`{"cache": {"kind": "expiring" | "cold", ...}}`.
+
+### Under Claude Code's prompt
+
+```
+optimaizr statusline on        # sets statusLine in ~/.claude/settings.json
+optimaizr statusline off       # takes it out again
+optimaizr statusline           # on or off, and what it shows for your latest conversation
+```
+
+Claude Code runs `optimaizr statusline` under its prompt, every 30 seconds
+and after each message:
+
+```
+◉ optimAIzr · 161.0K context, $0.032/call to re-read · cache warm 42m · 5h 61%
+◉ optimAIzr · 161.0K context, $0.032/call to re-read · cache warm 12m, then $1.29 to write again · leaving? handoff note, then /clear · 5h 61%
+◉ optimAIzr · 161.0K context, $0.032/call to re-read · cache expired, next message writes it all again ($1.29) · new task? /clear first · 5h 61%
+```
+
+It reads the end of the session's transcript for the last call's time and
+cache writes, and Claude Code's own 5-hour meter from the input it is given
+(the weekly one too, from 75%). Nothing is written. The command uses the node
+and script it was applied with, by full path, so a different `node` first on
+Claude Code's PATH can't break it. A status line you already have is never
+replaced: `statusline on` says so and changes nothing. `apply statusline` and
+`undo statusline` do the same as `on` and `off`.
+
+Claude Code draws status lines in a terminal. The VS Code extension's chat panel
+doesn't show one, so there run `optimaizr live` in the editor's terminal for the
+same countdown.
+
 ---
 
 ## What it looks for
@@ -673,6 +742,7 @@ saw and found.
 | `prompt-bloat`          | An oversized system prompt paid for on every call               |
 | `repeated-context`      | The same prefix re-sent across separate sessions                |
 | `oversized-input`       | Small jobs inheriting a whole session's context                 |
+| `cold-resume`           | A long conversation picked up after its cache expired           |
 | `oversized-output`      | Responses far longer than the median, including truncated ones  |
 | `spend-concentration`   | A few workloads driving most of the bill                        |
 | `cost-spike`            | A sudden increase that call volume does not explain             |

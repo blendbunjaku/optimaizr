@@ -20,10 +20,12 @@ import {
   renderHtml,
   renderNextSteps,
   renderRecommendations,
+  renderSessions,
   renderSummary,
   rule,
   ruleErrorWarning,
   savingsOverlap,
+  sessionStats,
   summarize,
   tokens as fmtTokens,
   toRecommendations,
@@ -275,6 +277,23 @@ export async function cmdAudit(args: Args): Promise<void> {
   console.log(`  ${blue("optimaizr recommend")} ${dim("to see exactly what to change")}`);
   console.log(`  ${blue("optimaizr report")}    ${dim("to produce a shareable savings report")}`);
   console.log("");
+}
+
+/**
+ * `optimaizr sessions`: what the sessions look like. Session
+ * length, conversation size, where re-reading takes over, where the money is,
+ * cold cache returns.
+ */
+export async function cmdSessions(args: Args): Promise<void> {
+  const data = await load(args);
+  if (data.events.length === 0) return emptyNotice();
+
+  const c = sessionStats(data);
+  if (args.flags.json) {
+    console.log(JSON.stringify(c, null, 2));
+    return;
+  }
+  console.log(renderSessions(c, summarize(data, summaryOptions(args))));
 }
 
 /** `optimaizr metrics`: how much was analysed and found, computed locally. */

@@ -12,19 +12,25 @@ export const START = Date.UTC(2026, 8, 20, 10, 0);
 /**
  * A Claude Code transcript from a short script:
  * `{ prompt }`, `{ compact: true }`, or a call `{ tools, out, think, ctx, side, stop }`
- * where each tool is `{ name, input, error?, chars? }`.
+ * where each tool is `{ name, input, error?, chars? }`. Records are 20 seconds
+ * apart; `gap` adds minutes before one. A call's `write` sets its cache write,
+ * 500 by default, and `hour` makes it a 1-hour write.
  */
 export function transcript(session, script) {
   const recs = [];
   let n = 0;
-  const at = () => new Date(START + n++ * 20_000).toISOString();
+  let idle = 0;
+  const at = (s = {}) => {
+    idle += (s.gap ?? 0) * 60_000;
+    return new Date(START + idle + n++ * 20_000).toISOString();
+  };
   for (const s of script) {
     const side = s.side ? { isSidechain: true, agentId: s.side } : {};
     if (s.prompt !== undefined) {
       recs.push({
         type: "user",
         uuid: `${session}-u${n}`,
-        timestamp: at(),
+        timestamp: at(s),
         sessionId: session,
         ...side,
         ...(s.meta ? { isMeta: true } : {}),
@@ -48,9 +54,10 @@ export function transcript(session, script) {
       name: t.name,
       input: t.input ?? {},
     }));
+    const write = s.write ?? 500;
     recs.push({
       type: "assistant",
-      timestamp: at(),
+      timestamp: at(s),
       sessionId: session,
       cwd: "/w",
       ...side,
@@ -63,7 +70,8 @@ export function transcript(session, script) {
           output_tokens: s.out ?? 200,
           ...(s.think ? { output_tokens_details: { thinking_tokens: s.think } } : {}),
           cache_read_input_tokens: s.ctx ?? 20_000,
-          cache_creation_input_tokens: 500,
+          cache_creation_input_tokens: write,
+          ...(s.hour ? { cache_creation: { ephemeral_1h_input_tokens: write } } : {}),
         },
         content: tools,
       },
@@ -120,20 +128,25 @@ export const lookup = (opts = {}) => [
 ];
 
 /**
- * A Codex rollout from a short script: `{ prompt }`, `{ compact: true }`, or a
- * call `{ cmd, error, out, think, ctx }`. Each call is one billed token_count.
+ * A Codex rollout from a short script: `{ prompt, gap }`, `{ compact: true }`,
+ * or a call `{ cmd, error, out, think, ctx, cached }`. Each call is one billed
+ * token_count; `gap` is minutes away before the prompt.
  */
 export function codexRollout(id, script, model = "gpt-5.4") {
   const rows = [];
   let n = 0;
+  let idle = 0;
   let total = 0;
-  const at = () => new Date(START + n++ * 20_000).toISOString();
-  const row = (type, payload) => rows.push({ type, timestamp: at(), payload });
+  const at = (gap = 0) => {
+    idle += gap * 60_000;
+    return new Date(START + idle + n++ * 20_000).toISOString();
+  };
+  const row = (type, payload, gap) => rows.push({ type, timestamp: at(gap), payload });
   row("session_meta", { id, cwd: "/w" });
   row("turn_context", { model });
   for (const s of script) {
     if (s.prompt !== undefined) {
-      row("event_msg", { type: "user_message", message: s.prompt });
+      row("event_msg", { type: "user_message", message: s.prompt }, s.gap);
       continue;
     }
     if (s.compact) {
@@ -163,7 +176,7 @@ export function codexRollout(id, script, model = "gpt-5.4") {
         total_token_usage: { total_tokens: total },
         last_token_usage: {
           input_tokens: ctx,
-          cached_input_tokens: Math.max(0, ctx - 500),
+          cached_input_tokens: s.cached ?? Math.max(0, ctx - 500),
           output_tokens: out,
           reasoning_output_tokens: s.think ?? 0,
           total_tokens: ctx + out,

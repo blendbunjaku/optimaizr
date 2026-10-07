@@ -8,6 +8,7 @@ import {
   cmdRecommend,
   cmdReport,
   cmdScan,
+  cmdSessions,
   cmdTokens,
   cmdWaste,
   cmdWhy,
@@ -26,6 +27,7 @@ import {
 } from "./commands/info.js";
 import { cmdLive, cmdUndo } from "./commands/live.js";
 import { cmdMod } from "./commands/mod.js";
+import { cmdStatusline, cmdStatuslineSwitch } from "./commands/statusline.js";
 import { cmdCard, cmdLimit, cmdProfile } from "./commands/plan.js";
 import { cmdVerify } from "./commands/verify.js";
 import { activeConfig, initConfig } from "./config.js";
@@ -42,6 +44,8 @@ async function main(): Promise<void> {
   if (args.flags.version || first === "version" || first === "-v") return cmdVersion();
   // The detached background half of the update check: no output, ever.
   if (first === "__update-check") return runUpdateCheck();
+  // Claude Code runs this every few seconds: no config, no update check.
+  if (first === "statusline" && args.positional.length === 0) return cmdStatusline();
 
   initConfig();
   await run(args);
@@ -76,6 +80,10 @@ async function run(args: ReturnType<typeof parseArgs>): Promise<void> {
       return cmdAudit(args);
     case "profile":
       return cmdProfile(args);
+    case "sessions":
+      return cmdSessions(args);
+    case "statusline":
+      return cmdStatuslineSwitch(args);
     case "limit":
       return cmdLimit(args);
     case "card":
@@ -113,7 +121,9 @@ async function run(args: ReturnType<typeof parseArgs>): Promise<void> {
       return cmdChangelog(args);
     default: {
       // Exit non-zero so scripts notice a typo.
-      const names = HELP_COMMANDS.map(([c]) => c.split(" ")[1]!);
+      const names = HELP_COMMANDS.map(([c]) => c.split(" ")[1]).filter((n): n is string =>
+        Boolean(n),
+      );
       const guess = names.find((n) => n.startsWith(args.command.slice(0, 2)));
       console.log("");
       console.log(

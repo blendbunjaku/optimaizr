@@ -1,6 +1,6 @@
 {
   "name": "optimaizr",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "private": false,
   "description": "Spend fewer tokens on the same work. A local CLI that finds wasted tokens in Claude Code, Codex and your own API calls.",
   "type": "module",

@@ -1,14 +1,16 @@
 import {
   blue,
   contextOf,
+  COUNTDOWN_MS,
   dim,
   green,
+  minutesLabel,
   modelLabel,
   tokens as fmtTokens,
   usd,
   yellow,
 } from "@optimaizr/core";
-import type { UsageEvent } from "@optimaizr/core";
+import type { CacheWatch, UsageEvent } from "@optimaizr/core";
 
 /**
  * The one line at the bottom of `optimaizr live` that says it is working: what
@@ -30,6 +32,8 @@ export interface StatusState {
   checkedAt?: number;
   /** Findings shown this run, by rule, with what each could have saved. */
   found: Map<string, number>;
+  /** Long conversations and how long their cache stays warm. */
+  cache?: CacheWatch;
 }
 
 export function emptyStatus(now = Date.now()): StatusState {
@@ -50,6 +54,24 @@ function ago(ms: number): string {
   if (sec < 60) return `${sec}s ago`;
   const min = Math.round(sec / 60);
   return min < 60 ? `${min}m ago` : `${Math.round(min / 60)}h ago`;
+}
+
+/** The warm cache that expires first, or how long a Codex one has sat idle. */
+function cachePart(s: StatusState, now: number): string | null {
+  const warm = s.cache?.warm(now) ?? [];
+  const first = warm[0];
+  if (!first) return null;
+  if (first.expiresAt === null) {
+    return dim(
+      `codex ${fmtTokens(first.context)} idle ${minutesLabel(now - Date.parse(first.event.ts))}`,
+    );
+  }
+  const left = first.expiresAt - now;
+  const text =
+    warm.length === 1
+      ? `cache ${fmtTokens(first.context)} warm ${minutesLabel(left)}`
+      : `${warm.length} warm caches, first expires in ${minutesLabel(left)}`;
+  return left <= COUNTDOWN_MS ? yellow(text) : dim(text);
 }
 
 /** The line itself, without colour codes counted against the width. */
@@ -75,6 +97,8 @@ export function renderStatus(s: StatusState, now = Date.now(), width = 120): str
         keep: 5,
       });
     }
+    const cache = cachePart(s, now);
+    if (cache) parts.push({ text: cache, keep: 6 });
     const found = [...s.found.values()].reduce((t, v) => t + v, 0);
     parts.push({
       text:

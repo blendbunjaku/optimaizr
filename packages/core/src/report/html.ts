@@ -528,7 +528,7 @@ footer code{font-family:var(--mono);font-size:.92em;white-space:nowrap;backgroun
   <h2>Usage</h2>
   <div class="stats">
     <div class="stat"><div class="stat-val">${fmtTokens(summary.totalTokens)}</div><div class="stat-key">Total tokens</div><div class="stat-note">${fmtTokens(summary.avgTokensPerCall)} per call</div></div>
-    <div class="stat"><div class="stat-val">${(summary.cacheHitRate * 100).toFixed(1)}%</div><div class="stat-key">Cache hit rate</div><div class="stat-note">reads bill at 10%</div></div>
+    <div class="stat"><div class="stat-val">${(summary.cacheHitRate * 100).toFixed(1)}%</div><div class="stat-key">Cache hit rate</div><div class="stat-note">reads bill at a tenth of input or less</div></div>
     <div class="stat"><div class="stat-val">${fmtTokens(summary.outputTokens)}</div><div class="stat-key">Tokens out</div><div class="stat-note">${fmtTokens(summary.thinkingTokens)} reasoning</div></div>
     <div class="stat"><div class="stat-val">${usd(summary.avgCostPerCall)}</div><div class="stat-key">Cost per call</div><div class="stat-note">${summary.latency ? `${(summary.latency.p50 / 1000).toFixed(1)}s p50` : "average"}</div></div>
     ${cacheWriteStat(summary)}

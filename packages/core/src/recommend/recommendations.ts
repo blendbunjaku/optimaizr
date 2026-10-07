@@ -30,6 +30,7 @@ function actionFor(f: OptimizationFinding): string {
   // Rules without a mechanical candidate still need an imperative line.
   if (f.rule === "context-compaction") return "Compact conversations earlier";
   if (f.rule === "oversized-input") return "Start small jobs in a fresh context";
+  if (f.rule === "cold-resume") return "Leave a handoff note and start fresh after a long break";
   if (f.rule === "oversized-output") return "Cap response length on outlier requests";
   if (f.rule === "oversized-tool-output") return "Filter oversized tool output at the source";
   if (f.rule === "error-loops") return "Stop retrying identical failing calls";
@@ -55,7 +56,7 @@ function rationaleFor(f: OptimizationFinding, totalCalls: number): string {
       return `${f.affected.calls} requests spent more on deliberation than on the answer they produced.`;
     case "cache-churn":
     case "repeated-context":
-      return `Input that could be served from cache at a tenth of the rate is being paid for in full.`;
+      return `Input that could be served from cache at a tenth of the rate or less is being paid for in full.`;
     case "repeat-tool-calls":
       return `Content already present in the session is being fetched and re-billed on every later call.`;
     case "prompt-bloat":
@@ -64,6 +65,8 @@ function rationaleFor(f: OptimizationFinding, totalCalls: number): string {
       return `Output tokens cost roughly five times input tokens, and these responses are outliers.`;
     case "oversized-input":
       return `Small jobs are inheriting a whole session's context to do their work.`;
+    case "cold-resume":
+      return `Coming back after the cache expired writes the whole conversation again at the cache-write rate.`;
     case "oversized-tool-output":
       return `Oversized tool results stay in context and are re-billed for the rest of the session.`;
     case "error-loops":

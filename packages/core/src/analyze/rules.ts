@@ -22,6 +22,7 @@ import type {
   UsageEvent,
 } from "../domain/types.js";
 import { classifyAll } from "./classify.js";
+import { COLD_MIN_CONTEXT, coldResumes } from "./cold.js";
 import {
   buildTasks,
   commandOf,
@@ -694,7 +695,7 @@ function cacheChurn(ctx: Ctx): OptimizationFinding | null {
     category: "caching",
     title: `Only ${(summary.cacheHitRate * 100).toFixed(0)}% of input tokens are served from cache`,
     detail:
-      "Cache reads bill at a tenth of the input rate, so a stable prefix is the single largest lever on input cost. A hit rate this low means the cacheable prefix is changing between calls or cache_control breakpoints are missing.",
+      "Cache reads bill at a tenth of the input rate or less, so a stable prefix is the single largest lever on input cost. A hit rate this low means the cacheable prefix is changing between calls or cache_control breakpoints are missing.",
     currentUsd,
     optimizedUsd: currentUsd - saving,
     events,
@@ -799,7 +800,7 @@ function repeatedContext(ctx: Ctx): OptimizationFinding | null {
     calculation:
       "Uncached input tokens on recurring prefixes x input rate x (1 - cache-read multiplier).",
     observations: rows.slice(0, 5),
-    fix: "Mark the recurring prefix with a 1-hour cache_control breakpoint so it survives between sessions. The write costs twice the input rate once, then every later read costs a tenth.",
+    fix: "Mark the recurring prefix with a 1-hour cache_control breakpoint so it survives between sessions. The write costs twice the input rate once, then every later read costs a tenth or less.",
     candidate: {
       kind: "enable-cache",
       matches: (e) => Boolean(e.prefixHash),
@@ -838,7 +839,7 @@ function promptBloat(ctx: Ctx): OptimizationFinding | null {
     category: "context-bloat",
     title: `System prompt averages ${fmtTokens(avgTokens)} tokens on every call`,
     detail:
-      "A large system prompt is paid for on every single request. Where it is cached the cost is a tenth, but it still occupies context and still bills, and most long prompts carry restated instructions and dead examples.",
+      "A large system prompt is paid for on every single request. Where it is cached the cost is a tenth or less, but it still occupies context and still bills, and most long prompts carry restated instructions and dead examples.",
     currentUsd,
     optimizedUsd: currentUsd - saving,
     events: withSystem,
@@ -1531,15 +1532,24 @@ function contextCompaction(ctx: Ctx): OptimizationFinding | null {
   let compactions = 0;
   let rereadUsd = 0;
   const events: UsageEvent[] = [];
+  let hourWrites = 0;
+  let allWrites = 0;
   for (const conversation of contexts(ctx)) {
     const first = conversation[0];
     if (!first || !agents.includes(first.source as Agent) || first.isSubagent) continue;
+    // The reload is written at the cache lifetime the conversation uses. Claude
+    // Code writes 1-hour cache, which costs 2x the input rate, not 1.25x.
+    const w1 = conversation.reduce((s, e) => s + e.cacheWrite1hTokens, 0);
+    const w5 = conversation.reduce((s, e) => s + e.cacheWrite5mTokens, 0);
+    hourWrites += w1;
+    allWrites += w1 + w5;
     let dropped = 0;
     let last = 0;
     for (const e of conversation) {
       const price = priceFor(e.model);
       if (!price) continue;
       const r = ratesFor(price, { at: e.ts, speed: e.speed, batch: e.batch });
+      const writeRate = w1 > w5 ? r.cacheWrite1hPerM : Math.max(r.inputPerM, r.cacheWrite5mPerM);
       rereadUsd += (e.cacheReadTokens * r.cachedInputPerM) / M;
       const actual = contextOf(e);
       // The agent compacted on its own: the simulation starts over with it.
@@ -1550,7 +1560,7 @@ function contextCompaction(ctx: Ctx): OptimizationFinding | null {
         compactionCost +=
           (COMPACT_AT * r.cachedInputPerM +
             SUMMARY_TOKENS * r.outputPerM +
-            AFTER_COMPACT * (Math.max(r.inputPerM, r.cacheWrite5mPerM) - r.cachedInputPerM)) /
+            AFTER_COMPACT * (writeRate - r.cachedInputPerM)) /
           M;
         dropped = actual - AFTER_COMPACT;
       }
@@ -1590,7 +1600,7 @@ function contextCompaction(ctx: Ctx): OptimizationFinding | null {
     risk: "needs-verification",
     assumptions: [
       `A compacted conversation starts again at about ${fmtTokens(AFTER_COMPACT)}: the summary, the system prompt and recently read files.`,
-      `Each compaction costs one summary call over ${compactAt} of context, writing about ${fmtTokens(SUMMARY_TOKENS)} tokens, and one uncached reload of what remains.`,
+      `Each compaction costs one summary call over ${compactAt} of context, writing about ${fmtTokens(SUMMARY_TOKENS)} tokens, and one reload of what remains, written to the cache again${hourWrites > allWrites / 2 ? " at the 1-hour write rate your conversations use" : ""}.`,
       "The work after a compaction takes as many calls as it did. A summary can lose details from early in the conversation, which can cost calls back.",
       "Subagents are left out: they start with a fresh context.",
     ],
@@ -1600,6 +1610,112 @@ function contextCompaction(ctx: Ctx): OptimizationFinding | null {
       `${compactions} compaction${compactions === 1 ? "" : "s"} at ${compactAt} would have cost ${usd(compactionCost)} and saved ${usd(saved)} of re-reading`,
     ],
     fix: `Compact at ${compactAt}. ${agents.map(compactSetting).join("; ")}. Or compact by hand (/compact) when you change topic. A summary can drop details from early in a long conversation, so try it for a week and compare.`,
+  });
+}
+
+/** A fresh session's own context: system prompt, tools and memory files. */
+const FRESH_START = 30_000;
+/** A handoff note: what changed, what was decided, what is open. */
+const HANDOFF_TOKENS = 1_500;
+/** Fewer cold returns than this is an accident, not a habit. */
+const COLD_MIN = 3;
+
+/** 75 -> "1h 15m", 600 -> "10h". */
+function duration(minutes: number): string {
+  if (minutes < 60) return `${Math.round(minutes)}m`;
+  const h = Math.floor(minutes / 60);
+  const m = Math.round(minutes % 60);
+  return m > 0 && h < 10 ? `${h}h ${m}m` : `${h}h`;
+}
+
+/**
+ * Coming back to a long conversation after its cache expired. The first call
+ * back writes the whole conversation again; a fresh session that starts from a
+ * short handoff note writes a fraction of it. Measured per return, net of the
+ * note and the fresh start.
+ */
+function coldResume(ctx: Ctx): OptimizationFinding | null {
+  const cold = coldResumes(ctx.data.events);
+  if (cold.length < COLD_MIN) return null;
+
+  let saving = 0;
+  let rewriteUsd = 0;
+  let warmUsd = 0;
+  // The rates of the costliest return, to say what a rewrite costs against a read.
+  let rates: ReturnType<typeof ratesFor> | null = null;
+  let costliest = 0;
+  for (const c of cold) {
+    const price = priceFor(c.event.model);
+    if (!price || c.rewriteTokens <= 0) continue;
+    const r = ratesFor(price, { at: c.event.ts, speed: c.event.speed, batch: c.event.batch });
+    if (c.rewriteUsd > costliest) {
+      costliest = c.rewriteUsd;
+      rates = r;
+    }
+    const perToken = c.rewriteUsd / c.rewriteTokens;
+    // Writing the note while the cache is still warm, then starting from it.
+    const note = (contextOf(c.previous) * r.cachedInputPerM + HANDOFF_TOKENS * r.outputPerM) / M;
+    const fresh = (FRESH_START + HANDOFF_TOKENS) * perToken;
+    saving += Math.max(0, c.rewriteUsd - fresh - note);
+    rewriteUsd += c.rewriteUsd;
+    warmUsd += c.warmUsd;
+  }
+  if (saving < 0.5) return null;
+
+  const events = cold.map((c) => c.event);
+  const currentUsd = events.reduce((s, e) => s + e.cost.total, 0);
+  const tokens = cold.reduce((s, c) => s + c.rewriteTokens, 0);
+  const gaps = cold.map((c) => c.gapMinutes).sort((a, b) => a - b);
+  const medianGap = gaps[Math.floor(gaps.length / 2)]!;
+  // Codex: OpenAI caches on its own, sets no fixed lifetime and bills a miss as input.
+  const auto = cold.filter((c) => c.ttlMinutes === null).length > cold.length / 2;
+  const hour = cold.filter((c) => c.ttlMinutes === 60).length >= cold.length / 2;
+  const ttl = hour ? "an hour" : "5 minutes";
+  const times = (rate: number) =>
+    rates && rates.inputPerM > 0 ? `${+(rate / rates.inputPerM).toFixed(2)}x` : "";
+  const writeX = rates ? times(hour ? rates.cacheWrite1hPerM : rates.cacheWrite5mPerM) : "";
+  const readX = rates ? times(rates.cachedInputPerM) : "";
+  const handoff = events.some((e) => e.source === "claude-code")
+    ? " With the optimAIzr mod, /optimaizr handoff writes the note, and the next conversation after /clear starts from it."
+    : "";
+  const why = auto
+    ? `OpenAI keeps a conversation cached only while it is in use, and after a few idle minutes it can be gone. Come back later and the next call sends all of it again at the full input rate${readX ? `, where reading it from cache would have cost ${readX}` : ""}.`
+    : `The cache keeps a conversation for ${ttl}. Come back later and the next call writes all of it again${writeX && readX ? ` at ${writeX} the input rate, where reading it would have cost ${readX}` : ", where reading it would have cost a fraction"}.`;
+  const away = auto ? "step away" : `stop for more than ${ttl}`;
+
+  return build(ctx, {
+    rule: "cold-resume",
+    why,
+    tier: "try",
+    category: "caching",
+    title: `${cold.length} returns to an expired cache ${auto ? "resent" : "rewrote"} ${fmtTokens(tokens)} of conversation`,
+    detail: `You came back to a long conversation ${cold.length} times after its cache had expired (median gap ${duration(medianGap)}). Each time the first call ${auto ? "sent the whole conversation again uncached" : "wrote the whole conversation into the cache again"}, ${fmtTokens(tokens / cold.length)} on average: ${usd(rewriteUsd)} in all, where a warm cache would have read it for ${usd(warmUsd)}. A fresh session started from a short handoff note would have cost ${usd(saving)} less.`,
+    currentUsd,
+    optimizedUsd: currentUsd - saving,
+    events,
+    evidence: evidence(
+      "inferred",
+      auto
+        ? "The resends are measured from recorded uncached input; the size of a fresh start is an estimate"
+        : "The rewrites are measured from recorded cache writes; the size of a fresh start is an estimate",
+    ),
+    confidence: confidenceOf({ measured: true, sample: cold.length, tokenProfileStable: true }),
+    impact: "medium",
+    risk: "needs-verification",
+    assumptions: [
+      `A fresh session starts at about ${fmtTokens(FRESH_START)}: system prompt, tools and memory files, plus a ${fmtTokens(HANDOFF_TOKENS)}-token handoff note.`,
+      "The note is written before you leave, while the cache is still warm, and is charged.",
+      "A note keeps less than the full conversation, which can cost calls back. Only the first call back is counted, not the cheaper calls after it.",
+    ],
+    calculation: `For each return after the cache expired (main conversation, ${fmtTokens(COLD_MIN_CONTEXT)}+ of context, most of it written or sent again): the recorded cost of that call's uncached input, minus a fresh start of ${fmtTokens(FRESH_START + HANDOFF_TOKENS)} at the same rate, minus the note (one cached read of the conversation and ${fmtTokens(HANDOFF_TOKENS)} output tokens).`,
+    observations: [...cold]
+      .sort((a, b) => b.rewriteUsd - a.rewriteUsd)
+      .slice(0, 5)
+      .map(
+        (c) =>
+          `${c.event.ts.slice(0, 10)} · back after ${duration(c.gapMinutes)} · ${c.ttlMinutes === null ? "resent" : "rewrote"} ${fmtTokens(c.rewriteTokens)} · ${usd(c.rewriteUsd)}`,
+      ),
+    fix: `Before you ${away} in the middle of a long conversation, ask for a short handoff note (what changed, what was decided, what is open), then /clear and start from the note when you return.${handoff}`,
   });
 }
 
@@ -1716,6 +1832,7 @@ const RULES: Array<{ name: string; run: (ctx: Ctx) => OptimizationFinding | null
   { name: "oversized-output", run: oversizedOutput },
   { name: "oversized-tool-output", run: oversizedResults },
   { name: "error-loops", run: errorLoops },
+  { name: "cold-resume", run: coldResume },
   { name: "context-compaction", run: contextCompaction },
   { name: "model-default", run: modelDefault },
 ];

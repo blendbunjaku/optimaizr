@@ -43,7 +43,8 @@ export function cmdMod(args: Args): void {
       "what the turn has cost and the band above the prompt shows your 5-hour window " +
       "and how long it lasts at this pace. Y in optimaizr live switches the running " +
       "session's model or effort from its next request, and each answer says what the " +
-      "switch saved. It also holds a command that failed twice unchanged.",
+      "switch saved. It counts down a long conversation's cache, /optimaizr handoff " +
+      "writes a note to start fresh from, and it holds a command that failed twice unchanged.",
     72,
   )) {
     console.log(`  ${line}`);
@@ -51,6 +52,11 @@ export function cmdMod(args: Args): void {
   console.log("");
   console.log(`  ${bold("Install")} ${dim("in a Claude Code session:")}`);
   for (const line of MOD_INSTALL) console.log(`    ${line}`);
+  console.log("");
+  console.log(
+    `  ${dim("Optional: the CLI needs none of it. Without the mod, optimaizr statusline on")}`,
+  );
+  console.log(`  ${dim("puts the context and cache countdown under Claude Code's prompt.")}`);
   console.log("");
 
   if (active.length > 0) {

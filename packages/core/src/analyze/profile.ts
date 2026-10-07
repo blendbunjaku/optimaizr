@@ -7,6 +7,7 @@ import {
   savingsOverlap,
 } from "./rules.js";
 import { budgetStatus, type BudgetOptions, type BudgetStatus } from "./budget.js";
+import { sessionStats, type SessionStats } from "./sessions.js";
 import { planView, type PlanView } from "./plan.js";
 import { buildTasks, contextOf } from "./tasks.js";
 import { priceFor } from "../pricing.js";
@@ -56,6 +57,8 @@ export interface Profile {
   breakdown: SpendBreakdown;
   /** The command to run next to investigate the bottleneck. */
   nextCommand: string;
+  /** What the sessions look like, measured: see `optimaizr sessions`. */
+  sessions: SessionStats;
 
   /** Present when a monthly cap was given. */
   budget: BudgetStatus | null;
@@ -232,6 +235,7 @@ export function buildProfile(
     // Every recommendation can be simulated; with none, the drill-down is the
     // most useful place to look instead.
     nextCommand: next ? `optimaizr simulate ${next.id}` : "optimaizr why",
+    sessions: sessionStats(data),
     budget: budget
       ? budgetStatus(budget.events ?? data.events, {
           ...budget,

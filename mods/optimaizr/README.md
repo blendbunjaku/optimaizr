@@ -26,6 +26,16 @@ Needs Claude Code 2.1.287 or later.
   and any switch. **`/optimaizr hud`** shows it as gauges and a sparkline.
 - **Switches that pay:** subagents switch at once; a long conversation waits
   until reloading it into the new model pays back, and the band says so.
+- **Before the cache expires:** Claude Code caches the conversation for an
+  hour. Once it carries 50K tokens or more, the band counts down the last 15
+  minutes, `cache     warm 10m more, then 300K is written again ($2.40)`, and one
+  toast comes 5 minutes before. After it expires, the band says what the next
+  message will cost. Past 200K, it says what each request re-reads.
+- **`/optimaizr handoff`:** Claude writes a short note (what changed, what was
+  decided, what is open, what to check first) while the cache is still warm,
+  so it costs cents. `/clear`, and the next conversation in that project
+  starts from the note instead of re-reading the old one. A note is used
+  once and expires after 12 hours.
 - **A guard against retry loops:** when the same command fails twice in a row
   with nothing changed, the next identical attempt is held once and Claude is
   asked to change something first.
@@ -49,11 +59,15 @@ Needs Claude Code 2.1.287 or later.
 It reads the usage figures Claude Code already shows you (cost, token counts,
 context fill, plan windows) and the commands Claude runs, kept in memory for
 the retry guard. It never reads your prompts or file contents and makes no
-network calls. It
+network calls of its own. It
 reads `~/.optimaizr/overrides.json` and writes one small file per session to
 `~/.optimaizr/mod/sessions`, which is how `optimaizr live` knows it is running.
 That file also carries Claude Code's own 5-hour and weekly meters, so
 `optimaizr profile` and `optimaizr live` can show your real windows.
+`/optimaizr handoff` is the one exception to "no text": only when you run it,
+it asks Claude for a note through your own session and saves the reply to
+`~/.optimaizr/mod/handoffs`, one file per project, which the next conversation
+there reads once. Nothing leaves your machine besides that one request to Claude.
 `claude plugin validate` on this folder lists every call it makes.
 
 ## Develop

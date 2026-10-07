@@ -221,33 +221,59 @@ export function cmdFeedback(): void {
   console.log("");
 }
 
-/** Every command, as `--help` lists it. */
-export const HELP_COMMANDS: Array<[string, string]> = [
-  ["optimaizr audit", "what you spend, what is recoverable"],
-  ["optimaizr profile", "usage, waste and your biggest bottleneck"],
-  ["optimaizr scan", "spend, savings and what to do about it"],
-  ["optimaizr why", "drill into where the money actually goes"],
-  ["optimaizr recommend", "ranked actions with impact and confidence"],
-  ["optimaizr live", "watch calls as they happen and surface fixes"],
-  ["optimaizr mod", "the Claude Code mod: install it, see it running"],
-  ["optimaizr limit", "record a Claude session-limit hit"],
-  ["optimaizr show <rule>", "the requests a recommendation touches"],
-  ["optimaizr simulate <rule>", "what the change would cost"],
-  ["optimaizr waste", "just the opportunities"],
-  ["optimaizr tokens", "token analytics and the priciest calls"],
-  ["optimaizr verify <rule>", "prove a fix against your quality bar first"],
-  ["optimaizr apply <rule>", "get the exact change, once verified"],
-  ["optimaizr undo <rule>", "revert a switch or setting optimAIzr applied"],
-  ["optimaizr import <file>", "load a CSV or JSON usage export"],
-  ["optimaizr report", "write a shareable dashboard"],
-  ["optimaizr card", "your last 30 days as an image to post"],
-  ["optimaizr guide", "which model for which job"],
-  ["optimaizr providers", "what can be read, and from where"],
-  ["optimaizr privacy", "what is collected, stored and sent"],
-  ["optimaizr metrics", "how much analysed, how much found"],
-  ["optimaizr feedback", "report a bug or a wrong number"],
-  ["optimaizr changelog", "what changed in this version (--all for every one)"],
+/** Every command, grouped as `--help` lists them: the everyday ones first. */
+export const HELP_GROUPS: Array<{ title: string; commands: Array<[string, string]> }> = [
+  {
+    title: "Start here",
+    commands: [
+      ["optimaizr", "your profile: usage, waste and the biggest win"],
+      ["optimaizr live", "watch calls as they happen: cache countdown, fixes"],
+      ["optimaizr statusline on", "cache countdown and re-read cost under Claude Code's prompt"],
+      ["optimaizr sessions", "how long your conversations run and where the cost climbs"],
+    ],
+  },
+  {
+    title: "Change things",
+    commands: [
+      ["optimaizr apply <rule>", "get the exact change, once verified"],
+      ["optimaizr undo <rule>", "revert a setting optimAIzr applied (alone, lists them)"],
+      ["optimaizr verify <rule>", "prove a fix against your quality bar first"],
+      ["optimaizr show <rule>", "the requests a recommendation touches"],
+      ["optimaizr simulate <rule>", "what the change would cost"],
+      ["optimaizr mod", "optional Claude Code mod: mid-session switches, handoff"],
+    ],
+  },
+  {
+    title: "Go deeper",
+    commands: [
+      ["optimaizr profile", "usage, waste and your biggest bottleneck"],
+      ["optimaizr audit", "what you spend, what is recoverable"],
+      ["optimaizr scan", "spend, savings and what to do about it"],
+      ["optimaizr why", "drill into where the money actually goes"],
+      ["optimaizr recommend", "ranked actions with impact and confidence"],
+      ["optimaizr waste", "just the opportunities"],
+      ["optimaizr tokens", "token analytics and the priciest calls"],
+      ["optimaizr limit", "record a Claude session-limit hit"],
+      ["optimaizr report", "write a shareable dashboard"],
+      ["optimaizr card", "your last 30 days as an image to post"],
+      ["optimaizr import <file>", "load a CSV or JSON usage export"],
+      ["optimaizr guide", "which model for which job"],
+    ],
+  },
+  {
+    title: "About",
+    commands: [
+      ["optimaizr providers", "what can be read, and from where"],
+      ["optimaizr privacy", "what is collected, stored and sent"],
+      ["optimaizr metrics", "how much analysed, how much found"],
+      ["optimaizr feedback", "report a bug or a wrong number"],
+      ["optimaizr changelog", "what changed in this version (--all for every one)"],
+    ],
+  },
 ];
+
+/** Every command in one list, for the unknown-command guess. */
+export const HELP_COMMANDS: Array<[string, string]> = HELP_GROUPS.flatMap((g) => g.commands);
 
 export function cmdHelp(): void {
   console.log("");
@@ -255,8 +281,13 @@ export function cmdHelp(): void {
   console.log("");
   // Pad to the longest command so a new entry can't break the column.
   const width = Math.max(...HELP_COMMANDS.map(([c]) => c.length)) + 2;
-  for (const [cmd, what] of HELP_COMMANDS) console.log(`  ${bold(cmd.padEnd(width))}${dim(what)}`);
-  console.log("");
+  for (const group of HELP_GROUPS) {
+    console.log(`  ${bold(group.title)}`);
+    for (const [cmd, what] of group.commands) {
+      console.log(`    ${blue(cmd.padEnd(width))}${dim(what)}`);
+    }
+    console.log("");
+  }
   console.log(`  ${dim("--why           show every calculation and assumption")}`);
   console.log(
     `  ${dim("--accept-risk   apply a fix no replay can settle, on your own judgement")}`,

@@ -21,6 +21,35 @@ optimaizr profile
 
 Or try it once without installing: `npx optimaizr profile`.
 
+## New in 0.10.0
+
+How long until a long conversation's cache expires, and what coming back after
+will cost, right where you work. From the terminal, no mod needed.
+
+```bash
+optimaizr statusline on
+```
+
+```
+◉ optimAIzr · 161.0K context, $0.032/call to re-read · cache warm 12m, then $1.29 to write again · leaving? handoff note, then /clear · 5h 61%
+```
+
+- **Under Claude Code's prompt.** The conversation's size, what each call pays
+  to re-read it, and how long its cache stays warm, counting down over the last
+  15 minutes, in Claude Code in a terminal (the VS Code chat panel draws no
+  status line; use `live` there). Your own status line is never replaced, and
+  `optimaizr statusline off` takes it out. Run `optimaizr statusline` on its
+  own to see what it shows for your latest conversation.
+- **In `optimaizr live`, for Claude Code and Codex.** The warm cache that
+  expires first in the status line, a warning 5 minutes before a long
+  conversation's cache expires, and what a call that came back to an expired
+  one paid.
+- **Cold returns in Codex too.** OpenAI caches on its own and keeps it only
+  while you work; the cold-resume rule and `optimaizr sessions` now count Codex
+  coming back to a long conversation after the cache has gone.
+- **`optimaizr sessions`**: how long your conversations run and where
+  re-reading takes over, from your own logs, nothing estimated.
+
 ## New in 0.9.0
 
 optimAIzr now knows your plan, counts only what holds up, and shows its work.
@@ -52,9 +81,11 @@ optimAIzr now knows your plan, counts only what holds up, and shows its work.
 
 ## Inside Claude Code
 
-Claude Code now runs mods, plugins that work inside it. The optimAIzr mod puts
-the numbers where you work, lets **Y** in `optimaizr live` switch the session
-you are in, and shows what each switch saved.
+Claude Code now runs mods, plugins that work inside it. The optimAIzr mod is
+optional: everything above runs from the terminal. It adds what only code
+inside the session can do: **Y** in `optimaizr live` switches the session you
+are in, each switch shows what it saved, and `/optimaizr handoff` writes the
+note to start fresh from.
 
 ```
   ⏺ optimaizr: this turn $0.18 · 4 requests · 5h 55% → 56%
@@ -86,6 +117,14 @@ Install it from a Claude Code session (2.1.287 or later):
   a running total.
 - **Back in one command.** Harder task? `/optimaizr off` returns the session you
   are in to its own model and effort; `/optimaizr on` resumes.
+- **A countdown before the cache expires.** Claude Code caches a conversation
+  for an hour. Once it carries 50K tokens or more, the band counts down the
+  last 15 minutes and says what coming back after will cost, because the first
+  message back writes the whole conversation again at 2x the input rate.
+- **`/optimaizr handoff`.** Claude writes a short note from the warm cache, for
+  cents: what changed, what was decided, what is open, what to check first.
+  `/clear`, and the next conversation in that project starts from the note
+  instead of carrying the old one.
 - **A guard against retry loops.** When the same command fails twice in a row
   with nothing changed, the next identical attempt is held once and Claude is
   asked to change something first.
@@ -93,7 +132,8 @@ Install it from a Claude Code session (2.1.287 or later):
   and any switch. `/optimaizr hud` shows it all as gauges and a sparkline.
 
 It reads usage figures and the commands Claude runs, never your prompts or file
-contents, and makes no network calls.
+contents, and makes no network calls of its own. The one text it keeps is the
+note `/optimaizr handoff` asks Claude for, on your machine, used once.
 The source is in [`mods/optimaizr`](mods/optimaizr).
 
 ## What it does
@@ -125,6 +165,31 @@ one screen.
     Answers, code and thinking     20%  ████░░░░░░░░░░░░░░░░
 ```
 
+### See how your sessions run
+
+`optimaizr sessions` shows how long your conversations run, the context size where
+re-reading becomes half of what a call costs, whether the money sits in a few
+long sessions or many medium ones, and how often you came back to a
+conversation after its cache expired. All of it is measured, none of it estimated.
+
+```
+  Where re-reading takes over (main conversations)
+    context       calls   spend   re-read share of the cost
+    100K-150K       187      5%   ████░░░░░░░░ 32%
+    200K-300K       172      6%   ██████░░░░░░ 49%
+    300K-500K       344     17%   ███████░░░░░ 56%
+    500K+           708     61%   ███████░░░░░ 61%
+    From 300K of context on, re-reading is half the cost of a call or more.
+
+  Where the money is
+    3 sessions passed 200K of context and took 93% of spend.
+
+  Cold cache returns
+    16 times a long conversation was picked up after its cache
+    expired. The first call back rewrote 5.9M tokens for $47.25;
+    a warm cache would have read them for $1.19.
+```
+
 ### Find out why
 
 `optimaizr why` breaks spend down by provider, model, project and kind of work,
@@ -146,10 +211,12 @@ each level as a share of the one above.
 `optimaizr live` runs beside your agent, says what it sees and raises a fix the
 moment a pattern shows up. Press **Y** and your app switches from its next
 request, and so does Claude Code with the [optimAIzr mod](#inside-claude-code).
-Without it, Claude Code switches from its next session.
+Without it, Claude Code switches from its next session. It also follows each
+long conversation's cache: a warning 5 minutes before it expires, and what a
+call that came back too late paid.
 
 ```
-◉ optimAIzr live · 1 call · $0.031 this run · last Opus 5.5 $0.031, 120.5K context · no issues · checked 3s ago
+◉ optimAIzr live · 1 call · $0.031 this run · last Opus 5.5 $0.031, 120.5K context · cache 120.5K warm 55m · no issues · checked 3s ago
 
   ⚠  12:31:07  Long conversation now 215.5K of context
         Every call re-reads all of it: $0.043 on this call alone, before any work (Opus 5.5).
@@ -242,7 +309,9 @@ levers size what compacting earlier or a smaller default model would save.
 | --------------------------- | --------------------------------------------- |
 | `optimaizr profile`         | Where am I wasting the most?                  |
 | `optimaizr why`             | Where does the money go?                      |
+| `optimaizr sessions`        | Where do long sessions start to cost more?    |
 | `optimaizr live`            | What is wasting tokens right now?             |
+| `optimaizr statusline on`   | When does this conversation's cache expire?   |
 | `optimaizr mod`             | Is the Claude Code mod installed and running? |
 | `optimaizr recommend`       | What can I change, ranked by saving?          |
 | `optimaizr simulate <rule>` | What would the change save?                   |

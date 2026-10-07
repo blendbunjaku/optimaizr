@@ -30,6 +30,7 @@ import {
 import { applyCompaction, type CompactAgent, logVerification } from "@optimaizr/local";
 import type { Args } from "../args.js";
 import { load } from "../data.js";
+import { statuslineOn } from "./statusline.js";
 
 /**
  * `optimaizr apply`: turn a verified finding into a concrete change, written to
@@ -43,6 +44,7 @@ export async function cmdApply(args: Args): Promise<void> {
     return;
   }
 
+  if (ruleName === "statusline") return statuslineOn();
   const data = await load(args);
   // A setting, not a request rewrite: written to the agents' own config files,
   // with the previous value kept for `optimaizr undo context-compaction`.

@@ -12,9 +12,12 @@ import type {
 import type { Summary, TopCall } from "../analyze/summary.js";
 import type { DrillNode, DrillTree } from "../analyze/drilldown.js";
 import type { Profile } from "../analyze/profile.js";
+import type { SessionStats } from "../analyze/sessions.js";
 import type { BudgetCrossing, BudgetStatus } from "../analyze/budget.js";
 import type { PlanView, SessionCrossing } from "../analyze/plan.js";
 import type { CodexLimitCrossing, CodexPlanView } from "../analyze/codex-plan.js";
+import type { CacheState } from "../analyze/cache-watch.js";
+import type { ColdResume } from "../analyze/cold.js";
 
 /** Terminal rendering. No dependencies; colour is disabled when not a TTY or NO_COLOR is set. */
 
@@ -594,6 +597,7 @@ const RULE_LABEL: Record<string, string> = {
   "error-loops": "Error loops",
   "reasoning-effort": "Excess reasoning",
   "context-compaction": "Compact earlier",
+  "cold-resume": "Cold cache returns",
   "model-default": "Smaller default model",
 };
 
@@ -711,6 +715,10 @@ export function renderProfile(p: Profile): string {
   for (const [label, share] of parts.filter(([, v]) => v >= 0.005).sort((a, b) => b[1] - a[1])) {
     out.push(`    ${pad(label, 30)}${padLeft(pct(share), 4)}  ${shareBar(share)}`);
   }
+  // Re-reading is already the cheap rate; it is big because every call does it.
+  if (p.breakdown.reread >= 0.005) {
+    out.push(`    ${dim("Re-reading is billed at the cache-read rate, the cheapest there is.")}`);
+  }
   out.push("");
 
   // Everything worth doing, clear waste first, levers last and never added.
@@ -762,6 +770,100 @@ export function renderProfile(p: Profile): string {
   ];
   const width = Math.max(...also.map(([cmd]) => cmd.length)) + 3;
   for (const [cmd, what] of also) out.push(`    ${dim(pad(cmd, width) + what)}`);
+  out.push("");
+  return out.join("\n");
+}
+
+/* ------------------------------------------------------------------ *
+ * Sessions
+ * ------------------------------------------------------------------ */
+
+function kTokens(n: number): string {
+  return n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : `${Math.round(n / 1000)}K`;
+}
+
+function bandLabel(from: number, to: number | null): string {
+  const start = from === 0 ? "0" : kTokens(from);
+  return to === null ? `${start}+` : `${start}-${kTokens(to)}`;
+}
+
+export function renderSessions(c: SessionStats, s: Summary): string {
+  const out: string[] = [];
+  out.push("");
+  out.push(`  ${bold("optimAIzr")} ${dim("|")} sessions`);
+  out.push(
+    `  ${dim(`${s.windowDays.from} to ${s.windowDays.to}  (${Math.max(1, s.window.days).toFixed(1)} days)`)}`,
+  );
+  out.push("");
+  out.push(rule());
+  out.push("");
+
+  const row = (label: string, median: string, p90: string) =>
+    out.push(`    ${pad(label, 24)}${pad(`median ${median}`, 16)}${dim(`1 in 10 over ${p90}`)}`);
+  out.push(`  ${bold("Sessions")}`);
+  out.push(
+    `    ${c.sessions.toLocaleString()} sessions · ${c.calls.toLocaleString()} calls · ${usd(c.costUsd)} ${dim("at list prices")}`,
+  );
+  row("calls per session", String(c.callsPerSession.median), String(c.callsPerSession.p90));
+  if (c.turnsPerSession.p90 > 0) {
+    row("prompts per session", String(c.turnsPerSession.median), String(c.turnsPerSession.p90));
+  }
+  row("largest conversation", kTokens(c.peakContext.median), kTokens(c.peakContext.p90));
+  out.push(`    ${pad("cache hit rate", 24)}${(c.cacheHitRate * 100).toFixed(1)}%`);
+  out.push("");
+
+  const bands = c.byContext.filter((b) => b.calls > 0);
+  if (bands.length > 0) {
+    out.push(`  ${bold("Where re-reading takes over")} ${dim("(main conversations)")}`);
+    out.push(
+      `    ${dim(`${pad("context", 12)}${padLeft("calls", 7)}${padLeft("spend", 8)}   re-read share of the cost`)}`,
+    );
+    for (const b of bands) {
+      out.push(
+        `    ${pad(bandLabel(b.from, b.to), 12)}${padLeft(b.calls.toLocaleString(), 7)}${padLeft(pct(b.share), 8)}   ${shareBar(b.rereadShare, 12)} ${pct(b.rereadShare)}`,
+      );
+    }
+    out.push(
+      `    ${dim(
+        c.rereadHalfAt === null
+          ? "Re-reading never reaches half the cost of a call here."
+          : `From ${kTokens(c.rereadHalfAt)} of context on, re-reading is half the cost of a call or more.`,
+      )}`,
+    );
+    out.push("");
+  }
+
+  out.push(`  ${bold("Where the money is")}`);
+  out.push(
+    `    The costliest ${c.topSessions.count} session${c.topSessions.count === 1 ? "" : "s"} (1 in 10) took ${bold(pct(c.topSessions.share))} of spend.`,
+  );
+  if (c.longSessions.count > 0) {
+    out.push(
+      `    ${c.longSessions.count} session${c.longSessions.count === 1 ? "" : "s"} passed ${kTokens(c.longSessions.over)} of context and took ${bold(pct(c.longSessions.share))} of spend.`,
+    );
+  }
+  for (const b of c.bySessionLength.filter((b) => b.sessions > 0)) {
+    const calls = b.to === null ? `${b.from}+ calls` : `${b.from}-${b.to - 1} calls`;
+    out.push(
+      `    ${pad(calls, 16)}${padLeft(`${b.sessions} session${b.sessions === 1 ? "" : "s"}`, 13)}${padLeft(pct(b.share), 6)}  ${shareBar(b.share, 12)}`,
+    );
+  }
+  out.push("");
+
+  if (c.coldResumes.count > 0) {
+    out.push(`  ${bold("Cold cache returns")}`);
+    const times = `${c.coldResumes.count} time${c.coldResumes.count === 1 ? "" : "s"}`;
+    out.push(`    ${times} a long conversation was picked up after its cache`);
+    out.push(
+      `    expired. The first call back rewrote ${fmtTokens(c.coldResumes.tokens)} tokens for ${bold(usd(c.coldResumes.costUsd))};`,
+    );
+    out.push(`    a warm cache would have read them for ${usd(c.coldResumes.warmUsd)}.`);
+    out.push("");
+  }
+
+  out.push(rule());
+  out.push(`  ${dim("Measured from your logs, nothing estimated. --json for the numbers.")}`);
+  out.push(`  ${dim("What to do about it:")} ${blue("optimaizr recommend")}`);
   out.push("");
   return out.join("\n");
 }
@@ -1131,6 +1233,39 @@ export function renderContextNotice(n: {
     );
   }
   return out.join("\n");
+}
+
+/** 12 -> "12m", 65 -> "1h 05m", from milliseconds. */
+export function minutesLabel(ms: number): string {
+  const m = Math.max(0, Math.round(ms / 60_000));
+  if (m < 60) return `${m}m`;
+  return `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, "0")}m`;
+}
+
+/** `live`: a long conversation's cache is about to expire. */
+export function renderCacheExpiring(s: CacheState, now: number): string {
+  const e = s.event;
+  const left = minutesLabel((s.expiresAt ?? now) - now);
+  return [
+    `  ${yellow("⏳")}  ${dim(new Date(now).toLocaleTimeString())}  ${bold(`Cache expires in ${left}`)} ${dim(`${fmtTokens(s.context)} of conversation`)}`,
+    `        ${callSession(e)} ${dim(projectName(e.project))}`,
+    `        ${dim("Coming back after that writes it all again:")} ${bold(usd(s.rewriteUsd))}${dim(`. While warm, a call reads it for ${usd(s.readUsd)}.`)}`,
+    `        ${dim("Leaving for longer? Ask for a short handoff note, /clear, and start from it.")}`,
+  ].join("\n");
+}
+
+/** `live`: the call that just came back to an expired cache, and what it cost. */
+export function renderColdReturn(c: ColdResume): string {
+  const e = c.event;
+  const what =
+    c.ttlMinutes === null
+      ? `sent ${fmtTokens(c.rewriteTokens)} again uncached`
+      : `wrote ${fmtTokens(c.rewriteTokens)} into the cache again`;
+  return [
+    `  ${yellow("⚠")}  ${dim(new Date(e.ts).toLocaleTimeString())}  ${bold("Cold cache")} ${dim(`back after ${minutesLabel(c.gapMinutes * 60_000)}, the first call ${what}`)}`,
+    `        ${callSession(e)} ${dim(projectName(e.project))}`,
+    `        ${dim("That call paid")} ${bold(usd(c.rewriteUsd))} ${dim(`for it; a warm cache would have read it for ${usd(c.warmUsd)}.`)}`,
+  ].join("\n");
 }
 
 export function renderLiveRecommendation(
