@@ -170,7 +170,7 @@ test("the session file tells optimaizr live the mod is running", async ($, on) =
   await $.session.start(SESSION);
   const file = `${DIR}/mod/sessions/s1.json`;
   const beat = JSON.parse(w.files.get(file)!);
-  expect(beat).toMatchObject({ id: "s1", version: "0.10.0", cwd: CWD });
+  expect(beat).toMatchObject({ id: "s1", version: "0.10.1", cwd: CWD });
   expect(beat.endedAt).toBeUndefined();
 
   await $.session.end({ reason: "clear", sessionId: "s1", resume: { id: "s1" } });
