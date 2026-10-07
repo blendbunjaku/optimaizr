@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.10.1
+
+- **A shorter README** that leads with what optimAIzr does and what it found,
+  with the last three releases in one line each. No code changes.
+- **Coming from 0.9?** 0.10.0 is the one to read: `optimaizr statusline on`
+  puts a cache countdown under Claude Code's prompt, and `optimaizr sessions`
+  shows where long conversations turn expensive. `optimaizr changelog 0.10.0`
+  has all of it.
+
 ## 0.10.0
 
 **Where long sessions really lose money, measured, and a way out of them, from
