@@ -1,5 +1,56 @@
 # Changelog
 
+## 0.10.0
+
+**Where long sessions really lose money, measured, and a way out of them, from
+the terminal you already have open.**
+
+- **`optimaizr statusline on`.** Claude Code's own status line, under the
+  prompt, shows the conversation's size, what each call pays to re-read it,
+  and how long its cache stays warm. In the last 15 minutes it counts down and
+  says what coming back after will cost; once the cache has gone it says what
+  the next message pays. Your 5-hour meter sits at the end. No mod needed. It
+  never replaces a status line you already have, and `optimaizr statusline
+off` takes it out. `optimaizr statusline` on its own says whether it is on
+  and shows what it would say for your latest conversation.
+- **`optimaizr live` counts down as well**, for Claude Code and Codex. The
+  status line at the bottom shows the warm cache that expires first, a
+  warning comes 5 minutes before a long conversation's cache expires (only
+  when coming back would cost 50 cents or more), and a call that came back to
+  an expired cache is shown with what it paid against a warm read. `--json`
+  emits both as `cache` events.
+- **`optimaizr --help` is grouped**: start here, change things, go deeper.
+- **`optimaizr sessions`** answers the questions people asked about the 0.9
+  numbers, from your own logs and with nothing estimated: how long sessions
+  run, the context size where re-reading becomes half of what a call costs,
+  whether the money sits in a few long sessions or many medium ones, and how
+  often you came back to a conversation after its cache expired. `--json` for
+  the numbers.
+- **Cold cache returns, a new rule (try tier).** Come back to a long
+  conversation after its cache expired and the first call writes all of it
+  again, at 2x the input rate on Claude Code's 1-hour cache. The rule counts
+  those returns from the cache writes they recorded and prices a fresh start
+  from a short handoff note against them, net of the note and the new
+  session's setup. Codex too: OpenAI caches on its own and sets no fixed
+  lifetime, so there a return is a mostly uncached call after 5 minutes or
+  more away, priced at the full input rate it paid.
+- **The compaction lever prices the reload at the rate your conversations
+  use.** After a compaction the conversation is written to the cache again;
+  that write is now priced at the 1-hour rate when that is what the
+  conversations use, not the 5-minute one, so the lever comes out lower and
+  closer to what a compaction costs.
+- **Re-reading is described at its real rate.** The profile and share card
+  say it is billed at the cache-read rate, the cheapest there is, and nothing
+  says "a tenth" any more: on Opus 5.5 a cache read is a twentieth of input.
+- **The mod counts down to the cache expiring.** Once a conversation carries
+  50K tokens or more, the band shows the last 15 minutes of its cache and what
+  coming back after will cost, with one toast 5 minutes before. Past 200K it
+  says what each request re-reads, once as a toast and then in the band.
+- **`/optimaizr handoff`.** Claude writes a short note (what changed, what was
+  decided, what is open, what to check first) from the warm cache, for cents.
+  `/clear`, and the next conversation in that project starts from it. A note
+  is used once, within 12 hours, and stays on your machine.
+
 ## 0.9.0
 
 **optimAIzr knows your plan, counts only what holds up, and shows its work.**

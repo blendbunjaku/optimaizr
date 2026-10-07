@@ -17,12 +17,15 @@ export * from "./analyze/summary.js";
 export * from "./analyze/rules.js";
 export * from "./analyze/drilldown.js";
 export * from "./analyze/profile.js";
+export * from "./analyze/cold.js";
+export * from "./analyze/sessions.js";
 export * from "./analyze/budget.js";
 export * from "./analyze/plan.js";
 export * from "./analyze/codex-plan.js";
 // Live analysis: the same rules over a rolling window, for streaming hosts.
 export * from "./analyze/live.js";
 export * from "./analyze/context-watch.js";
+export * from "./analyze/cache-watch.js";
 
 // Findings -> recommendations (decision persistence is injected).
 export * from "./recommend/recommendations.js";
@@ -48,6 +51,7 @@ export * from "./verify/dialect.js";
 export * from "./report/terminal.js";
 export * from "./report/html.js";
 export * from "./report/card.js";
+export * from "./report/statusline.js";
 
 // Product metrics computed from analysed data.
 export * from "./metrics.js";

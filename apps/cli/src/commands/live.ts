@@ -9,6 +9,7 @@ import {
   codexPlanView,
   COMPACT_AT,
   createBudgetTracker,
+  createCacheWatch,
   createContextWatch,
   createCodexLimitTracker,
   createSessionTracker,
@@ -23,7 +24,9 @@ import {
   planView,
   red,
   renderBudgetCrossing,
+  renderCacheExpiring,
   renderCodexCrossing,
+  renderColdReturn,
   renderContextNotice,
   renderLiveRecommendation,
   renderSessionCrossing,
@@ -54,6 +57,7 @@ import {
   readOverrides,
   removeOverrides,
   sdkOverrideRewriter,
+  statuslineApplied,
   tailCodex,
   tailLedger,
   tailTranscripts,
@@ -63,6 +67,7 @@ import { budgetOf, planNote, resolvePlan } from "../config.js";
 import { load, readLimitHits, summaryOptions } from "../data.js";
 import { createLivePrompt } from "../live-prompt.js";
 import { createStatusLine, emptyStatus, recordCall, renderRunSummary } from "../live-status.js";
+import { statuslineOff } from "./statusline.js";
 
 /**
  * `optimaizr live`: the same rules as `scan`, run continuously over what the
@@ -345,12 +350,65 @@ export async function cmdLive(args: Args): Promise<void> {
     }
   };
 
+  // Each long conversation's cache: a warning before it expires, and what
+  // coming back cost once it had. Seeded quietly with the last two hours.
+  const cache = createCacheWatch();
+  const recentFrom = new Date(Date.now() - 2 * 3_600_000).toISOString();
+  for (const e of seed.filter((x) => x.ts >= recentFrom).sort((a, b) => a.ts.localeCompare(b.ts))) {
+    cache.push(e);
+  }
+  status.cache = cache;
+  const onCache = (event: CallEvent): void => {
+    const cold = cache.push(event);
+    if (!cold) return;
+    if (json) {
+      console.log(
+        JSON.stringify({
+          cache: {
+            kind: "cold",
+            sessionId: event.sessionId,
+            gapMinutes: Math.round(cold.gapMinutes),
+            ttlMinutes: cold.ttlMinutes,
+            tokens: cold.rewriteTokens,
+            paidUsd: cold.rewriteUsd,
+            warmUsd: cold.warmUsd,
+          },
+        }),
+      );
+    } else {
+      console.log(`\n${renderColdReturn(cold)}`);
+    }
+  };
+  const expiryTimer = setInterval(() => {
+    const now = Date.now();
+    for (const s of cache.expiring(now)) {
+      if (json) {
+        console.log(
+          JSON.stringify({
+            cache: {
+              kind: "expiring",
+              sessionId: s.event.sessionId,
+              tokens: s.context,
+              expiresAt: new Date(s.expiresAt ?? now).toISOString(),
+              againUsd: s.rewriteUsd,
+              readUsd: s.readUsd,
+            },
+          }),
+        );
+      } else {
+        console.log(`\n${renderCacheExpiring(s, now)}`);
+      }
+    }
+  }, 15_000);
+  expiryTimer.unref();
+
   const onEvent = (event: CallEvent): void => {
     session.onEvent(event);
     if (counted.has(event.id)) return;
     counted.add(event.id);
     recordCall(status, event);
     onContext(event);
+    onCache(event);
     statusLine.update();
     for (const c of codexTracker?.add(event) ?? []) {
       if (json) console.log(JSON.stringify({ codex: c }));
@@ -481,6 +539,7 @@ export async function cmdLive(args: Args): Promise<void> {
     const stop = () => {
       if (stopping) return;
       stopping = true;
+      clearInterval(expiryTimer);
       for (const t of tails) t.stop();
       // Emit the response still in flight, so the settle delay doesn't lose it.
       for (const t of tails) t.flush?.();
@@ -532,7 +591,14 @@ export function cmdUndo(args: Args): void {
     return;
   }
 
+  if (rule === "statusline") return statuslineOff();
+
   if (!rule) {
+    if (statuslineApplied()) {
+      console.log(
+        `  Claude Code shows the optimAIzr status line ${dim("· optimaizr statusline off")}`,
+      );
+    }
     for (const agent of compactionApplied()) {
       const name = agent === "claude-code" ? "Claude Code" : "Codex";
       console.log(

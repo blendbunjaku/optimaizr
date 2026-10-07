@@ -170,7 +170,7 @@ test("the session file tells optimaizr live the mod is running", async ($, on) =
   await $.session.start(SESSION);
   const file = `${DIR}/mod/sessions/s1.json`;
   const beat = JSON.parse(w.files.get(file)!);
-  expect(beat).toMatchObject({ id: "s1", version: "0.9.0", cwd: CWD });
+  expect(beat).toMatchObject({ id: "s1", version: "0.10.0", cwd: CWD });
   expect(beat.endedAt).toBeUndefined();
 
   await $.session.end({ reason: "clear", sessionId: "s1", resume: { id: "s1" } });
@@ -807,4 +807,141 @@ test("the HUD shows a saving as a share of the 5-hour window too", async ($, on)
   );
   expect(hud).toContain("saved $0.50");
   expect(hud).toContain("≈1.0% of your 5h window");
+});
+
+test("a long idle conversation counts down to its cache expiring, then says what coming back costs", async ($, on) => {
+  const w = world(on);
+  w.now.ctx = 300_000;
+  await $.session.start(SESSION);
+  await step($);
+  // 300,000 tokens re-read at $0.20 a million, or written again at the 1-hour rate, $8.
+  expect(textOf(await $.ui.render(band()))).toContain(
+    "context   300K · each request re-reads it ($0.06) · fresh start: /optimaizr handoff",
+  );
+
+  await w.clock.advance(45 * MINUTE);
+  expect(textOf(await $.ui.render(band()))).toContain(
+    "cache     warm 10m more, then 300K is written again ($2.40) · leaving? /optimaizr handoff",
+  );
+
+  await w.clock.advance(11 * MINUTE);
+  expect(textOf(await $.ui.render(band()))).toContain(
+    "cache     expired · the next message writes 300K again ($2.40)",
+  );
+  const warned = w.toasts.filter((t) => t.includes("the cache expires"));
+  expect(warned).toHaveLength(1);
+  expect(warned[0]).toContain(
+    "writes 300K again ($2.40). Leaving? /optimaizr handoff, then /clear.",
+  );
+});
+
+test("a short conversation gets no cache line: starting over costs about the same", async ($, on) => {
+  const w = world(on);
+  w.now.ctx = 20_000;
+  await $.session.start(SESSION);
+  await step($);
+  await w.clock.advance(56 * MINUTE);
+  const drawn = textOf(await $.ui.render(band()));
+  expect(drawn).not.toContain("cache");
+  expect(drawn).not.toContain("context");
+  expect(w.toasts).toEqual([]);
+});
+
+test("a conversation past 200K is told once what each request re-reads", async ($, on) => {
+  const w = world(on);
+  w.now.ctx = 250_000;
+  await $.session.start(SESSION);
+  for (let i = 0; i < 2; i++) {
+    await $.turn.start({ text: "go", turnId: "t1" });
+    await step($);
+    await answered($);
+  }
+  expect(w.toasts).toEqual([
+    "optimAIzr: this conversation is past 200K. Each request re-reads all 250K ($0.05). At a natural break, /optimaizr handoff, then /clear.",
+  ]);
+});
+
+const NOTE = "Changed: src/limit.ts adds a token bucket.\nOpen: a test for the burst case.";
+const HANDOFFS = `${DIR}/mod/handoffs/work-shop-api.json`;
+
+test("/optimaizr handoff saves Claude's note, and the next conversation starts from it once", async ($, on) => {
+  const forks: string[] = [];
+  on("model.fork", ($, e) => {
+    forks.push(e.prompt);
+    return {
+      value: {
+        isAnswered: true as const,
+        text: NOTE,
+        usage: {
+          input_tokens: 10,
+          output_tokens: 400,
+          cache_read_input_tokens: 300_000,
+          cache_creation_input_tokens: 300,
+        },
+      },
+    };
+  });
+  on("prompt.context", ($, e) => ({ blocks: e.blocks }));
+  const w = world(on);
+  w.now.ctx = 300_000;
+  await $.session.start(SESSION);
+  await step($);
+
+  // 300,000 tokens read from cache, 400 written out: $0.07 on Opus 5.5.
+  const saved = await $.command.run(command("handoff"));
+  expect(saved.text).toBe(
+    `Handoff saved for shop-api, written from the warm cache for $0.07.\n\n${NOTE}\n\n` +
+      "/clear now and the next conversation in this project starts from this note. It is used once, within 12 hours.",
+  );
+  expect(forks).toHaveLength(1);
+  expect(JSON.parse(w.files.get(HANDOFFS)!).text).toBe(NOTE);
+
+  // The conversation that wrote it never reads it back.
+  expect((await $.prompt.context({ blocks: [] })).blocks).toEqual([]);
+
+  await $.session.end({ reason: "clear", sessionId: "s1", resume: { id: "s1" } });
+  const fresh = await $.prompt.context({ blocks: [] });
+  expect(fresh.blocks.map((b) => b.name)).toEqual(["optimaizrHandoff"]);
+  expect(fresh.blocks[0]!.text).toContain(NOTE);
+  expect(JSON.parse(w.files.get(HANDOFFS)!).usedAt).toBeDefined();
+  expect(w.toasts).toContain("optimAIzr: this conversation starts from your handoff note");
+  // A re-read of the same conversation keeps the block; the next conversation has none.
+  expect((await $.prompt.context({ blocks: [] })).blocks).toHaveLength(1);
+  await $.session.end({ reason: "clear", sessionId: "s1", resume: { id: "s1" } });
+  expect((await $.prompt.context({ blocks: [] })).blocks).toEqual([]);
+});
+
+test("a handoff note from another session is used within 12 hours, not after", async ($, on) => {
+  const note = (hoursAgo: number) =>
+    JSON.stringify({
+      version: 1,
+      root: CWD,
+      session: "s0",
+      conversation: 0,
+      at: new Date(-hoursAgo * 60 * MINUTE).toISOString(),
+      text: NOTE,
+    });
+  on("prompt.context", ($, e) => ({ blocks: e.blocks }));
+  const w = world(on, { files: { [HANDOFFS]: note(13) } });
+  await $.session.start(SESSION);
+  expect((await $.prompt.context({ blocks: [] })).blocks).toEqual([]);
+
+  w.files.set(HANDOFFS, note(1));
+  await $.session.end({ reason: "clear", sessionId: "s1", resume: { id: "s1" } });
+  expect((await $.prompt.context({ blocks: [] })).blocks).toHaveLength(1);
+});
+
+test("/optimaizr handoff waits for the turn to end, and needs an answer to hand off", async ($, on) => {
+  on("model.fork", () => ({
+    value: { isAnswered: false as const, reason: "nothing-to-fork" as const },
+  }));
+  world(on);
+  await $.session.start(SESSION);
+  expect((await $.command.run(command("handoff"))).text).toBe(
+    "Nothing to hand off yet: Claude hasn't answered in this conversation.",
+  );
+  await $.turn.start({ text: "go", turnId: "t1" });
+  expect((await $.command.run(command("handoff"))).text).toBe(
+    "Claude is still working. Run /optimaizr handoff once the turn ends.",
+  );
 });

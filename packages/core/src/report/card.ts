@@ -102,7 +102,9 @@ export function cardData(profile: Profile, summary: Summary): CardData {
       ? `My AI coding: ${roundUsd(headlineUsd)}/month of API-equivalent usage on a ${price} plan (${multiple} what I pay).`
       : `My AI coding runs ${roundUsd(headlineUsd)}/month at list prices.`,
     `${summary.totalTokens > 0 ? ((input / summary.totalTokens) * 100).toFixed(1) : 0}% of ${fmtTokens(summary.totalTokens)} tokens in 30 days were input.`,
-    reread > 0 ? `${reread}% of it was Claude re-reading the conversation.` : "",
+    reread > 0
+      ? `${reread}% of the cost was Claude re-reading the conversation, at the cheap cache-read rate.`
+      : "",
     pct > 0
       ? `${pct}% of it was waste${biggestWaste ? `, mostly ${biggestWaste.toLowerCase()}` : ""}.`
       : "Almost none of it was waste.",
@@ -295,7 +297,7 @@ export function renderCardSvg(d: CardData): string {
 
     // Where it goes, how clean it is, and the biggest lever.
     `<line x1="64" y1="420" x2="1136" y2="420" stroke="${RULE}"/>`,
-    text(64, 474, `${rereadPct}% of it: re-reading the conversation`, {
+    text(64, 474, `${rereadPct}% of the cost: re-reading the conversation`, {
       size: 32,
       weight: 800,
     }),

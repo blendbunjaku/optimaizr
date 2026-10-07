@@ -81,7 +81,10 @@ test("the card says where the money goes, how clean it is, and the biggest lever
   const plain = cardData(profile(), summary);
   assert.equal(plain.rereadShare, 0.56);
   assert.equal(plain.lever, null, "a fix is not a lever");
-  assert.match(plain.shareText, /56% of it was Claude re-reading the conversation\./);
+  assert.match(
+    plain.shareText,
+    /56% of the cost was Claude re-reading the conversation, at the cheap cache-read rate\./,
+  );
   assert.match(plain.shareText, /10% of it was waste/);
 
   const withLever = cardData(
@@ -104,7 +107,7 @@ test("the card says where the money goes, how clean it is, and the biggest lever
     /Biggest lever: compact earlier, up to 28% less \(\$258\/month\)\./,
   );
   const svg = renderCardSvg(withLever);
-  assert.match(svg, /56% of it: re-reading the conversation/);
+  assert.match(svg, /56% of the cost: re-reading the conversation/);
   assert.match(svg, /clear waste \$44\.80\/mo/);
   assert.match(svg, /biggest lever: compact earlier, up to 28% less/);
 });

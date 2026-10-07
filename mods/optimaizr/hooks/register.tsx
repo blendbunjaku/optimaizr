@@ -7,13 +7,25 @@ import type {
 } from "claude-code";
 import {
   bar,
+  cacheNote,
+  carryCost,
   costAt,
   crossed,
   describeSwitch,
+  duration,
   effortFor,
+  EXPIRY_TOAST_MS,
+  EXPIRY_TOAST_USD,
   fiveHour,
+  type Handoff,
+  handoffBlock,
+  handoffFile,
+  handoffFor,
+  HANDOFF_PROMPT,
   inProject,
   isWindow,
+  kTokens,
+  LONG_CONTEXT,
   meterColor,
   meterText,
   modelLabel,
@@ -22,6 +34,7 @@ import {
   PAYBACK_REQUESTS,
   paybackRequests,
   percent,
+  projectName,
   record,
   reloadCost,
   SAVED_MILESTONES,
@@ -43,10 +56,11 @@ import {
 
 // The optimAIzr mod: this turn's cost and the 5-hour window while Claude works,
 // one line under each answer, the model and effort switches `optimaizr live`
-// accepts, and a guard against retry loops. It reads usage figures and the
-// commands Claude runs, never prompt text or file contents.
+// accepts, a guard against retry loops, and a countdown before the cache expires.
+// It reads usage figures and the commands Claude runs, never prompt text or file
+// contents. The one text it keeps is the note /optimaizr handoff asks Claude for.
 
-const VERSION = "0.9.0";
+const VERSION = "0.10.0";
 // The HUD /optimaizr hud opens beside the conversation.
 const PANE = "optimaizr";
 // overrides.json is read again at most this often, so `optimaizr undo` lands fast.
@@ -102,6 +116,12 @@ const state = {
   avg: { n: 0, input: 0, output: 0, read: 0, write: 0 },
   // When the main conversation last made a request; past the cache's lifetime, it reloads anyway.
   lastMainAt: null as number | null,
+  // The model that request went to, whose cache holds the conversation.
+  model: "",
+  // Counts /clear and /resume, so a handoff note is never read back where it was written.
+  conversation: 0,
+  // The idle stretch, by its last request, already warned about the cache expiring.
+  expiryTold: null as number | null,
   // A main-conversation switch held back because its reload wouldn't pay back yet.
   waiting: null as { o: Override; reload: number; payback: number } | null,
   // Token totals since the mod loaded, for the cache-hit share.
@@ -123,11 +143,21 @@ const state = {
     fails: new Map<string, number>(),
     // Held once already: the next identical command goes through.
     waived: new Set<string>(),
+    // The handoff block this conversation started from, kept so a re-read gets the same one.
+    handoff: null as string | null,
+    // Told once that the conversation passed LONG_CONTEXT.
+    long: false,
   },
 };
 
 function forget(): void {
-  state.convo = { loaded: new Set(), fails: new Map(), waived: new Set() };
+  state.convo = {
+    loaded: new Set(),
+    fails: new Map(),
+    waived: new Set(),
+    handoff: null,
+    long: false,
+  };
 }
 
 async function optimaizrDir($: Api): Promise<string> {
@@ -191,7 +221,109 @@ async function beat($: Api, ended = false): Promise<void> {
 async function refresh($: Api): Promise<void> {
   await beat($).catch(() => undefined);
   await switches($).catch(() => undefined);
+  await expiring($).catch(() => undefined);
   void $.ui.invalidate("ui.render");
+}
+
+/** What to say about the main conversation's cache while the prompt waits. */
+async function cacheNow($: Api): Promise<{ label: string; text: string } | null> {
+  if (state.turn || state.lastMainAt === null || !state.model) return null;
+  return cacheNote({
+    model: state.model,
+    context: state.usage?.context.tokens ?? 0,
+    idleMs: (await $.clock.now()) - state.lastMainAt,
+    ttlMs: CACHE_TTL_MS,
+  });
+}
+
+/** One toast shortly before an idle conversation's cache expires, when coming back would cost. */
+async function expiring($: Api): Promise<void> {
+  const at = state.lastMainAt;
+  if (at === null || state.turn || state.expiryTold === at) return;
+  const left = at + CACHE_TTL_MS - (await $.clock.now());
+  const context = state.usage?.context.tokens ?? 0;
+  const cost = carryCost(state.model, context);
+  if (left <= 0 || left > EXPIRY_TOAST_MS || !cost || cost.rewrite < EXPIRY_TOAST_USD) return;
+  state.expiryTold = at;
+  void $.ui.toast(
+    `optimAIzr: the cache expires in ${duration(left)}. Coming back after that writes ${kTokens(context)} again (${usd(cost.rewrite)}). Leaving? /optimaizr handoff, then /clear.`,
+    { timeoutMs: 10_000 },
+  );
+}
+
+/** /optimaizr handoff: Claude writes a note from the warm cache, kept for the next conversation here. */
+async function handoff($: Api): Promise<string> {
+  if (state.turn) return "Claude is still working. Run /optimaizr handoff once the turn ends.";
+  const r = await $.model.fork({ prompt: HANDOFF_PROMPT });
+  if (!r.isAnswered) {
+    if (r.reason === "nothing-to-fork") {
+      return "Nothing to hand off yet: Claude hasn't answered in this conversation.";
+    }
+    if (r.reason === "api-error") {
+      return `Couldn't write the note: the API answered ${r.status ?? "nothing"} (${r.error}). Try again in a moment.`;
+    }
+    return r.reason === "aborted"
+      ? "The note was cancelled."
+      : "Claude answered without a note. Try again.";
+  }
+  const now = await $.clock.now();
+  const note: Handoff = {
+    version: 1,
+    root: state.root,
+    session: state.id,
+    conversation: state.conversation,
+    at: new Date(now).toISOString(),
+    text: r.text.trim(),
+  };
+  await $.fs.write(handoffFile(state.dir, state.root), `${JSON.stringify(note, null, 2)}\n`);
+
+  // Mostly read from cache, it cost little; otherwise the cache had expired.
+  const u = r.usage;
+  const cost = costAt(state.model, u, { hour: true });
+  const warm = u.cache_read_input_tokens >= u.input_tokens + u.cache_creation_input_tokens;
+  const how =
+    cost === null
+      ? ""
+      : warm
+        ? `, written from the warm cache for ${usd(cost)}`
+        : `, for ${usd(cost)}: the cache had expired, so Claude read the conversation again`;
+  return (
+    `Handoff saved for ${projectName(state.root)}${how}.\n\n${note.text}\n\n` +
+    `/clear now and the next conversation in this project starts from this note. ` +
+    `It is used once, within 12 hours.`
+  );
+}
+
+/** The handoff note a new conversation here starts from, claimed once. */
+async function startFrom($: Api): Promise<string | null> {
+  if (state.convo.handoff !== null) return state.convo.handoff;
+  const dir = state.dir || (await optimaizrDir($));
+  const root = state.root || (await $.session.root());
+  const file = handoffFile(dir, root);
+  const text = await $.fs.read(file).catch(() => "");
+  let stored: unknown = null;
+  try {
+    stored = JSON.parse(typeof text === "string" ? text : "");
+  } catch {
+    return null;
+  }
+  const now = await $.clock.now();
+  const h = handoffFor(stored, {
+    root,
+    session: state.id,
+    conversation: state.conversation,
+    now,
+  });
+  if (!h) return null;
+  await $.fs.write(
+    file,
+    `${JSON.stringify({ ...h, usedAt: new Date(now).toISOString() }, null, 2)}\n`,
+  );
+  state.convo.handoff = handoffBlock(h);
+  void $.ui.toast("optimAIzr: this conversation starts from your handoff note", {
+    timeoutMs: 6_000,
+  });
+  return state.convo.handoff;
 }
 
 async function switches($: Api): Promise<Override[]> {
@@ -268,8 +400,8 @@ export const register: Register = (on, options) => {
     await $.command.register({
       name: "optimaizr",
       description:
-        "This session's spend, savings and plan windows; hud opens the HUD, off or on pauses a switch",
-      argumentHint: "[off|on]",
+        "This session's spend, savings and plan windows; hud opens the HUD, handoff saves a note to start fresh from, off or on pauses a switch",
+      argumentHint: "[hud|handoff|off|on]",
       immediate: true,
     });
     await beat($).catch(() => undefined);
@@ -283,8 +415,20 @@ export const register: Register = (on, options) => {
   // /clear and /resume end a conversation, not the session the mod runs in.
   on("session.end", async ($, e, next) => {
     forget();
-    if (e.reason !== "clear" && e.reason !== "resume") await beat($, true).catch(() => undefined);
+    if (e.reason === "clear" || e.reason === "resume") {
+      state.conversation += 1;
+      state.lastMainAt = null;
+    } else {
+      await beat($, true).catch(() => undefined);
+    }
     return next(e);
+  });
+
+  // A new conversation in a project with a waiting handoff note starts from it, once.
+  on("prompt.context", async ($, e, next) => {
+    const r = await next(e);
+    const text = await startFrom($).catch(() => null);
+    return text ? { ...r, blocks: [...r.blocks, { name: "optimaizrHandoff", text }] } : r;
   });
 
   // After compaction the conversation is new to every model's cache.
@@ -336,7 +480,10 @@ export const register: Register = (on, options) => {
         state.waiting = null;
       }
     }
-    if (e.agentId === undefined) state.lastMainAt = now;
+    if (e.agentId === undefined) {
+      state.lastMainAt = now;
+      state.model = model?.to ?? e.model;
+    }
     const ef = model ? undefined : effortFor(list, req);
     const effort = ef && !state.refused.has(`effort:${ef.effort}`) ? ef : undefined;
     const o = model ?? effort;
@@ -469,6 +616,7 @@ export const register: Register = (on, options) => {
     if (!t || e.reason !== "answer") return r;
 
     await measure($).catch(() => undefined);
+    longNote($);
     const spent = (state.usage?.cost?.usd ?? 0) - t.startUsd;
     state.turnCosts = [...state.turnCosts, Math.max(0, spent)].slice(-24);
     if (!showTurnLine || spent < 0.005) return r;
@@ -511,7 +659,12 @@ export const register: Register = (on, options) => {
     const { Box, Text } = $.ui.resolve(e);
     const five = fiveHour(u.rateLimits);
     const waiting = waitingNote();
-    const lines = [...switchLines(activeSwitches()), ...(waiting ? [waiting] : [])];
+    const cache = e.props.isWorking ? null : await cacheNow($);
+    const lines = [
+      ...switchLines(activeSwitches()),
+      ...(waiting ? [waiting] : []),
+      ...(cache ? [`${cache.label.padEnd(10)}${cache.text}`] : []),
+    ];
     const wide = e.props.bodyColumns >= 72;
 
     // Off a plan there is no window: the session's spend is the real bill.
@@ -528,6 +681,7 @@ export const register: Register = (on, options) => {
           </Box>
           {lines[0] !== undefined && <Text dimColor>{lines[0]}</Text>}
           {lines[1] !== undefined && <Text dimColor>{lines[1]}</Text>}
+          {lines[2] !== undefined && <Text dimColor>{lines[2]}</Text>}
         </Box>
       );
     }
@@ -553,6 +707,7 @@ export const register: Register = (on, options) => {
         </Box>
         {lines[0] !== undefined && <Text dimColor>{lines[0]}</Text>}
         {lines[1] !== undefined && <Text dimColor>{lines[1]}</Text>}
+        {lines[2] !== undefined && <Text dimColor>{lines[2]}</Text>}
       </Box>
     );
   });
@@ -571,11 +726,17 @@ export const register: Register = (on, options) => {
       await $.ui.open({ id: PANE, title: "optimAIzr HUD", focus: true });
       return { text: "Opened the optimAIzr HUD. Esc closes it." };
     }
-    if (arg) return { text: "Use /optimaizr, /optimaizr hud, /optimaizr off or /optimaizr on." };
+    if (arg === "handoff") return { text: await handoff($) };
+    if (arg) {
+      return {
+        text: "Use /optimaizr, /optimaizr hud, /optimaizr handoff, /optimaizr off or /optimaizr on.",
+      };
+    }
 
     await measure($).catch(() => undefined);
     const u = state.usage;
     const waiting = waitingNote();
+    const cache = await cacheNow($);
     return {
       text: summary({
         ...(u?.cost ? { usd: u.cost.usd } : {}),
@@ -590,6 +751,7 @@ export const register: Register = (on, options) => {
         held: state.held,
         turns: state.turnCosts,
         ...(waiting ? { note: waiting } : {}),
+        ...(cache ? { cache } : {}),
       }),
     };
   });
@@ -642,6 +804,7 @@ export const register: Register = (on, options) => {
     const lines = switchLines(activeSwitches());
     const waiting = waitingNote();
     const switchable = activeSwitches().length > 0 || waiting !== null;
+    const cache = await cacheNow($);
 
     return (
       <Box flexDirection="column" gap={1}>
@@ -702,6 +865,7 @@ export const register: Register = (on, options) => {
         {lines[0] !== undefined && <Text>{lines[0]}</Text>}
         {lines[1] !== undefined && <Text>{lines[1]}</Text>}
         {waiting && <Text color="yellow">{waiting}</Text>}
+        {cache && <Text color="yellow">{`${cache.label.padEnd(10)}${cache.text}`}</Text>}
         {state.held > 0 && (
           <Text
             dimColor
@@ -726,6 +890,18 @@ export const register: Register = (on, options) => {
     );
   });
 };
+
+/** Once a conversation passes LONG_CONTEXT, say what each request now re-reads. */
+function longNote($: Api): void {
+  const context = state.usage?.context.tokens ?? 0;
+  const cost = carryCost(state.model, context);
+  if (state.convo.long || context < LONG_CONTEXT || !cost) return;
+  state.convo.long = true;
+  void $.ui.toast(
+    `optimAIzr: this conversation is past ${kTokens(LONG_CONTEXT)}. Each request re-reads all ${kTokens(context)} (${usd(cost.read)}). At a natural break, /optimaizr handoff, then /clear.`,
+    { timeoutMs: 10_000 },
+  );
+}
 
 /** The pill at the top of the HUD: what the mod is doing right now. */
 function hudStatus(): { text: string; color: string } {

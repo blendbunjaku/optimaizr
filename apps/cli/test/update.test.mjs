@@ -92,7 +92,7 @@ test("optimaizr changelog prints this version's notes, offline", { skip }, async
     fs.readFileSync(new URL("../package.json", import.meta.url), "utf8"),
   ).version;
   assert.match(stdout, new RegExp(`optimAIzr ${version.replace(/\./g, "\\.")}`));
-  assert.match(stdout, /Your plan, detected/);
+  assert.match(stdout, /optimaizr statusline on/);
   assert.match(stdout, /optimaizr changelog --all/);
   // Piped output: no update notice and nothing written.
   assert.equal(fs.existsSync(path.join(home, ".optimaizr")), false);

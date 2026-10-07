@@ -139,7 +139,7 @@ export function bar(pct: number, width: number): [string, string] {
   return ["█".repeat(n), "░".repeat(width - n)];
 }
 
-function projectName(p: string): string {
+export function projectName(p: string): string {
   return p.split(/[\\/]/).filter(Boolean).slice(-1)[0] ?? p;
 }
 
@@ -274,6 +274,141 @@ export function savedBy(o: Override, t: Tokens, first: boolean, hour = true): nu
   return was === null || is === null ? null : was - is;
 }
 
+/** `340K`. */
+export function kTokens(n: number): string {
+  return `${Math.round(n / 1_000)}K`;
+}
+
+// Below this, writing the conversation again costs about what a fresh start does.
+export const COLD_MIN_CONTEXT = 50_000;
+// Past this, each request re-reads far more than the work in front of it needs.
+export const LONG_CONTEXT = 200_000;
+// The band counts down this long before the cache expires.
+export const COUNTDOWN_MS = 15 * MINUTE;
+// One toast this close to expiry, when coming back would cost at least EXPIRY_TOAST_USD.
+export const EXPIRY_TOAST_MS = 5 * MINUTE;
+export const EXPIRY_TOAST_USD = 0.5;
+
+/**
+ * What carrying the conversation costs on one request: read from a warm cache,
+ * or written to it again at the 1-hour rate once it expired.
+ */
+export function carryCost(
+  model: string,
+  contextTokens: number,
+): { read: number; rewrite: number } | null {
+  const p = priceOf(model);
+  if (!p) return null;
+  return {
+    read: (contextTokens * p.cacheRead) / 1_000_000,
+    rewrite: (contextTokens * p.cacheWrite1h) / 1_000_000,
+  };
+}
+
+/**
+ * What to say about the conversation's cache while the prompt waits: a
+ * countdown before it expires, what coming back costs after, or what each
+ * request re-reads once the conversation is long. Null when none applies.
+ */
+export function cacheNote(c: {
+  model: string;
+  context: number;
+  idleMs: number;
+  ttlMs: number;
+}): { label: "cache" | "context"; text: string } | null {
+  if (c.context < COLD_MIN_CONTEXT) return null;
+  const cost = carryCost(c.model, c.context);
+  if (!cost) return null;
+  const left = c.ttlMs - c.idleMs;
+  const size = kTokens(c.context);
+  if (left <= 0) {
+    return {
+      label: "cache",
+      text: `expired · the next message writes ${size} again (${usd(cost.rewrite)})`,
+    };
+  }
+  if (left <= COUNTDOWN_MS) {
+    return {
+      label: "cache",
+      text: `warm ${duration(left)} more, then ${size} is written again (${usd(cost.rewrite)}) · leaving? /optimaizr handoff`,
+    };
+  }
+  if (c.context >= LONG_CONTEXT) {
+    return {
+      label: "context",
+      text: `${size} · each request re-reads it (${usd(cost.read)}) · fresh start: /optimaizr handoff`,
+    };
+  }
+  return null;
+}
+
+// A handoff note is used once, by a conversation started within this long.
+export const HANDOFF_TTL_MS = 12 * HOUR;
+
+/** What Claude is asked for: a note a fresh conversation can start from. */
+export const HANDOFF_PROMPT =
+  "Write a handoff note so a fresh conversation can carry on this work without this one. " +
+  "Plain text, under 250 words, in four short parts: what changed (files and why), " +
+  "what was decided, what is still open, and what to check first. Name exact paths, " +
+  "commands and errors. No preamble, and no tool calls.";
+
+export type Handoff = {
+  version: 1;
+  root: string;
+  /** The session and conversation it was written in, which never read it back. */
+  session: string;
+  conversation: number;
+  at: string;
+  text: string;
+  usedAt?: string;
+};
+
+export function isHandoff(v: unknown): v is Handoff {
+  const h = v as Handoff;
+  return (
+    typeof h === "object" &&
+    h !== null &&
+    h.version === 1 &&
+    typeof h.root === "string" &&
+    typeof h.session === "string" &&
+    typeof h.conversation === "number" &&
+    typeof h.at === "string" &&
+    typeof h.text === "string"
+  );
+}
+
+/** One note per project: `/work/shop-api` keeps `work-shop-api.json`. */
+export function handoffFile(dir: string, root: string): string {
+  const key =
+    slash(root)
+      .replace(/[^A-Za-z0-9._-]+/g, "-")
+      .replace(/^-+|-+$/g, "") || "root";
+  return `${dir}/mod/handoffs/${key}.json`;
+}
+
+/**
+ * The note a new conversation should start from, if one is waiting: same
+ * project, unused, recent, and written in another conversation.
+ */
+export function handoffFor(
+  v: unknown,
+  at: { root: string; session: string; conversation: number; now: number },
+): Handoff | null {
+  if (!isHandoff(v) || v.usedAt || slash(v.root) !== slash(at.root)) return null;
+  if (v.session === at.session && v.conversation === at.conversation) return null;
+  const age = at.now - Date.parse(v.at);
+  return age >= 0 && age <= HANDOFF_TTL_MS ? v : null;
+}
+
+/** The context block the next conversation reads. */
+export function handoffBlock(h: Handoff): string {
+  return (
+    `A handoff note from the previous conversation in this project, written by Claude at ` +
+    `${clock(h.at)} and saved by optimAIzr. Check it against the code before relying on it.\n\n` +
+    h.text.trim()
+  );
+}
+
 export function isWindow(v: unknown): v is Window {
   const w = v as Window;
   return (
@@ -388,6 +523,8 @@ export function summary(s: {
   turns?: readonly number[];
   /** Why a switch for this conversation is waiting, when one is. */
   note?: string;
+  /** The conversation's cache, when there is something to say about it. */
+  cache?: { label: string; text: string };
 }): string {
   const rows: Array<[string, string]> = [];
   const onPlan = s.limits.length > 0;
@@ -424,6 +561,7 @@ export function summary(s: {
       : "";
     rows.push(["7d window", `${percent(week.percentUsed)}${resets}`]);
   }
+  if (s.cache) rows.push([s.cache.label === "cache" ? "Cache" : "Context", s.cache.text]);
   for (const [i, o] of s.switches.entries()) {
     const how = s.paused
       ? "off in this session: /optimaizr on"
