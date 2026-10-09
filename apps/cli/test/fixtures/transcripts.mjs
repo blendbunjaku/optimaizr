@@ -12,7 +12,8 @@ export const START = Date.UTC(2026, 8, 20, 10, 0);
 /**
  * A Claude Code transcript from a short script:
  * `{ prompt }`, `{ compact: true }`, or a call `{ tools, out, think, ctx, side, stop }`
- * where each tool is `{ name, input, error?, chars? }`. Records are 20 seconds
+ * where each tool is `{ name, input, error?, chars? }`. A compaction with `meta`
+ * (`{ trigger, preTokens, ... }`) records it as Claude Code does. Records are 20 seconds
  * apart; `gap` adds minutes before one. A call's `write` sets its cache write,
  * 500 by default, and `hour` makes it a 1-hour write.
  */
@@ -42,6 +43,8 @@ export function transcript(session, script) {
       recs.push({
         type: "system",
         subtype: "compact_boundary",
+        ...(s.meta ? { uuid: `${session}-c${n}`, cwd: "/w", compactMetadata: s.meta } : {}),
+        ...side,
         timestamp: at(),
         sessionId: session,
       });

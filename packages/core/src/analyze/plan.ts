@@ -214,6 +214,10 @@ export interface PlanView {
   multiple: number;
   /** Days of history `valueMonthlyUsd` was measured over, when under 30. */
   valueDays: number;
+  /** Claude Code calls in the history. With none there is nothing to set the plan against. */
+  calls: number;
+  /** Where the Claude Code transcripts were read from, named when none were found. */
+  dir?: string;
 
   /** Sessions that started in the last 30 days. */
   recentSessions: number;
@@ -237,6 +241,7 @@ export function planView(
     now?: Date;
     source?: PlanSource;
     windows?: ClaudeWindows | null;
+    dir?: string;
   },
 ): PlanView {
   const now = (opts.now ?? new Date()).getTime();
@@ -272,6 +277,8 @@ export function planView(
     valueMonthlyUsd,
     multiple: valueMonthlyUsd / priceUsd,
     valueDays,
+    calls: sessions.reduce((t, s) => t + s.calls, 0),
+    ...(opts.dir ? { dir: opts.dir } : {}),
     recentSessions: recent.length,
     medianSessionUsd: median(recent.map((s) => s.usd)),
     heaviest: recent.reduce<PlanSession | null>((a, s) => (!a || s.usd > a.usd ? s : a), null),

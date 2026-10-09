@@ -6,7 +6,14 @@ import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
-import { claudeConfigDir, codexHome, planFromAccount, planView, renderPlan } from "@optimaizr/core";
+import {
+  claudeConfigDir,
+  codexHome,
+  planFromAccount,
+  planView,
+  renderCodexPlan,
+  renderPlan,
+} from "@optimaizr/core";
 import {
   claudeGlobalConfigPath,
   claudeProjectsRoot,
@@ -224,8 +231,11 @@ test("stale readings and meters past their reset are dropped", () => {
  * The plan block
  * ------------------------------------------------------------------ */
 
+/** One Claude Code call, so the plan block has something to set the plan against. */
+const ONE_CALL = [{ id: "a", ts: ago(30), source: "claude-code", cost: { total: 2 } }];
+
 test("the plan block says where the plan came from and shows real meters", () => {
-  const v = planView([], [], {
+  const v = planView(ONE_CALL, [], {
     plan: "pro",
     source: "detected",
     windows: {
@@ -244,10 +254,52 @@ test("the plan block says where the plan came from and shows real meters", () =>
 });
 
 test("without meters the block keeps the learned limit and points at the mod", () => {
-  const text = renderPlan(planView([], [], { plan: "max5", source: "flag" })).join("\n");
+  const text = renderPlan(planView(ONE_CALL, [], { plan: "max5", source: "flag", now: NOW })).join(
+    "\n",
+  );
   assert.match(text, /Plan · from --plan/);
   assert.match(text, /Your session limit\s+unknown/);
   assert.match(text, /optimaizr mod/);
+  assert.match(text, /from 1 day\b/, "one day, not one days");
+});
+
+test("a plan with no Claude Code calls says where it looked instead of showing $0", () => {
+  // A second account's CLAUDE_CONFIG_DIR with no transcripts, only Codex.
+  const codexOnly = [{ id: "x", ts: ago(30), source: "codex", cost: { total: 5 } }];
+  const v = planView(codexOnly, [], {
+    plan: "team-premium",
+    source: "flag",
+    dir: "/home/me/.claude-instances/rentals/projects",
+    now: NOW,
+  });
+  assert.equal(v.calls, 0);
+  const text = renderPlan(v).join("\n");
+  assert.match(
+    text,
+    /No Claude Code usage found in \/home\/me\/\.claude-instances\/rentals\/projects/,
+  );
+  assert.doesNotMatch(text, /API-equivalent|5-hour sessions|Your session limit/);
+});
+
+test("a Codex reading from days ago carries its date", () => {
+  const text = renderCodexPlan({
+    label: "ChatGPT Business",
+    priceUsd: null,
+    multiple: null,
+    valueMonthlyUsd: 69.51,
+    windows: [
+      {
+        label: "Weekly",
+        hasReset: true,
+        resetsAt: new Date(Date.now() - 13 * 86_400_000).toISOString(),
+        usedPercent: 0,
+      },
+    ],
+    wasteShare: 0.06,
+    readAt: new Date(Date.now() - 13 * 86_400_000).toISOString(),
+  }).join("\n");
+  assert.match(text, /reset at [A-Z][a-z]{2} \d{1,2}, \d{2}:\d{2}, fresh/);
+  assert.match(text, /recorded them at [A-Z][a-z]{2} \d{1,2}, \d{2}:\d{2}\./);
 });
 
 /* ------------------------------------------------------------------ *

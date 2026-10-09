@@ -455,7 +455,17 @@ test("adapters are registered and readable through the registry", async () => {
 
 test("ingest merges adapters and never throws on a bad source", async () => {
   useTempStore();
-  const records = [assistant({ id: "m1", ts: "2026-09-01T10:00:00.000Z", content: bash(1) })];
+  const records = [
+    assistant({ id: "m1", ts: "2026-09-01T10:00:00.000Z", content: bash(1) }),
+    {
+      type: "system",
+      subtype: "compact_boundary",
+      uuid: "c1",
+      timestamp: "2026-09-01T10:01:00.000Z",
+      sessionId: "session-a",
+      compactMetadata: { trigger: "manual", preTokens: 90_000, durationMs: 30_000 },
+    },
+  ];
   const root = writeFixture(records);
 
   const data = await ingest([
@@ -464,6 +474,10 @@ test("ingest merges adapters and never throws on a bad source", async () => {
   ]);
 
   assert.equal(data.events.length, 1, "the good source still produced events");
+  assert.deepEqual(
+    data.compactions.map((c) => [c.trigger, c.preTokens, c.durationMs, c.midTask]),
+    [["manual", 90_000, 30_000, false]],
+  );
   assert.ok(
     data.failures.some((w) => w.includes("Usage export")),
     "the bad source produced a failure, not a crash",

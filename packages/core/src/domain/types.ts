@@ -95,6 +95,7 @@ export interface AdapterResult {
   sources: string[];
   /** Non-fatal problems: unparseable rows, unknown models. */
   warnings: string[];
+  compactions?: CompactionRecord[];
 }
 
 /* ------------------------------------------------------------------ *
@@ -453,6 +454,23 @@ export interface Window {
   days: number;
 }
 
+/** A compaction the agent ran in a main conversation, as its transcript records it. */
+export interface CompactionRecord {
+  source: string;
+  ts: string;
+  sessionId: string;
+  project: string;
+  /** "auto" when the agent hit its window, "manual" for /compact. */
+  trigger: string;
+  /** Context before and after, by the agent's own count. */
+  preTokens: number;
+  postTokens?: number;
+  /** How long the summary took, which the user waits through. */
+  durationMs?: number;
+  /** The reply before it was about to call a tool: the work was still going. */
+  midTask: boolean;
+}
+
 export interface Dataset {
   events: UsageEvent[];
   window: Window;
@@ -463,6 +481,8 @@ export interface Dataset {
    * one means missing data, so it must be shown where it can't be missed.
    */
   failures?: string[];
+  /** Real compactions, where the source records them (Claude Code does). */
+  compactions?: CompactionRecord[];
 }
 
 /** A detector that threw. Reported so a crashed rule never looks like a clean $0. */

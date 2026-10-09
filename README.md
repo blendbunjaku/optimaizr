@@ -7,6 +7,8 @@
 
 **Spend fewer tokens on the same work.**
 
+[![optimaizr live catching a cold cache return while Claude Code works. Click to watch the 42-second demo.](https://raw.githubusercontent.com/blendbunjaku/optimaizr/main/docs/demo.jpg)](https://optimaizr.com/demo)
+
 In a long Claude Code session, most of what you pay for isn't Claude writing
 code. It's Claude re-reading your conversation, on every call. optimAIzr shows
 where your tokens go, warns you before the expensive moments, and fixes what it

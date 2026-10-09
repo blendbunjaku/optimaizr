@@ -5,7 +5,7 @@ import readline from "node:readline";
 
 import { costOf, providerOf } from "../pricing.js";
 import { estimateImageTokens } from "./images.js";
-import type { CallEvent, Dataset, ToolCall } from "../types.js";
+import type { CallEvent, CompactionRecord, Dataset, ToolCall } from "../types.js";
 
 /**
  * Ingest Claude Code session transcripts. Claude Code writes one JSONL record
@@ -118,6 +118,8 @@ interface Partial {
 interface Thread {
   turnId?: string;
   epoch: number;
+  /** Why its last reply stopped: "tool_use" means the work was still going. */
+  lastStop?: string | null;
 }
 
 /**
@@ -131,10 +133,18 @@ export interface TranscriptState {
   touchedAt: Map<string, number>;
   /** By file and agent: the main conversation and each subagent are separate threads. */
   threads: Map<string, Thread>;
+  /** Main-conversation compactions by record uuid: a resumed session copies them. */
+  compactions: Map<string, CompactionRecord>;
 }
 
 export function createTranscriptState(): TranscriptState {
-  return { partials: new Map(), toolResults: new Map(), touchedAt: new Map(), threads: new Map() };
+  return {
+    partials: new Map(),
+    toolResults: new Map(),
+    touchedAt: new Map(),
+    threads: new Map(),
+    compactions: new Map(),
+  };
 }
 
 function threadOf(
@@ -267,7 +277,22 @@ export function consumeTranscriptLine(
 
   // A compaction replaces the conversation with a summary: what was read before is gone.
   if (rec.type === "system" && rec.subtype === "compact_boundary") {
-    threadOf(state, file, rec).epoch++;
+    const thread = threadOf(state, file, rec);
+    thread.epoch++;
+    const meta = rec.compactMetadata;
+    if (!rec.isSidechain && typeof meta?.preTokens === "number") {
+      state.compactions.set(rec.uuid ?? `${file}:${rec.timestamp}`, {
+        source: "claude-code",
+        ts: rec.timestamp ?? new Date(at).toISOString(),
+        sessionId: rec.sessionId ?? path.basename(file, ".jsonl"),
+        project: rec.cwd ?? "unknown",
+        trigger: typeof meta.trigger === "string" ? meta.trigger : "unknown",
+        preTokens: meta.preTokens,
+        ...(typeof meta.postTokens === "number" ? { postTokens: meta.postTokens } : {}),
+        ...(typeof meta.durationMs === "number" ? { durationMs: meta.durationMs } : {}),
+        midTask: thread.lastStop === "tool_use",
+      });
+    }
     return true;
   }
 
@@ -330,6 +355,7 @@ export function consumeTranscriptLine(
     p.usageWeight = weight;
     if (msg.stop_reason) p.stopReason = msg.stop_reason;
   }
+  thread.lastStop = msg.stop_reason ?? p.stopReason ?? null;
 
   // Every record that touches this response resets its settle clock.
   state.touchedAt.set(messageId, at);
@@ -446,7 +472,12 @@ export async function ingestClaudeCode(opts: IngestOptions = {}): Promise<Datase
   const unpriced = new Set(events.filter((e) => e.cost.unpriced).map((e) => e.model));
   for (const m of unpriced) warnings.push(`Unknown model "${m}", priced at $0`);
 
-  return { events, window: { from, to, days }, sources: files, warnings };
+  const compactions = [...state.compactions.values()]
+    .filter((c) => !cutoff || new Date(c.ts).getTime() >= cutoff)
+    .filter((c) => !opts.project || c.project.toLowerCase().includes(opts.project.toLowerCase()))
+    .sort((a, b) => a.ts.localeCompare(b.ts));
+
+  return { events, window: { from, to, days }, sources: files, warnings, compactions };
 }
 
 /**

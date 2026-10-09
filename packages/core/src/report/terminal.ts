@@ -632,9 +632,11 @@ export function renderProfile(p: Profile): string {
   // The headline: what the plan is worth, else what the usage costs.
   const multiple = (m: number) => `${m >= 10 ? Math.round(m) : m.toFixed(1)}x`;
   const codexPriced = p.codex?.priceUsd && p.codex.multiple !== null ? p.codex : null;
-  if (p.plan) {
+  // A plan with no Claude Code calls behind it would headline $0 of work.
+  const claudePlan = p.plan && p.plan.calls > 0 ? p.plan : null;
+  if (claudePlan) {
     out.push(
-      `  Your ${bold(p.plan.label)} did ${bold(green(`${usd(p.plan.valueMonthlyUsd)}/mo`))} of work at API prices: ${bold(green(multiple(p.plan.multiple)))} what you pay`,
+      `  Your ${bold(claudePlan.label)} did ${bold(green(`${usd(claudePlan.valueMonthlyUsd)}/mo`))} of work at API prices: ${bold(green(multiple(claudePlan.multiple)))} what you pay`,
     );
   } else if (codexPriced) {
     out.push(
@@ -680,7 +682,7 @@ export function renderProfile(p: Profile): string {
   out.push("");
 
   // The biggest single win, whatever its tier, labelled for what it is.
-  const windowed = Boolean(p.plan || p.codex);
+  const windowed = Boolean(claudePlan || p.codex);
   const win = p.biggestWin;
   if (win) {
     const r = win.recommendation;
@@ -998,11 +1000,17 @@ export function renderPlan(v: PlanView): string[] {
     bold(`${usd(v.priceUsd)}/mo`),
     dim(v.perSeat ? "per seat, billed monthly" : "what you pay"),
   );
+  if (v.calls === 0) {
+    out.push(`  ${yellow("No Claude Code usage found")}${v.dir ? dim(` in ${v.dir}`) : ""}`);
+    out.push(`  ${dim("so there is nothing to set the plan against.")}`);
+    return out;
+  }
+  const days = Math.round(v.valueDays);
   row(
     "API-equivalent",
     bold(green(`${usd(v.valueMonthlyUsd)}/mo`)),
     `${green(`${v.multiple >= 10 ? Math.round(v.multiple) : v.multiple.toFixed(1)}x`)} ${dim(
-      v.valueDays < 30 ? `what you pay, from ${Math.round(v.valueDays)} days` : "what you pay",
+      v.valueDays < 30 ? `what you pay, from ${days} day${days === 1 ? "" : "s"}` : "what you pay",
     )}`,
   );
   row("5-hour sessions", bold(v.recentSessions.toLocaleString()), dim("in the last 30 days"));
@@ -1070,9 +1078,10 @@ export function renderPlan(v: PlanView): string[] {
   return out;
 }
 
-/** `Sep 26, 14:00` for a reset more than a day away, `01:00` otherwise. */
+/** `Sep 26, 14:00` for a time more than 20 hours away either way, `01:00` otherwise. */
 export function resetTime(iso: string): string {
-  const far = Date.parse(iso) - Date.now() > 20 * 3_600_000;
+  // A reset or reading from days ago needs its date as much as one days ahead.
+  const far = Math.abs(Date.parse(iso) - Date.now()) > 20 * 3_600_000;
   return far ? `${localDay(iso)}, ${localTime(iso)}` : localTime(iso);
 }
 
@@ -1118,7 +1127,7 @@ export function renderCodexPlan(v: CodexPlanView): string[] {
       ? dim(`fix it and you'd hit the limits ~${Math.round((1 / (1 - ws) - 1) * 100)}% later`)
       : dim("nothing worth cutting"),
   );
-  out.push(`  ${dim(`OpenAI's own figures, as Codex recorded them at ${localTime(v.readAt)}.`)}`);
+  out.push(`  ${dim(`OpenAI's own figures, as Codex recorded them at ${resetTime(v.readAt)}.`)}`);
   return out;
 }
 
@@ -1250,7 +1259,7 @@ export function renderCacheExpiring(s: CacheState, now: number): string {
     `  ${yellow("⏳")}  ${dim(new Date(now).toLocaleTimeString())}  ${bold(`Cache expires in ${left}`)} ${dim(`${fmtTokens(s.context)} of conversation`)}`,
     `        ${callSession(e)} ${dim(projectName(e.project))}`,
     `        ${dim("Coming back after that writes it all again:")} ${bold(usd(s.rewriteUsd))}${dim(`. While warm, a call reads it for ${usd(s.readUsd)}.`)}`,
-    `        ${dim("Leaving for longer? Ask for a short handoff note, /clear, and start from it.")}`,
+    `        ${dim("Leaving for longer? Ask for a handoff note (done, next, file), /clear, and start from it.")}`,
   ].join("\n");
 }
 

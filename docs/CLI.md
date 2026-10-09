@@ -668,13 +668,26 @@ Applying the first one is a setting, with an exact undo:
 ```bash
 optimaizr apply context-compaction              # Claude Code and/or Codex, whichever you use
 optimaizr apply context-compaction --agent codex
+optimaizr apply context-compaction --at 400K    # a later point, 100K to 1M
 optimaizr undo context-compaction               # puts back what was there
 ```
 
 For Claude Code it sets `"env": { "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "200000" }`
 in `~/.claude/settings.json`; for Codex, `model_auto_compact_token_limit = 200000`
 in `~/.codex/config.toml`. Both are read when a session starts. The previous
-values are kept in `~/.optimaizr/settings-changes.json`.
+values are kept in `~/.optimaizr/settings-changes.json`. Claude Code compacts a
+little before the number it is given: with 200000 set, it fired at 166-170K.
+
+The finding also prices compacting later, at 300K, 400K and 600K, from the same
+replay. A later point keeps more of each conversation and saves less; pick the
+one you trust and pass it with `--at`.
+
+It also counts the compactions Claude Code really ran, from its transcripts:
+how many, how many were automatic, how many landed mid-task (the reply before
+was about to call a tool), and how long you waited for the summaries. A lower
+point compacts more often, and automatic compaction usually cuts into work in
+progress, so compacting by hand when a piece of work is done is the safer
+habit: `/compact keep the API decisions`.
 
 ---
 

@@ -31,8 +31,8 @@ Needs Claude Code 2.1.287 or later.
   minutes, `cache     warm 10m more, then 300K is written again ($2.40)`, and one
   toast comes 5 minutes before. After it expires, the band says what the next
   message will cost. Past 200K, it says what each request re-reads.
-- **`/optimaizr handoff`:** Claude writes a short note (what changed, what was
-  decided, what is open, what to check first) while the cache is still warm,
+- **`/optimaizr handoff`:** Claude writes a three-line note (done, next, the
+  file to start from) while the cache is still warm,
   so it costs cents. `/clear`, and the next conversation in that project
   starts from the note instead of re-reading the old one. A note is used
   once and expires after 12 hours.

@@ -8,6 +8,7 @@ export type {
   AffectedTraffic,
   CallEvent,
   Category,
+  CompactionRecord,
   CostCalculation,
   Dataset,
   Evidence,

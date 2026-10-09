@@ -446,10 +446,10 @@ export async function cmdLive(args: Args): Promise<void> {
     if (planNow) {
       const c = planNow.current;
       const where = c
-        ? `${usd(c.usd)} this session, resets ${localTime(c.end)}${
+        ? `${usd(c.usd)} this 5h window, resets ${localTime(c.end)}${
             c.limitShare === null ? "" : ` (~${Math.round(c.limitShare * 100)}% of your limit)`
           }`
-        : "no session running";
+        : "no 5h window open";
       const five = planNow.windows?.fiveHour;
       const week = planNow.windows?.sevenDay;
       const limit = five
@@ -599,10 +599,13 @@ export function cmdUndo(args: Args): void {
         `  Claude Code shows the optimAIzr status line ${dim("· optimaizr statusline off")}`,
       );
     }
+    const set = compactionStatus();
     for (const agent of compactionApplied()) {
       const name = agent === "claude-code" ? "Claude Code" : "Codex";
+      // What the file says now, which `--at` may have moved off the default.
+      const tokens = Number(set[agent] ?? COMPACT_AT) || COMPACT_AT;
       console.log(
-        `  ${name} compacts at ${Math.round(COMPACT_AT / 1000)}K ${dim("· optimaizr undo context-compaction")}`,
+        `  ${name} is set to compact at ${Math.round(tokens / 1000)}K ${dim("· optimaizr undo context-compaction")}`,
       );
     }
     if (active.length === 0) {
