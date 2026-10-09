@@ -111,15 +111,37 @@ export function renderStatus(s: StatusState, now = Date.now(), width = 120): str
       parts.push({ text: dim(`checked ${ago(now - s.checkedAt)}`), keep: 4 });
     }
   }
-  const ESC = String.fromCharCode(27);
-  const plain = (x: string) => x.replace(new RegExp(`${ESC}\\[[0-9;]*m`, "g"), "");
   const line = () => parts.map((p) => p.text).join(dim(" · "));
   while (plain(line()).length > width - 2) {
     const least = parts.reduce((a, p) => (p.keep < a.keep ? p : a));
     if (least.keep >= 8) break;
     parts.splice(parts.indexOf(least), 1);
   }
-  return line();
+  // The name and the verdict are never dropped, so past that the line is cut:
+  // a wrapped line leaves a copy behind on every redraw.
+  return clip(line(), width - 2);
+}
+
+const ESC = String.fromCharCode(27);
+const plain = (x: string) => x.replace(new RegExp(`${ESC}\\[[0-9;]*m`, "g"), "");
+
+/** Cut a coloured line to `max` visible characters. Colour codes cost nothing. */
+function clip(text: string, max: number): string {
+  let out = "";
+  let shown = 0;
+  let inCode = false;
+  for (const ch of text) {
+    if (ch === ESC) inCode = true;
+    if (inCode) {
+      out += ch;
+      if (ch === "m") inCode = false;
+      continue;
+    }
+    if (shown >= max) return `${out}${ESC}[0m`;
+    out += ch;
+    shown++;
+  }
+  return out;
 }
 
 /** One line on stopping: what the run saw, what it found. */
@@ -159,6 +181,7 @@ export function createStatusLine(
   let held = 0;
   let shown = false;
   let lastDraw = 0;
+  let drawn = "";
   const write = (t: string) => process.stdout.write(t);
   const clear = () => {
     if (shown) write("\r\x1b[2K");
@@ -166,10 +189,20 @@ export function createStatusLine(
   };
   const draw = () => {
     if (held > 0) return;
-    write(`\r\x1b[2K${renderStatus(state, now(), process.stdout.columns || 120)}`);
+    const line = renderStatus(state, now(), process.stdout.columns || 120);
+    // Some terminal panes are narrower than they report. Skipping unchanged
+    // redraws and turning autowrap off while drawing keeps copies from stacking.
+    if (shown && line === drawn) return;
+    write(`\r\x1b[2K\x1b[?7l${line}\x1b[?7h`);
     shown = true;
+    drawn = line;
     lastDraw = now();
   };
+  const onResize = () => {
+    clear();
+    draw();
+  };
+  process.stdout.on("resize", onResize);
   // Refresh "checked 3s ago" without spamming: every few seconds at most.
   const timer = setInterval(() => {
     if (held === 0) draw();
@@ -202,6 +235,7 @@ export function createStatusLine(
     },
     stop() {
       clearInterval(timer);
+      process.stdout.off("resize", onResize);
       clear();
     },
   };

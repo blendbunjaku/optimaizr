@@ -69,7 +69,9 @@ test("the headline and waste are the profile's, the tiles are the recent window'
 
 test("on a plan the headline is the subscription's value, with the multiple", () => {
   const d = cardData(
-    profile({ plan: { label: "Claude Pro", priceUsd: 20, valueMonthlyUsd: 448, multiple: 22.4 } }),
+    profile({
+      plan: { label: "Claude Pro", priceUsd: 20, valueMonthlyUsd: 448, multiple: 22.4, calls: 900 },
+    }),
     summary,
   );
   assert.equal(d.multiple, "22x");

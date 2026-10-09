@@ -5,6 +5,7 @@ import {
   bold,
   buildProfile,
   cardData,
+  claudeConfigDir,
   dim,
   green,
   localTime,
@@ -129,6 +130,7 @@ function planOptions(args: Args) {
             source: choice.source ?? undefined,
             limitHits: readLimitHits(),
             windows: latestClaudeWindows(),
+            dir: path.join(claudeConfigDir(), "projects"),
           },
   };
 }

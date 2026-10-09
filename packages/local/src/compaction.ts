@@ -6,10 +6,10 @@ import { optimaizrDir } from "./ledger.js";
 import { claudeSettingsPath } from "./rewriters.js";
 
 /**
- * The compaction lever, applied: Claude Code compacts at COMPACT_AT when its
- * `CLAUDE_CODE_AUTO_COMPACT_WINDOW` env is set (the settings key is behind a
- * flag, the env is not), and Codex when `model_auto_compact_token_limit` is in
- * its config.toml. Both are read when a session starts, so a change reaches the
+ * The compaction lever, applied: Claude Code compacts at COMPACT_AT, or the
+ * point passed with `--at`, when its `CLAUDE_CODE_AUTO_COMPACT_WINDOW` env is
+ * set (the settings key is behind a flag, the env is not), and Codex when
+ * `model_auto_compact_token_limit` is in its config.toml. Both are read when a session starts, so a change reaches the
  * next session. The previous value is kept, so `undo` puts it back exactly.
  */
 
@@ -160,12 +160,13 @@ export function compactionStatus(opts: CompactionPaths = {}): Record<CompactAgen
 
 export function applyCompaction(
   agents: CompactAgent[],
-  opts: CompactionPaths & { now?: Date } = {},
+  opts: CompactionPaths & { now?: Date; tokens?: number } = {},
 ): CompactionResult[] {
   const p = paths(opts);
   const ledger = readLedger(p.ledger);
   const at = (opts.now ?? new Date()).toISOString();
-  const value = String(COMPACT_AT);
+  const tokens = opts.tokens ?? COMPACT_AT;
+  const value = String(tokens);
   const results: CompactionResult[] = [];
 
   for (const agent of agents) {
@@ -189,10 +190,12 @@ export function applyCompaction(
       agent === "claude-code"
         ? `${file}: env ${CLAUDE_ENV} ${was} -> ${value}`
         : `${file}: ${CODEX_KEY} ${was} -> ${value}`;
+    // Claude Code compacts short of its window: with 200000 set it fired at 166-170K.
+    const point = `${agent === "claude-code" ? "a little before" : "at"} ${Math.round(tokens / 1000)}K`;
     results.push({
       agent,
       ok: true,
-      detail: `${how}. ${AGENT_NAME[agent]} compacts at ${Math.round(COMPACT_AT / 1000)}K from its next session.`,
+      detail: `${how}. ${AGENT_NAME[agent]} compacts ${point} from its next session.`,
     });
   }
   writeLedger(p.ledger, ledger);

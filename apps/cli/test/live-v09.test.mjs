@@ -48,7 +48,8 @@ test("Claude Code: the env is merged into settings.json and undone exactly", () 
   const [r] = applyCompaction(["claude-code"], p);
   assert.equal(r.ok, true);
   assert.match(r.detail, /CLAUDE_CODE_AUTO_COMPACT_WINDOW unset -> 200000/);
-  assert.match(r.detail, /from its next session/);
+  // Claude Code compacts short of the window it is given.
+  assert.match(r.detail, /Claude Code compacts a little before 200K from its next session/);
   const after = JSON.parse(fs.readFileSync(p.claudeSettings, "utf8"));
   assert.deepEqual(after, {
     model: "opus",
@@ -133,11 +134,61 @@ test("optimaizr apply and undo context-compaction", { skip }, async () => {
   assert.match(fs.readFileSync(path.join(home, ".codex", "config.toml"), "utf8"), /= 200000/);
 
   const listed = await run("undo");
-  assert.match(listed.stdout, /Codex compacts at 200K/);
+  assert.match(listed.stdout, /Codex is set to compact at 200K/);
 
   const undone = await run("undo", "context-compaction");
   assert.match(undone.stdout, /Reverted .*setting removed/);
   assert.doesNotMatch(fs.readFileSync(path.join(home, ".codex", "config.toml"), "utf8"), /200000/);
+});
+
+test("a later point with --at, still undone to the original", () => {
+  const p = files();
+  fs.mkdirSync(path.dirname(p.codexConfig), { recursive: true });
+  fs.writeFileSync(p.codexConfig, "model_auto_compact_token_limit = 900000\n");
+  applyCompaction(["codex"], p);
+  const [r] = applyCompaction(["codex"], { ...p, tokens: 400_000 });
+  assert.match(r.detail, /200000 -> 400000\. Codex compacts at 400K/);
+  undoCompaction(p);
+  assert.equal(fs.readFileSync(p.codexConfig, "utf8"), "model_auto_compact_token_limit = 900000\n");
+});
+
+test("optimaizr apply context-compaction --at", { skip }, async () => {
+  const home = tmp("compact-at");
+  const env = {
+    ...process.env,
+    HOME: home,
+    CLAUDE_CONFIG_DIR: path.join(home, ".claude"),
+    CODEX_HOME: path.join(home, ".codex"),
+    OPTIMAIZR_DIR: path.join(home, ".optimaizr"),
+    NO_COLOR: "1",
+  };
+  const run = (...argv) => execFileAsync(process.execPath, [CLI, ...argv], { env, cwd: home });
+
+  const applied = await run("apply", "context-compaction", "--agent", "claude", "--at", "400K");
+  assert.match(applied.stdout, /CLAUDE_CODE_AUTO_COMPACT_WINDOW unset -> 400000/);
+  assert.match(applied.stdout, /Claude Code compacts a little before 400K/);
+  assert.match((await run("undo")).stdout, /Claude Code is set to compact at 400K/);
+
+  const dryClaude = await run("apply", "context-compaction", "--agent", "claude", "--dry-run");
+  assert.match(dryClaude.stdout, /compacts a little before that point/);
+
+  const dry = await run(
+    "apply",
+    "context-compaction",
+    "--agent",
+    "codex",
+    "--at=0.6M",
+    "--dry-run",
+  );
+  assert.match(dry.stdout, /would set codex to compact at 600000\.\s*$/m);
+
+  for (const bad of ["50K", "2M", "lots"]) {
+    await assert.rejects(
+      run("apply", "context-compaction", "--agent", "codex", "--at", bad),
+      (err) => /--at takes a size from 100K to 1M/.test(err.stdout),
+    );
+  }
+  assert.equal(fs.existsSync(path.join(home, ".codex", "config.toml")), false);
 });
 
 /* ------------------------------------------------------------------ *
@@ -225,6 +276,12 @@ test("the status line says it is watching, then what it has seen", () => {
   assert.ok(narrow.length <= 60, narrow);
   assert.match(narrow, /optimAIzr live/);
   assert.match(narrow, /1 found/);
+  // Past what can be dropped the line is cut, never wider than the terminal.
+  for (const width of [40, 24, 12]) {
+    const cut = renderStatus(s, now + 3_000, width);
+    assert.ok(strip(cut).length <= width - 2, `${width}: ${strip(cut)}`);
+    assert.ok(cut.endsWith(`${String.fromCharCode(27)}[0m`), "colour reset after the cut");
+  }
   assert.match(
     strip(renderStatus(s, now + 3_000, 120)),
     /last Opus 5\.5/,

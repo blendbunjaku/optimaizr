@@ -275,12 +275,33 @@ export async function cmdSimulate(args: Args): Promise<void> {
   if (sim.stale) process.exitCode = 1;
 }
 
+/** "400K", "0.4M" or "400000" -> 400000; NaN when it is not a size. */
+function tokenCount(v: string): number {
+  const m = /^(\d+(?:\.\d+)?)\s*([km]?)$/i.exec(v.trim());
+  if (!m) return NaN;
+  const unit = m[2]!.toLowerCase() === "m" ? 1_000_000 : m[2] ? 1_000 : 1;
+  return Math.round(Number(m[1]) * unit);
+}
+
+/** Where `--at` may put it: the range Claude Code's setting accepts. */
+const COMPACT_MIN = 100_000;
+const COMPACT_MAX = 1_000_000;
+
 /**
  * `optimaizr apply context-compaction`: have Claude Code and/or Codex compact
- * at COMPACT_AT. `--agent claude` or `--agent codex` narrows it; by default it
- * covers whichever agents appear in the usage.
+ * at COMPACT_AT, or at `--at 400K`. `--agent claude` or `--agent codex` narrows
+ * it; by default it covers whichever agents appear in the usage.
  */
 function applyCompactionLever(args: Args, events: CallEvent[]): void {
+  const atFlag = args.flags.at;
+  const tokens = atFlag === undefined ? COMPACT_AT : tokenCount(String(atFlag));
+  if (!(tokens >= COMPACT_MIN && tokens <= COMPACT_MAX)) {
+    console.log("");
+    console.log(`  ${red("--at takes a size from 100K to 1M,")} ${dim("like --at 400K")}`);
+    console.log("");
+    process.exitCode = 1;
+    return;
+  }
   const want = typeof args.flags.agent === "string" ? args.flags.agent.toLowerCase() : null;
   const seen = (a: CompactAgent) => events.some((e) => e.source === a);
   const agents: CompactAgent[] =
@@ -297,13 +318,16 @@ function applyCompactionLever(args: Args, events: CallEvent[]): void {
     return;
   }
   if (args.flags["dry-run"]) {
+    const early = agents.includes("claude-code")
+      ? " Claude Code compacts a little before that point."
+      : "";
     console.log(
-      `  ${dim(`Dry run: would set ${agents.join(" and ")} to compact at ${COMPACT_AT}.`)}`,
+      `  ${dim(`Dry run: would set ${agents.join(" and ")} to compact at ${tokens}.${early}`)}`,
     );
     console.log("");
     return;
   }
-  for (const r of applyCompaction(agents)) {
+  for (const r of applyCompaction(agents, { tokens })) {
     console.log(`  ${r.ok ? green("Applied") : red("Could not apply")} ${r.detail}`);
   }
   console.log("");

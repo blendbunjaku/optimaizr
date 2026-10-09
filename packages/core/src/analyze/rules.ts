@@ -1492,6 +1492,8 @@ const LEVER_CONFIDENCE = {
 
 /** Compact here: the window Claude Code is set to (it accepts 100K to 1M). */
 export const COMPACT_AT = 200_000;
+/** Later points the lever prices too, for those who would rather keep more. */
+export const COMPACT_LATER = [300_000, 400_000, 600_000];
 /** What a compacted conversation starts again with: summary, system prompt, re-attached files. */
 const AFTER_COMPACT = 40_000;
 /** The summary a compaction writes. */
@@ -1506,27 +1508,32 @@ const AGENT_NAME: Record<Agent, string> = { "claude-code": "Claude Code", codex:
 
 function compactSetting(agent: Agent): string {
   return agent === "claude-code"
-    ? `Claude Code: add "env": { "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "${COMPACT_AT}" } to ~/.claude/settings.json`
+    ? `Claude Code: add "env": { "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "${COMPACT_AT}" } to ~/.claude/settings.json, and it compacts a little before that point`
     : `Codex: set model_auto_compact_token_limit = ${COMPACT_AT} in ~/.codex/config.toml`;
 }
 
-/**
- * Lever: compact earlier. Every call re-reads the conversation so far, and the
- * agents only compact near the model's window, so long sessions get dearer with
- * every call. Simulated per conversation: compact when it passes COMPACT_AT,
- * restart at AFTER_COMPACT, and pay for each compaction's summary and reload.
- */
-function contextCompaction(ctx: Ctx): OptimizationFinding | null {
-  const compactAt = `${Math.round(COMPACT_AT / 1000)}K`;
-  const agents = AGENTS.filter((a) => {
-    const calls = ctx.data.events.filter((e) => e.source === a);
-    const long = calls.filter((e) => contextOf(e) > COMPACT_AT).length;
-    return calls.length >= 50 && long / calls.length >= LONG_CALL_SHARE;
-  });
-  if (agents.length === 0) return null;
-  const mine = ctx.data.events.filter((e) => agents.includes(e.source as Agent));
-  const long = mine.filter((e) => contextOf(e) > COMPACT_AT).length;
+/** 200_000 -> "200K". */
+function kLabel(tokens: number): string {
+  return `${Math.round(tokens / 1000)}K`;
+}
 
+interface CompactionReplay {
+  /** Re-reading the compactions avoid. */
+  saved: number;
+  /** The compactions themselves: summary calls and reloads. */
+  cost: number;
+  compactions: number;
+  rereadUsd: number;
+  events: UsageEvent[];
+  hourWrites: number;
+  allWrites: number;
+}
+
+/**
+ * Each main conversation replayed in order: when its context passes `at`, it
+ * compacts to AFTER_COMPACT and pays for the summary and the reload.
+ */
+function replayCompaction(ctx: Ctx, agents: Agent[], at: number): CompactionReplay {
   let saved = 0;
   let compactionCost = 0;
   let compactions = 0;
@@ -1555,10 +1562,10 @@ function contextCompaction(ctx: Ctx): OptimizationFinding | null {
       // The agent compacted on its own: the simulation starts over with it.
       if (actual < last * 0.5) dropped = 0;
       last = actual;
-      if (actual - dropped > COMPACT_AT) {
+      if (actual - dropped > at) {
         compactions++;
         compactionCost +=
-          (COMPACT_AT * r.cachedInputPerM +
+          (at * r.cachedInputPerM +
             SUMMARY_TOKENS * r.outputPerM +
             AFTER_COMPACT * (writeRate - r.cachedInputPerM)) /
           M;
@@ -1571,8 +1578,57 @@ function contextCompaction(ctx: Ctx): OptimizationFinding | null {
       }
     }
   }
+  return { saved, cost: compactionCost, compactions, rereadUsd, events, hourWrites, allWrites };
+}
+
+/**
+ * What Claude Code's own compactions looked like: how many, how many it ran on
+ * its own, how many cut into work in progress, and the wait for the summaries.
+ */
+function realCompactions(ctx: Ctx): string | null {
+  const all = (ctx.data.compactions ?? []).filter((c) => c.source === "claude-code");
+  if (all.length === 0) return null;
+  const auto = all.filter((c) => c.trigger === "auto").length;
+  const mid = all.filter((c) => c.midTask).length;
+  const waitMs = all.reduce((t, c) => t + (c.durationMs ?? 0), 0);
+  const wait = waitMs >= 60_000 ? duration(waitMs / 60_000) : `${Math.round(waitMs / 1000)}s`;
+  return `Claude Code compacted ${all.length} time${all.length === 1 ? "" : "s"}: ${auto} automatic, ${mid} mid-task, ${wait} waiting for summaries`;
+}
+
+/**
+ * Lever: compact earlier. Every call re-reads the conversation so far, and the
+ * agents only compact near the model's window, so long sessions get dearer with
+ * every call. Priced at COMPACT_AT, with the later points alongside.
+ */
+function contextCompaction(ctx: Ctx): OptimizationFinding | null {
+  const compactAt = kLabel(COMPACT_AT);
+  const agents = AGENTS.filter((a) => {
+    const calls = ctx.data.events.filter((e) => e.source === a);
+    const long = calls.filter((e) => contextOf(e) > COMPACT_AT).length;
+    return calls.length >= 50 && long / calls.length >= LONG_CALL_SHARE;
+  });
+  if (agents.length === 0) return null;
+  const mine = ctx.data.events.filter((e) => agents.includes(e.source as Agent));
+  const long = mine.filter((e) => contextOf(e) > COMPACT_AT).length;
+
+  const {
+    saved,
+    cost: compactionCost,
+    compactions,
+    rereadUsd,
+    events,
+    hourWrites,
+    allWrites,
+  } = replayCompaction(ctx, agents, COMPACT_AT);
   const net = saved - compactionCost;
   if (net < 0.5 || events.length === 0) return null;
+  // Compacting later keeps more of each conversation and saves less.
+  const later = COMPACT_LATER.map((at) => {
+    const r = replayCompaction(ctx, agents, at);
+    const n = r.saved - r.cost;
+    return `${kLabel(at)} ${n > 0 ? `${usd(n)} less` : "no saving"}`;
+  });
+  const real = agents.includes("claude-code") ? realCompactions(ctx) : null;
 
   const names = listOf(agents.map((a) => AGENT_NAME[a]));
   const sizes = mine.map(contextOf).sort((a, b) => a - b);
@@ -1608,14 +1664,16 @@ function contextCompaction(ctx: Ctx): OptimizationFinding | null {
     observations: [
       `median call: ${fmtTokens(median)} of conversation, 90th percentile: ${fmtTokens(p90)}`,
       `${compactions} compaction${compactions === 1 ? "" : "s"} at ${compactAt} would have cost ${usd(compactionCost)} and saved ${usd(saved)} of re-reading`,
+      `compacting later instead: ${later.join(", ")}`,
+      ...(real ? [real] : []),
     ],
-    fix: `Compact at ${compactAt}. ${agents.map(compactSetting).join("; ")}. Or compact by hand (/compact) when you change topic. A summary can drop details from early in a long conversation, so try it for a week and compare.`,
+    fix: `Compact at ${compactAt}. ${agents.map(compactSetting).join("; ")}. The saving already pays for each summary and the cache it rebuilds. A lower point compacts more often, and automatic compaction usually lands mid-task, so the safer habit is to compact by hand when you finish a piece of work, saying what to keep (/compact keep the API decisions). To keep more of each conversation, pick a later point: optimaizr apply context-compaction --at 400K. A summary can drop details from early in a long conversation, so try it for a week and compare.`,
   });
 }
 
 /** A fresh session's own context: system prompt, tools and memory files. */
 const FRESH_START = 30_000;
-/** A handoff note: what changed, what was decided, what is open. */
+/** A handoff note: done, next, and the file to start from. Generous on purpose. */
 const HANDOFF_TOKENS = 1_500;
 /** Fewer cold returns than this is an accident, not a habit. */
 const COLD_MIN = 3;
@@ -1703,7 +1761,7 @@ function coldResume(ctx: Ctx): OptimizationFinding | null {
     impact: "medium",
     risk: "needs-verification",
     assumptions: [
-      `A fresh session starts at about ${fmtTokens(FRESH_START)}: system prompt, tools and memory files, plus a ${fmtTokens(HANDOFF_TOKENS)}-token handoff note.`,
+      `A fresh session starts at about ${fmtTokens(FRESH_START)}: system prompt, tools and memory files, plus up to ${fmtTokens(HANDOFF_TOKENS)} tokens of handoff note.`,
       "The note is written before you leave, while the cache is still warm, and is charged.",
       "A note keeps less than the full conversation, which can cost calls back. Only the first call back is counted, not the cheaper calls after it.",
     ],
@@ -1715,7 +1773,7 @@ function coldResume(ctx: Ctx): OptimizationFinding | null {
         (c) =>
           `${c.event.ts.slice(0, 10)} · back after ${duration(c.gapMinutes)} · ${c.ttlMinutes === null ? "resent" : "rewrote"} ${fmtTokens(c.rewriteTokens)} · ${usd(c.rewriteUsd)}`,
       ),
-    fix: `Before you ${away} in the middle of a long conversation, ask for a short handoff note (what changed, what was decided, what is open), then /clear and start from the note when you return.${handoff}`,
+    fix: `Before you ${away} in the middle of a long conversation, ask for a three-line handoff note (done, next, and the file to start from), then /clear and start from the note when you return.${handoff}`,
   });
 }
 

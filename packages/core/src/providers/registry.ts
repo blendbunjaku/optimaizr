@@ -2,6 +2,7 @@ import { GEMINI_MODELS, PROVIDERS, registerModels } from "../pricing.js";
 import type {
   AdapterResult,
   AdapterSource,
+  CompactionRecord,
   Dataset,
   Provider,
   ProviderAdapter,
@@ -64,6 +65,7 @@ export async function ingest(sources: AdapterSource[]): Promise<Dataset> {
   const readSources: string[] = [];
   const warnings: string[] = [];
   const failures: string[] = [];
+  const compactions: CompactionRecord[] = [];
 
   for (const source of sources) {
     for (const adapter of adapters) {
@@ -80,6 +82,7 @@ export async function ingest(sources: AdapterSource[]): Promise<Dataset> {
       for (const e of result.events) events.push(e);
       for (const s of result.sources) readSources.push(s);
       for (const w of result.warnings) warnings.push(w);
+      for (const c of result.compactions ?? []) compactions.push(c);
     }
   }
 
@@ -90,7 +93,14 @@ export async function ingest(sources: AdapterSource[]): Promise<Dataset> {
   const days =
     from && to ? Math.max(1, (new Date(to).getTime() - new Date(from).getTime()) / 86_400_000) : 0;
 
-  return { events, window: { from, to, days }, sources: readSources, warnings, failures };
+  return {
+    events,
+    window: { from, to, days },
+    sources: readSources,
+    warnings,
+    failures,
+    compactions,
+  };
 }
 
 /**

@@ -66,16 +66,17 @@ export function cardData(profile: Profile, summary: Summary): CardData {
   const wasteShare = profile.perMonthUsd > 0 ? profile.savingsMonthlyUsd / profile.perMonthUsd : 0;
   // A Claude plan the user named first; otherwise a paid ChatGPT plan Codex
   // reported. Either way the headline is what the subscription is worth.
-  const plan = profile.plan
-    ? profile.plan
-    : profile.codex?.priceUsd && profile.codex.multiple !== null
-      ? {
-          label: profile.codex.label,
-          priceUsd: profile.codex.priceUsd,
-          valueMonthlyUsd: profile.codex.valueMonthlyUsd,
-          multiple: profile.codex.multiple,
-        }
-      : null;
+  const plan =
+    profile.plan && profile.plan.calls > 0
+      ? profile.plan
+      : profile.codex?.priceUsd && profile.codex.multiple !== null
+        ? {
+            label: profile.codex.label,
+            priceUsd: profile.codex.priceUsd,
+            valueMonthlyUsd: profile.codex.valueMonthlyUsd,
+            multiple: profile.codex.multiple,
+          }
+        : null;
 
   const headlineUsd = plan ? plan.valueMonthlyUsd : profile.perMonthUsd;
   const multiple = plan

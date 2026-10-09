@@ -107,9 +107,56 @@ test("compacting earlier is a lever sized from the conversation's own growth", a
   assert.match(lever.why, /re-reading took \d+% of your Claude Code spend/);
   // The compactions themselves are paid for.
   assert.match(lever.observations[1], /compactions? at 200K would have cost \$/);
+  // Later points are priced from the same replay, for those who would keep more.
+  const later = lever.observations[2].match(
+    /^compacting later instead: 300K (.+), 400K (.+), 600K (.+)$/,
+  );
+  assert.ok(later, lever.observations[2]);
+  const net = (s) => (s === "no saving" ? 0 : Number(s.match(/^\$([\d,.]+) less$/)[1]));
+  const [at300, at400, at600] = later.slice(1).map(net);
+  assert.ok(at300 >= at400 && at400 >= at600, "later saves less");
+  assert.match(lever.fix, /optimaizr apply context-compaction --at 400K/);
+  assert.match(lever.fix, /already pays for each summary and the cache it rebuilds/);
+  assert.match(lever.fix, /automatic compaction usually lands mid-task/);
+  assert.match(lever.fix, /compacts a little before that point/);
+  assert.equal(lever.observations.length, 3, "no real compactions recorded, none described");
 
   const short = findWaste(await load({ s1: transcript("s1", longConversation(0)) }));
   assert.equal(rule(short, "context-compaction"), undefined, "nothing to say under 200K");
+});
+
+test("the compaction lever describes the compactions Claude Code really ran", async () => {
+  const script = longConversation();
+  // Mid-task: the reply before it was calling a tool.
+  script.splice(21, 0, {
+    compact: true,
+    meta: { trigger: "auto", preTokens: 170_000, postTokens: 12_000, durationMs: 80_000 },
+  });
+  // A subagent's compaction and one recorded without metadata are left out.
+  script.splice(40, 0, { compact: true, side: "a1", meta: { trigger: "auto", preTokens: 1 } });
+  script.splice(60, 0, { compact: true });
+  // By hand, after the work was done.
+  script.push({
+    compact: true,
+    meta: { trigger: "manual", preTokens: 650_000, durationMs: 45_000 },
+  });
+  const recs = transcript("s1", script);
+  // A resumed session copies the history, compactions included.
+  const data = await load({ s1: recs, s1copy: recs });
+
+  assert.deepEqual(
+    data.compactions.map((c) => [c.trigger, c.preTokens, c.postTokens, c.midTask, c.project]),
+    [
+      ["auto", 170_000, 12_000, true, "/w"],
+      ["manual", 650_000, undefined, false, "/w"],
+    ],
+  );
+  const lever = rule(findWaste(data), "context-compaction");
+  assert.ok(lever);
+  assert.equal(
+    lever.observations[3],
+    "Claude Code compacted 2 times: 1 automatic, 1 mid-task, 2m waiting for summaries",
+  );
 });
 
 test("a smaller default model is a lever over work without heavy reasoning", async () => {
@@ -282,6 +329,23 @@ test("with both agents, the lever names both settings", async () => {
   assert.match(lever.title, /of your Claude Code and Codex calls/);
   assert.match(lever.fix, /CLAUDE_CODE_AUTO_COMPACT_WINDOW/);
   assert.match(lever.fix, /model_auto_compact_token_limit/);
+});
+
+test("a Claude plan with no Claude Code calls never headlines $0 of work", async () => {
+  // A second account's CLAUDE_CONFIG_DIR with no transcripts: only Codex is left.
+  const data = await loadCodex({ a: codexRollout("a", longCodex()) });
+  const text = renderProfile(
+    buildProfile(data, summarize(data), findWaste(data), undefined, {
+      plan: "team-premium",
+      source: "flag",
+      dir: "/home/me/.claude-instances/rentals/projects",
+    }),
+  );
+  assert.doesNotMatch(text, /Your Claude Team Premium did/);
+  assert.match(
+    text,
+    /No Claude Code usage found in \/home\/me\/\.claude-instances\/rentals\/projects/,
+  );
 });
 
 test("a Codex compaction starts a new context", async () => {
