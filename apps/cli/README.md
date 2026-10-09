@@ -115,9 +115,10 @@ exports. Node 20.11 or later.
 
 ## Recent releases
 
-- **0.10.0** (Oct 7, 2026): a cache countdown under Claude Code's prompt, no
-  mod needed.
-- **0.9.0** (Oct 6, 2026): your plan detected, savings labelled by how sure they
+- **0.10** (Oct 7, 2026): a cache countdown under Claude Code's prompt, no mod
+  needed. Now 0.10.2: see how many of your compactions landed mid-task, and
+  compact later with `--at 400K`.
+- **0.9** (Oct 6, 2026): your plan detected, savings labelled by how sure they
   are, compacting earlier in one command.
 - **0.8** (Oct 2, 2026): the Claude Code mod, with the cost of every answer and
   cheaper models mid-session.

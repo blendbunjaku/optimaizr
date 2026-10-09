@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.10.2
+
+- **How your compactions really went.** The compaction finding reads Claude
+  Code's own record of each compaction and says how many there were, how many
+  were automatic, how many landed mid-task, and how long you waited for the
+  summaries. It also prices compacting later, at 300K, 400K and 600K, next to
+  200K.
+- **`optimaizr apply context-compaction --at 400K`** sets a later point, from
+  100K to 1M, and `optimaizr undo context-compaction` puts back what was there.
+  Claude Code compacts a little before the point you set (around 167K with
+  200K), and the output now says so.
+- **Compact by hand when a piece of work is done.** Automatic compaction
+  usually lands mid-task, so the finding suggests
+  `/compact keep the API decisions` at a natural break instead.
+- **A shorter handoff note**: three lines (done, next, the file to open
+  first), under 80 words, in the mod and in the cache warning.
+- **A plan with no Claude Code usage** no longer headlines "$0.00/mo, 0.0x".
+  `optimaizr plan` names the folder it looked in instead.
+- **Small fixes.** "from 1 days" reads "from 1 day". Codex limit readings from
+  days ago show their date instead of passing for today. The status line in
+  `optimaizr live` no longer leaves copies of itself in panes narrower than
+  they report.
+- **Coming from 0.9?** 0.10.0 is the one to read: `optimaizr statusline on`
+  puts a cache countdown under Claude Code's prompt, and `optimaizr sessions`
+  shows where long conversations turn expensive. `optimaizr changelog 0.10.0`
+  has all of it.
+
 ## 0.10.1
 
 - **A shorter README** that leads with what optimAIzr does and what it found,
