@@ -60,7 +60,7 @@ import {
 // It reads usage figures and the commands Claude runs, never prompt text or file
 // contents. The one text it keeps is the note /optimaizr handoff asks Claude for.
 
-const VERSION = "0.10.1";
+const VERSION = "0.10.2";
 // The HUD /optimaizr hud opens beside the conversation.
 const PANE = "optimaizr";
 // overrides.json is read again at most this often, so `optimaizr undo` lands fast.
