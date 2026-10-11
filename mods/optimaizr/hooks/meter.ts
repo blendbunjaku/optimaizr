@@ -342,6 +342,37 @@ export function cacheNote(c: {
   return null;
 }
 
+// A handoff on an expired cache goes ahead when it is run again within this long.
+export const HANDOFF_CONFIRM_MS = 2 * MINUTE;
+
+/**
+ * What a handoff note costs once the cache has expired: the note is forked from
+ * the whole conversation, which is written to the cache again, as the next
+ * message would. Null while the cache is warm or the conversation is short.
+ */
+export function coldHandoff(c: {
+  model: string;
+  context: number;
+  idleMs: number;
+  ttlMs: number;
+}): number | null {
+  if (c.idleMs <= c.ttlMs || c.context < COLD_MIN_CONTEXT) return null;
+  return carryCost(c.model, c.context)?.rewrite ?? null;
+}
+
+// A usual first request: system prompt, built-in tools and a short CLAUDE.md.
+export const USUAL_START = 30_000;
+// From here a start loads more than it should: MCP tools, agents, skills, memory files.
+export const HEAVY_START = 60_000;
+// A new conversation's first request carries the prompt and a few attachments; /resume carries it all.
+export const OPENING_MESSAGES = 10;
+
+/** What a new conversation's first request says when it starts heavy, or null. */
+export function startNote(context: number): string | null {
+  if (context < HEAVY_START) return null;
+  return `optimAIzr: this conversation started at ${kTokens(context)} before any work, where a usual start is about ${kTokens(USUAL_START)}, and every message re-reads it. /context shows what fills it: MCP tools, agents, skills, memory files.`;
+}
+
 // A handoff note is used once, by a conversation started within this long.
 export const HANDOFF_TTL_MS = 12 * HOUR;
 
@@ -465,7 +496,7 @@ export function meterText(m: {
   const parts: string[] = [];
   if (m.model) parts.push(m.model);
   if (m.usd !== null && m.usd >= 0.005) parts.push(usd(m.usd));
-  if (m.saved !== undefined && m.saved >= 0.005) parts.push(`saved ${usd(m.saved)}`);
+  if (m.saved !== undefined && m.saved >= 0.005) parts.push(`saved ~${usd(m.saved)}`);
   if (m.five) parts.push(`${percent(m.five.percentUsed)} of 5h`);
   return parts.length > 0 ? ` · ${parts.join(" · ")}` : "";
 }
@@ -474,7 +505,8 @@ const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? o
 
 /**
  * The line under an answer. Claude Code puts the plugin's name in front of it.
- * A switched turn leads with what it saved, so the difference reads first.
+ * A switched turn leads with its difference against the same tokens on the
+ * original model, so the basis of the number reads with it.
  */
 export function turnLine(t: {
   usd: number;
@@ -489,7 +521,10 @@ export function turnLine(t: {
   const parts: string[] = [];
   const s = t.switched;
   if (s && s.saved !== null && s.saved >= 0.005) {
-    parts.push(`saved ${usd(s.saved)} vs ${s.from}`, `this turn ${usd(t.usd)} on ${s.to}`);
+    parts.push(
+      `~${usd(s.saved)} less than the same tokens on ${s.from}`,
+      `this turn ${usd(t.usd)} on ${s.to}`,
+    );
   } else if (s) {
     parts.push(`this turn ${usd(t.usd)} on ${s.to}`);
   } else {
@@ -541,7 +576,7 @@ export function summary(s: {
   } else if (s.saved !== undefined) {
     rows.push([
       "Saved",
-      `${usd(s.saved)} by switching models: the same tokens at the original model's rates, less what they cost`,
+      `~${usd(s.saved)} by switching models: the same tokens at the original model's rates, less what they cost`,
     ]);
   }
   if (s.held) rows.push(["Guard", `${plural(s.held, "retry", "retries")} held`]);

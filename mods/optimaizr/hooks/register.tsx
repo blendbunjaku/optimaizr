@@ -9,6 +9,7 @@ import {
   bar,
   cacheNote,
   carryCost,
+  coldHandoff,
   costAt,
   crossed,
   describeSwitch,
@@ -18,6 +19,7 @@ import {
   EXPIRY_TOAST_USD,
   fiveHour,
   type Handoff,
+  HANDOFF_CONFIRM_MS,
   handoffBlock,
   handoffFile,
   handoffFor,
@@ -29,6 +31,7 @@ import {
   meterColor,
   meterText,
   modelLabel,
+  OPENING_MESSAGES,
   type Override,
   parseOverrides,
   PAYBACK_REQUESTS,
@@ -42,6 +45,7 @@ import {
   sevenDay,
   share,
   sparkline,
+  startNote,
   summary,
   switchFor,
   turnLine,
@@ -60,7 +64,7 @@ import {
 // It reads usage figures and the commands Claude runs, never prompt text or file
 // contents. The one text it keeps is the note /optimaizr handoff asks Claude for.
 
-const VERSION = "0.10.2";
+const VERSION = "0.10.3";
 // The HUD /optimaizr hud opens beside the conversation.
 const PANE = "optimaizr";
 // overrides.json is read again at most this often, so `optimaizr undo` lands fast.
@@ -122,6 +126,8 @@ const state = {
   conversation: 0,
   // The idle stretch, by its last request, already warned about the cache expiring.
   expiryTold: null as number | null,
+  // When a handoff on an expired cache said what it costs; running it again goes ahead.
+  handoffAsked: null as number | null,
   // A main-conversation switch held back because its reload wouldn't pay back yet.
   waiting: null as { o: Override; reload: number; payback: number } | null,
   // Token totals since the mod loaded, for the cache-hit share.
@@ -136,8 +142,12 @@ const state = {
   turnCosts: [] as number[],
   // Window levels already toasted, by reset time.
   warned: new Set<string>(),
+  // Told once this session that a conversation started heavy.
+  startTold: false,
   // What this conversation has seen; compaction and /clear forget it.
   convo: {
+    // Its first main request has been made, so a later one is no start to judge.
+    started: false,
     // Models that already wrote this conversation to their cache.
     loaded: new Set<string>(),
     fails: new Map<string, number>(),
@@ -152,6 +162,7 @@ const state = {
 
 function forget(): void {
   state.convo = {
+    started: false,
     loaded: new Set(),
     fails: new Map(),
     waived: new Set(),
@@ -246,7 +257,7 @@ async function expiring($: Api): Promise<void> {
   if (left <= 0 || left > EXPIRY_TOAST_MS || !cost || cost.rewrite < EXPIRY_TOAST_USD) return;
   state.expiryTold = at;
   void $.ui.toast(
-    `optimAIzr: the cache expires in ${duration(left)}. Coming back after that writes ${kTokens(context)} again (${usd(cost.rewrite)}). Leaving? /optimaizr handoff, then /clear.`,
+    `optimAIzr: the cache expires in ${duration(left)}. Coming back after that writes ${kTokens(context)} again (${usd(cost.rewrite)}). Leaving? /optimaizr handoff saves a note now, while it costs cents, and after /clear the next conversation starts from it.`,
     { timeoutMs: 10_000 },
   );
 }
@@ -254,6 +265,20 @@ async function expiring($: Api): Promise<void> {
 /** /optimaizr handoff: Claude writes a note from the warm cache, kept for the next conversation here. */
 async function handoff($: Api): Promise<string> {
   if (state.turn) return "Claude is still working. Run /optimaizr handoff once the turn ends.";
+  // On an expired cache the note writes the whole conversation again, so it says so first.
+  const at = await $.clock.now();
+  const idle = state.lastMainAt === null ? 0 : at - state.lastMainAt;
+  const context = state.usage?.context.tokens ?? 0;
+  const cold = coldHandoff({ model: state.model, context, idleMs: idle, ttlMs: CACHE_TTL_MS });
+  const asked = state.handoffAsked !== null && at - state.handoffAsked <= HANDOFF_CONFIRM_MS;
+  if (cold !== null && !asked) {
+    state.handoffAsked = at;
+    return (
+      `The cache expired while you were away (${duration(idle)}), so the note writes all ${kTokens(context)} again (${usd(cold)}), as your next message would. ` +
+      `Run /optimaizr handoff again within 2 minutes to go ahead, or skip the note: /clear, and tell the new conversation in a line or two what you were doing.`
+    );
+  }
+  state.handoffAsked = null;
   const r = await $.model.fork({ prompt: HANDOFF_PROMPT });
   if (!r.isAnswered) {
     if (r.reason === "nothing-to-fork") {
@@ -434,6 +459,8 @@ export const register: Register = (on, options) => {
   // After compaction the conversation is new to every model's cache.
   on("session.compact", async ($, e, next) => {
     forget();
+    // It goes on from a summary, so its next request is no start to judge.
+    state.convo.started = true;
     return next(e);
   });
 
@@ -480,9 +507,13 @@ export const register: Register = (on, options) => {
         state.waiting = null;
       }
     }
+    // A new conversation's first request shows what loads before any work.
+    const opening =
+      e.agentId === undefined && !state.convo.started && e.messageCount <= OPENING_MESSAGES;
     if (e.agentId === undefined) {
       state.lastMainAt = now;
       state.model = model?.to ?? e.model;
+      state.convo.started = true;
     }
     const ef = model ? undefined : effortFor(list, req);
     const effort = ef && !state.refused.has(`effort:${ef.effort}`) ? ef : undefined;
@@ -491,6 +522,7 @@ export const register: Register = (on, options) => {
       const r = yield* next(e);
       // A request that rewrote an expired cache would make every request look costly.
       if (e.agentId === undefined && r.usage && !cold) learn(r.usage);
+      if (opening) heavyStart($, r.usage);
       await counted($, r.usage);
       return r;
     }
@@ -534,9 +566,10 @@ export const register: Register = (on, options) => {
         if (saved !== null) state.saved = before + saved;
         const milestone = crossed(SAVED_MILESTONES, before, state.saved ?? 0);
         if (milestone !== null) {
-          void $.ui.toast(`optimAIzr: saved ${usd(state.saved ?? 0)} this session by switching`, {
-            timeoutMs: 6_000,
-          });
+          void $.ui.toast(
+            `optimAIzr: switching saved ~${usd(state.saved ?? 0)} this session, against the same tokens on the original model`,
+            { timeoutMs: 6_000 },
+          );
         }
         if (state.turn && saved !== null) state.turn.saved = (state.turn.saved ?? 0) + saved;
       }
@@ -555,6 +588,7 @@ export const register: Register = (on, options) => {
           );
         }
       }
+      if (opening) heavyStart($, result.usage);
       await counted($, result.usage);
       return result;
     }
@@ -568,6 +602,7 @@ export const register: Register = (on, options) => {
         : `optimAIzr: ${o.effort} effort was refused, staying at ${String(e.effort)}`,
     );
     const r = yield* next(e);
+    if (opening) heavyStart($, r.usage);
     await counted($);
     return r;
   });
@@ -822,7 +857,7 @@ export const register: Register = (on, options) => {
             <Text color="yellow">{`reload ${usd(-(state.saved ?? 0))} not won back yet`}</Text>
           ) : (
             <Box>
-              <Text color="green" bold>{`saved ${usd(saved)}`}</Text>
+              <Text color="green" bold>{`saved ~${usd(saved)}`}</Text>
               {cheaper !== null && cheaper > 0 && (
                 <Text color="green">{`  ${cheaper}% cheaper`}</Text>
               )}
@@ -891,6 +926,17 @@ export const register: Register = (on, options) => {
   });
 };
 
+/** A new conversation that starts heavy is told once a session what fills it. */
+function heavyStart($: Api, u: Tokens | null | undefined): void {
+  if (!u || state.startTold) return;
+  const note = startNote(
+    u.input_tokens + u.cache_read_input_tokens + u.cache_creation_input_tokens,
+  );
+  if (!note) return;
+  state.startTold = true;
+  void $.ui.toast(note, { timeoutMs: 12_000 });
+}
+
 /** Once a conversation passes LONG_CONTEXT, say what each request now re-reads. */
 function longNote($: Api): void {
   const context = state.usage?.context.tokens ?? 0;
@@ -898,7 +944,7 @@ function longNote($: Api): void {
   if (state.convo.long || context < LONG_CONTEXT || !cost) return;
   state.convo.long = true;
   void $.ui.toast(
-    `optimAIzr: this conversation is past ${kTokens(LONG_CONTEXT)}. Each request re-reads all ${kTokens(context)} (${usd(cost.read)}). At a natural break, /optimaizr handoff, then /clear.`,
+    `optimAIzr: this conversation is past ${kTokens(LONG_CONTEXT)}. Each request re-reads all ${kTokens(context)} (${usd(cost.read)}). At a natural break: /compact shrinks it to a summary and carries on, or /optimaizr handoff saves a note and /clear starts fresh from it.`,
     { timeoutMs: 10_000 },
   );
 }
@@ -947,7 +993,7 @@ function switchLines(applied: readonly Override[]): string[] {
   const back = state.paused ? "/optimaizr on to switch again" : "harder task? /optimaizr off";
   const saved =
     !state.paused && state.saved !== undefined && state.saved >= 0.005
-      ? ` · saved ${usd(state.saved)}`
+      ? ` · saved ~${usd(state.saved)}`
       : "";
   const lines: string[] = [];
   // While the main conversation waits, the waiting line says what subagents do.

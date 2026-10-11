@@ -2,11 +2,13 @@ import type { Dataset, UsageEvent } from "../domain/types.js";
 import { coldResumes } from "./cold.js";
 import { COMPACT_AT } from "./rules.js";
 import { contextOf } from "./tasks.js";
+import { REWRITE_CAUSES, writeOf, writesByCause, type WriteCauseRow } from "./writes.js";
 
 /**
  * `optimaizr sessions`: what the sessions look like, measured. How long they run,
- * how big the conversation gets, where re-reading takes over, and whether the
- * money sits in a few long sessions or many medium ones. Facts only, no savings.
+ * how big the conversation gets, where re-reading takes over, what the cache
+ * writes were for, and whether the money sits in a few long sessions or many
+ * medium ones. Facts only, no savings.
  */
 
 export interface Spread {
@@ -56,6 +58,20 @@ export interface SessionStats {
   /** Sessions whose conversation passed the compaction lever's window. */
   longSessions: { over: number; count: number; share: number };
   coldResumes: { count: number; tokens: number; costUsd: number; warmUsd: number };
+  cacheWrites: CacheWrites;
+}
+
+export interface CacheWrites {
+  tokens: number;
+  costUsd: number;
+  /** Writes over every token sent and received. */
+  tokenShare: number;
+  spendShare: number;
+  /** What each session spent on writes. */
+  perSession: Spread;
+  byCause: WriteCauseRow[];
+  /** Breaks, warm rebuilds and model switches together. */
+  rewrites: { costUsd: number; share: number };
 }
 
 const CONTEXT_BANDS = [0, 50_000, 100_000, 150_000, 200_000, 300_000, 500_000];
@@ -94,15 +110,26 @@ export function sessionStats(data: Dataset): SessionStats {
       turns: new Set(main.map((e) => e.turnId).filter(Boolean)).size,
       peak: main.reduce((m, e) => Math.max(m, contextOf(e)), 0),
       cost: list.reduce((s, e) => s + e.cost.total, 0),
+      writes: list.reduce((s, e) => s + e.cost.cacheWrite, 0),
     };
   });
 
   let read = 0;
   let inputSide = 0;
+  let output = 0;
+  let written = 0;
+  let writeUsd = 0;
   for (const e of events) {
     read += e.cacheReadTokens;
     inputSide += e.inputTokens + e.cacheReadTokens + e.cacheWrite5mTokens + e.cacheWrite1hTokens;
+    output += e.outputTokens;
+    written += writeOf(e);
+    writeUsd += e.cost.cacheWrite;
   }
+  const byCause = writesByCause(events);
+  const rewriteUsd = byCause
+    .filter((r) => REWRITE_CAUSES.includes(r.cause))
+    .reduce((s, r) => s + r.costUsd, 0);
 
   const main = events.filter((e) => !e.isSubagent);
   const mainCost = main.reduce((s, e) => s + e.cost.total, 0);
@@ -177,6 +204,15 @@ export function sessionStats(data: Dataset): SessionStats {
       tokens: cold.reduce((s, c) => s + c.rewriteTokens, 0),
       costUsd: cold.reduce((s, c) => s + c.rewriteUsd, 0),
       warmUsd: cold.reduce((s, c) => s + c.warmUsd, 0),
+    },
+    cacheWrites: {
+      tokens: written,
+      costUsd: writeUsd,
+      tokenShare: of(written, inputSide + output),
+      spendShare: of(writeUsd, costUsd),
+      perSession: spread(rows.map((r) => r.writes)),
+      byCause,
+      rewrites: { costUsd: rewriteUsd, share: of(rewriteUsd, writeUsd) },
     },
   };
 }

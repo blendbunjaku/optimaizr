@@ -57,7 +57,10 @@ test("a return after the cache expired is counted from the rewrite it recorded",
   const finding = rule(findWaste(data), "cold-resume");
   assert.ok(finding, "three costly returns are a habit worth a finding");
   assert.equal(finding.tier, "try");
-  assert.match(finding.title, /^3 returns to an expired cache rewrote 480(\.0)?K/);
+  assert.match(
+    finding.title,
+    /^You came back to an expired cache 3 times: 480(\.0)?K of conversation written again$/,
+  );
   // The multipliers come from the model's own rates, not a rule of thumb.
   assert.match(finding.why, /at 2x the input rate, where reading it would have cost 0\.05x/);
   assert.match(finding.fix, /\/optimaizr handoff/);

@@ -31,6 +31,7 @@ function actionFor(f: OptimizationFinding): string {
   if (f.rule === "context-compaction") return "Compact conversations earlier";
   if (f.rule === "oversized-input") return "Start small jobs in a fresh context";
   if (f.rule === "cold-resume") return "Leave a handoff note and start fresh after a long break";
+  if (f.rule === "heavy-start") return "Load less at the start of each conversation";
   if (f.rule === "oversized-output") return "Cap response length on outlier requests";
   if (f.rule === "oversized-tool-output") return "Filter oversized tool output at the source";
   if (f.rule === "error-loops") return "Stop retrying identical failing calls";
@@ -67,6 +68,8 @@ function rationaleFor(f: OptimizationFinding, totalCalls: number): string {
       return `Small jobs are inheriting a whole session's context to do their work.`;
     case "cold-resume":
       return `Coming back after the cache expired writes the whole conversation again at the cache-write rate.`;
+    case "heavy-start":
+      return `Everything loaded before your first message is sent with every call in the conversation.`;
     case "oversized-tool-output":
       return `Oversized tool results stay in context and are re-billed for the rest of the session.`;
     case "error-loops":

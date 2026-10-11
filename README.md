@@ -10,7 +10,9 @@
 [![optimaizr live catching a cold cache return while Claude Code works. Click to watch the 42-second demo.](https://raw.githubusercontent.com/blendbunjaku/optimaizr/main/docs/demo.jpg)](https://optimaizr.com/demo)
 
 In a long Claude Code session, most of what you pay for isn't Claude writing
-code. It's Claude re-reading your conversation, on every call. optimAIzr shows
+code. It's Claude re-reading your conversation on every call, cheap per token
+but paid again and again, and writing it into the cache again after a break, at
+up to twice the input price. optimAIzr shows
 where your tokens go, warns you before the expensive moments, and fixes what it
 can in one command. For Claude Code and Codex.
 
@@ -54,13 +56,14 @@ passes 200K, and 5 minutes before a cache expires, and offers a fix you take
 with **Y**.
 
 **Where long sessions turn expensive.** `optimaizr sessions` finds the context
-size where re-reading takes over, and every time you came back too late.
+size where re-reading takes over, what each cache write was for, and every time
+you came back too late.
 
 ```
   Cold cache returns
-    16 times a long conversation was picked up after its cache
-    expired. The first call back rewrote 5.9M tokens for $47.25;
-    a warm cache would have read them for $1.19.
+    16 times you came back after a long conversation's cache
+    expired, and paid for all of it again: 5.9M tokens for
+    $47.25, where a warm cache would have read it for $1.19.
 ```
 
 ## Fix it in one command
@@ -116,8 +119,8 @@ exports. Node 20.11 or later.
 ## Recent releases
 
 - **0.10** (Oct 7, 2026): a cache countdown under Claude Code's prompt, no mod
-  needed. Now 0.10.2: see how many of your compactions landed mid-task, and
-  compact later with `--at 400K`.
+  needed. Now 0.10.3: spot conversations that start heavy, and see what each
+  cache write was for in `optimaizr sessions`.
 - **0.9** (Oct 6, 2026): your plan detected, savings labelled by how sure they
   are, compacting earlier in one command.
 - **0.8** (Oct 2, 2026): the Claude Code mod, with the cost of every answer and

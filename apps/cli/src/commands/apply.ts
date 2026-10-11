@@ -287,6 +287,27 @@ function tokenCount(v: string): number {
 const COMPACT_MIN = 100_000;
 const COMPACT_MAX = 1_000_000;
 
+/** 200000 -> "200K", 1050000 -> "1050K", as the setting is written. */
+const kLabel = (n: number): string => `${Math.round(n / 1000)}K`;
+
+/**
+ * The models an agent's main conversations used, most calls first, with each
+ * one's context window when the catalogue knows it.
+ */
+function modelsOf(events: CallEvent[], agent: CompactAgent): { label: string; window?: number }[] {
+  const calls = new Map<string, { label: string; window?: number; n: number }>();
+  for (const e of events) {
+    if (e.source !== agent || e.isSubagent || e.model.startsWith("<")) continue;
+    const label = modelLabel(e.model);
+    const seen = calls.get(label) ?? { label, window: priceFor(e.model)?.contextTokens, n: 0 };
+    seen.n++;
+    calls.set(label, seen);
+  }
+  return [...calls.values()]
+    .sort((a, b) => b.n - a.n)
+    .map(({ label, window }) => ({ label, window }));
+}
+
 /**
  * `optimaizr apply context-compaction`: have Claude Code and/or Codex compact
  * at COMPACT_AT, or at `--at 400K`. `--agent claude` or `--agent codex` narrows
@@ -317,19 +338,61 @@ function applyCompactionLever(args: Args, events: CallEvent[]): void {
     console.log("");
     return;
   }
+  // The agent compacts as the model's own window fills, so a point at or past
+  // that window changes nothing for it. Only the models in use are judged.
+  const notes: string[] = [];
+  const settable: CompactAgent[] = [];
+  for (const agent of agents) {
+    const models = modelsOf(events, agent);
+    const full = models.filter((m) => m.window !== undefined && m.window <= tokens);
+    if (full.length === 0) {
+      settable.push(agent);
+      continue;
+    }
+    const window = full[0]!.window!;
+    const fills =
+      full.length === 1
+        ? `${full[0]!.label} compacts as its ${kLabel(window)} window fills either way`
+        : `${full.map((m) => m.label).join(" and ")} compact as their windows fill either way`;
+    if (full.length < models.length) {
+      const rest = models.filter((m) => !full.includes(m)).map((m) => m.label);
+      notes.push(`${fills}, so this changes ${rest.join(" and ")} only.`);
+      settable.push(agent);
+      continue;
+    }
+    const name = agent === "claude-code" ? "Claude Code" : "Codex";
+    const said = `${fills}, so compacting at ${kLabel(tokens)} changes nothing there. ${name} was left as it is.`;
+    for (const line of wrapText(said, 68)) console.log(`  ${line}`);
+    const below = Math.max(COMPACT_MIN, Math.round((window * 0.75) / 10_000) * 10_000);
+    if (below < window) {
+      const only =
+        agents.length > 1 ? ` --agent ${agent === "claude-code" ? "claude" : "codex"}` : "";
+      console.log(`  ${dim("To compact earlier, pick a point below the window:")}`);
+      console.log(`    ${blue(`optimaizr apply context-compaction${only} --at ${kLabel(below)}`)}`);
+    }
+    if (agent === "claude-code") {
+      const room =
+        "A compacted conversation starts again from what loads before your first message, so check /context first: a heavy start leaves little room.";
+      for (const line of wrapText(room, 68)) console.log(`  ${dim(line)}`);
+    }
+    console.log("");
+  }
+  if (settable.length === 0) return;
   if (args.flags["dry-run"]) {
-    const early = agents.includes("claude-code")
+    const early = settable.includes("claude-code")
       ? " Claude Code compacts a little before that point."
       : "";
     console.log(
-      `  ${dim(`Dry run: would set ${agents.join(" and ")} to compact at ${tokens}.${early}`)}`,
+      `  ${dim(`Dry run: would set ${settable.join(" and ")} to compact at ${tokens}.${early}`)}`,
     );
+    for (const note of notes) console.log(`  ${dim(note)}`);
     console.log("");
     return;
   }
-  for (const r of applyCompaction(agents, { tokens })) {
+  for (const r of applyCompaction(settable, { tokens })) {
     console.log(`  ${r.ok ? green("Applied") : red("Could not apply")} ${r.detail}`);
   }
+  for (const note of notes) console.log(`  ${dim(note)}`);
   console.log("");
   console.log(`  ${dim("A summary can drop details from early in a long conversation.")}`);
   console.log(

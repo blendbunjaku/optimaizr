@@ -282,7 +282,7 @@ export async function cmdAudit(args: Args): Promise<void> {
 /**
  * `optimaizr sessions`: what the sessions look like. Session
  * length, conversation size, where re-reading takes over, where the money is,
- * cold cache returns.
+ * what the cache writes were for, cold cache returns.
  */
 export async function cmdSessions(args: Args): Promise<void> {
   const data = await load(args);

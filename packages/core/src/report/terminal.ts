@@ -13,6 +13,7 @@ import type { Summary, TopCall } from "../analyze/summary.js";
 import type { DrillNode, DrillTree } from "../analyze/drilldown.js";
 import type { Profile } from "../analyze/profile.js";
 import type { SessionStats } from "../analyze/sessions.js";
+import type { WriteCause } from "../analyze/writes.js";
 import type { BudgetCrossing, BudgetStatus } from "../analyze/budget.js";
 import type { PlanView, SessionCrossing } from "../analyze/plan.js";
 import type { CodexLimitCrossing, CodexPlanView } from "../analyze/codex-plan.js";
@@ -598,6 +599,7 @@ const RULE_LABEL: Record<string, string> = {
   "reasoning-effort": "Excess reasoning",
   "context-compaction": "Compact earlier",
   "cold-resume": "Cold cache returns",
+  "heavy-start": "Heavy start",
   "model-default": "Smaller default model",
 };
 
@@ -731,9 +733,15 @@ export function renderProfile(p: Profile): string {
   if (all.length > 0) {
     out.push(`  ${bold("Clear waste and likely savings, item by item")}`);
     out.push("");
+    // On a plan the limit is what bites, so each saving also shows as a share of usage.
+    const usage = (usd: number) => {
+      const s = p.perMonthUsd > 0 ? usd / p.perMonthUsd : 0;
+      return s < 0.005 ? "<1%" : pct(s);
+    };
     for (const r of ways) {
+      const share = windowed ? `${padLeft(usage(r.savings.monthlyUsd), 5)} of usage  ` : "";
       out.push(
-        `    ${TIER_TAG[r.tier]}  ${pad(ruleLabel(r.rule), 24)}${padLeft(monthlyOf(r.tier, r.savings.monthlyUsd), 17)}  ${confidenceTag(r.savings.confidence)}`,
+        `    ${TIER_TAG[r.tier]}  ${pad(ruleLabel(r.rule), 24)}${padLeft(monthlyOf(r.tier, r.savings.monthlyUsd), 17)}  ${share}${confidenceTag(r.savings.confidence)}`,
       );
     }
     if (smaller > 0) {
@@ -745,6 +753,11 @@ export function renderProfile(p: Profile): string {
     out.push(
       `  ${dim(`Clear waste ${usd(p.savingsMonthlyUsd)}/mo${p.likelyMonthlyUsd > 0.005 ? ` · likely +${usd(p.likelyMonthlyUsd)}/mo` : ""}. Each call is counted once; the "up to" figures above are never added in.`)}`,
     );
+    if (windowed) {
+      out.push(
+        `  ${dim("On a plan, a share of your usage is about that share of your 5-hour windows.")}`,
+      );
+    }
     out.push("");
   }
 
@@ -783,6 +796,17 @@ export function renderProfile(p: Profile): string {
 function kTokens(n: number): string {
   return n >= 1_000_000 ? `${(n / 1_000_000).toFixed(1)}M` : `${Math.round(n / 1000)}K`;
 }
+
+/** Row label, then what one occurrence is called; no count for new content. */
+const WRITE_CAUSE_LABEL: Record<WriteCause, [string, string, string]> = {
+  growth: ["new content", "", ""],
+  start: ["new conversations", "conversation", "conversations"],
+  compaction: ["after a compaction", "compaction", "compactions"],
+  subagent: ["subagents", "run", "runs"],
+  break: ["after a break", "return", "returns"],
+  rebuilt: ["rebuilt while warm", "time", "times"],
+  model: ["model switches", "switch", "switches"],
+};
 
 function bandLabel(from: number, to: number | null): string {
   const start = from === 0 ? "0" : kTokens(from);
@@ -852,14 +876,40 @@ export function renderSessions(c: SessionStats, s: Summary): string {
   }
   out.push("");
 
+  const w = c.cacheWrites;
+  if (w.costUsd > 0) {
+    out.push(
+      `  ${bold("Cache writes")} ${dim(`(${(w.tokenShare * 100).toFixed(1)}% of tokens, ${pct(w.spendShare)} of spend)`)}`,
+    );
+    row("per session", usd(w.perSession.median), usd(w.perSession.p90));
+    for (const r of w.byCause.filter((r) => r.costUsd > 0)) {
+      const [label, one, many] = WRITE_CAUSE_LABEL[r.cause];
+      const times = one
+        ? ` ${dim(`${r.times.toLocaleString()} ${r.times === 1 ? one : many}`)}`
+        : "";
+      out.push(
+        `    ${pad(label, 22)}${padLeft(usd(r.costUsd), 9)}${padLeft(pct(r.share), 6)}  ${shareBar(r.share, 12)}${times}`,
+      );
+    }
+    if (w.rewrites.costUsd > 0) {
+      out.push(`    ${dim("Breaks, warm rebuilds and model switches wrote again what the cache")}`);
+      out.push(
+        `    ${dim(`already held: ${usd(w.rewrites.costUsd)}, ${pct(w.rewrites.share)} of writes.`)}`,
+      );
+    }
+    out.push("");
+  }
+
   if (c.coldResumes.count > 0) {
     out.push(`  ${bold("Cold cache returns")}`);
-    const times = `${c.coldResumes.count} time${c.coldResumes.count === 1 ? "" : "s"}`;
-    out.push(`    ${times} a long conversation was picked up after its cache`);
+    const times = c.coldResumes.count === 1 ? "Once" : `${c.coldResumes.count} times`;
+    out.push(`    ${times} you came back after a long conversation's cache`);
     out.push(
-      `    expired. The first call back rewrote ${fmtTokens(c.coldResumes.tokens)} tokens for ${bold(usd(c.coldResumes.costUsd))};`,
+      `    expired, and paid for all of it again: ${fmtTokens(c.coldResumes.tokens)} tokens for`,
     );
-    out.push(`    a warm cache would have read them for ${usd(c.coldResumes.warmUsd)}.`);
+    out.push(
+      `    ${bold(usd(c.coldResumes.costUsd))}, where a warm cache would have read it for ${usd(c.coldResumes.warmUsd)}.`,
+    );
     out.push("");
   }
 

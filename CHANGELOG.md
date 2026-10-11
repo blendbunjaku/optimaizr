@@ -1,5 +1,41 @@
 # Changelog
 
+## 0.10.3
+
+- **Conversations that start heavy.** A new finding, `heavy-start`, measures
+  how big each project's conversations are before your first message. From
+  60K, it says what carrying that on every call cost and points to `/context`
+  to see what fills it: MCP servers, agents and skills you don't use, a long
+  CLAUDE.md. The mod says so once a session when a new conversation starts
+  that heavy.
+- **What each cache write was for.** `optimaizr sessions` splits cache writes
+  by cause: new content, new conversations, compactions, subagents, coming
+  back after a break, rebuilds while the cache was warm and model switches.
+  It adds up the ones that wrote again what the cache already held.
+- **`/optimaizr handoff` on an expired cache says what it costs first.**
+  Writing the note means paying for the whole conversation again, so the mod
+  names the price and hands off only when you run it again within 2 minutes.
+  The warnings also say which to use: `/compact` keeps the conversation going,
+  a handoff starts a fresh one.
+- **`apply context-compaction` checks your model's window.** Claude Code
+  compacts at whichever comes first, the model's context window or the point
+  you set, so on a 200K model compacting at 200K changes nothing. It now says
+  so, leaves the setting alone and suggests a point that does, like
+  `--at 150K`. With a 1M model in use as well, it applies and names the model
+  it changes.
+- **Compacting by hand comes first.** The compaction finding leads with
+  `/compact` at a natural break, with your own count of compactions that
+  landed mid-task, and the 200K setting second. On a plan, each saving in the
+  profile also shows as a share of your usage.
+- **Plainer wording.** A model switch in the mod reads "~$0.10 less than the
+  same tokens on Opus 5.5": it is a price difference on the tokens used, not
+  a measured saving. Coming back to an expired cache reads "You came back to
+  an expired cache 38 times: 12.9M of conversation written again".
+- **Coming from 0.9?** 0.10.0 is the one to read: `optimaizr statusline on`
+  puts a cache countdown under Claude Code's prompt, and `optimaizr sessions`
+  shows where long conversations turn expensive. `optimaizr changelog 0.10.0`
+  has all of it.
+
 ## 0.10.2
 
 - **How your compactions really went.** The compaction finding reads Claude

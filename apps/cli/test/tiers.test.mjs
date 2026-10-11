@@ -117,7 +117,8 @@ test("compacting earlier is a lever sized from the conversation's own growth", a
   assert.ok(at300 >= at400 && at400 >= at600, "later saves less");
   assert.match(lever.fix, /optimaizr apply context-compaction --at 400K/);
   assert.match(lever.fix, /already pays for each summary and the cache it rebuilds/);
-  assert.match(lever.fix, /automatic compaction usually lands mid-task/);
+  assert.match(lever.fix, /^Compact by hand when you finish a piece of work/);
+  assert.match(lever.fix, /Automatic compaction usually lands mid-task, and/);
   assert.match(lever.fix, /compacts a little before that point/);
   assert.equal(lever.observations.length, 3, "no real compactions recorded, none described");
 
@@ -157,6 +158,7 @@ test("the compaction lever describes the compactions Claude Code really ran", as
     lever.observations[3],
     "Claude Code compacted 2 times: 1 automatic, 1 mid-task, 2m waiting for summaries",
   );
+  assert.match(lever.fix, /usually lands mid-task \(1 of your 2 compactions did\)/);
 });
 
 test("a smaller default model is a lever over work without heavy reasoning", async () => {
@@ -297,6 +299,22 @@ test("the profile leads with the biggest win and says where the money goes", asy
   const onPlan = renderProfile(buildProfile(data, summary, findings, undefined, { plan: "pro" }));
   assert.match(onPlan, /about \d\.\dx the work per 5-hour window/);
   assert.match(onPlan, /Your Claude Pro did \$[\d,.]+\/mo of work at API prices/);
+
+  // On a plan the limit is what bites, so each item also shows its share of usage.
+  const planned = buildProfile(data, summary, findings, undefined, { plan: "pro" });
+  const lever = planned.levers[0];
+  const item = {
+    ...lever,
+    tier: "fix",
+    savings: { ...lever.savings, monthlyUsd: planned.perMonthUsd * 0.08 },
+  };
+  const listed = renderProfile({ ...planned, opportunities: [item] });
+  assert.match(listed, /FIX\s+Compact earlier\s+\$[\d,.]+\/mo\s+8% of usage/);
+  assert.match(listed, /about that share of your 5-hour windows/);
+  assert.doesNotMatch(
+    renderProfile({ ...plain, opportunities: [item] }),
+    /of usage|5-hour windows/,
+  );
 });
 
 /* ------------------------------------------------------------------ *

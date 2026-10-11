@@ -1585,14 +1585,18 @@ function replayCompaction(ctx: Ctx, agents: Agent[], at: number): CompactionRepl
  * What Claude Code's own compactions looked like: how many, how many it ran on
  * its own, how many cut into work in progress, and the wait for the summaries.
  */
-function realCompactions(ctx: Ctx): string | null {
+function realCompactions(ctx: Ctx): { text: string; count: number; mid: number } | null {
   const all = (ctx.data.compactions ?? []).filter((c) => c.source === "claude-code");
   if (all.length === 0) return null;
   const auto = all.filter((c) => c.trigger === "auto").length;
   const mid = all.filter((c) => c.midTask).length;
   const waitMs = all.reduce((t, c) => t + (c.durationMs ?? 0), 0);
   const wait = waitMs >= 60_000 ? duration(waitMs / 60_000) : `${Math.round(waitMs / 1000)}s`;
-  return `Claude Code compacted ${all.length} time${all.length === 1 ? "" : "s"}: ${auto} automatic, ${mid} mid-task, ${wait} waiting for summaries`;
+  return {
+    text: `Claude Code compacted ${all.length} time${all.length === 1 ? "" : "s"}: ${auto} automatic, ${mid} mid-task, ${wait} waiting for summaries`,
+    count: all.length,
+    mid,
+  };
 }
 
 /**
@@ -1629,6 +1633,7 @@ function contextCompaction(ctx: Ctx): OptimizationFinding | null {
     return `${kLabel(at)} ${n > 0 ? `${usd(n)} less` : "no saving"}`;
   });
   const real = agents.includes("claude-code") ? realCompactions(ctx) : null;
+  const landed = real && real.mid > 0 ? ` (${real.mid} of your ${real.count} compactions did)` : "";
 
   const names = listOf(agents.map((a) => AGENT_NAME[a]));
   const sizes = mine.map(contextOf).sort((a, b) => a - b);
@@ -1665,9 +1670,10 @@ function contextCompaction(ctx: Ctx): OptimizationFinding | null {
       `median call: ${fmtTokens(median)} of conversation, 90th percentile: ${fmtTokens(p90)}`,
       `${compactions} compaction${compactions === 1 ? "" : "s"} at ${compactAt} would have cost ${usd(compactionCost)} and saved ${usd(saved)} of re-reading`,
       `compacting later instead: ${later.join(", ")}`,
-      ...(real ? [real] : []),
+      ...(real ? [real.text] : []),
     ],
-    fix: `Compact at ${compactAt}. ${agents.map(compactSetting).join("; ")}. The saving already pays for each summary and the cache it rebuilds. A lower point compacts more often, and automatic compaction usually lands mid-task, so the safer habit is to compact by hand when you finish a piece of work, saying what to keep (/compact keep the API decisions). To keep more of each conversation, pick a later point: optimaizr apply context-compaction --at 400K. A summary can drop details from early in a long conversation, so try it for a week and compare.`,
+    // Losing a decision mid-task can cost more than the tokens, so the habit leads and the setting follows.
+    fix: `Compact by hand when you finish a piece of work, saying what to keep (/compact keep the API decisions). Automatic compaction usually lands mid-task${landed}, and a summary can drop details from early in the conversation. Or have it compact at ${compactAt} on its own. ${agents.map(compactSetting).join("; ")}. The saving already pays for each summary and the cache it rebuilds, but a lower point compacts more often. To keep more of each conversation, pick a later point: optimaizr apply context-compaction --at 400K. Try it for a week and compare.`,
   });
 }
 
@@ -1746,7 +1752,7 @@ function coldResume(ctx: Ctx): OptimizationFinding | null {
     why,
     tier: "try",
     category: "caching",
-    title: `${cold.length} returns to an expired cache ${auto ? "resent" : "rewrote"} ${fmtTokens(tokens)} of conversation`,
+    title: `You came back to an expired cache ${cold.length === 1 ? "once" : `${cold.length} times`}: ${fmtTokens(tokens)} of conversation ${auto ? "sent" : "written"} again`,
     detail: `You came back to a long conversation ${cold.length} times after its cache had expired (median gap ${duration(medianGap)}). Each time the first call ${auto ? "sent the whole conversation again uncached" : "wrote the whole conversation into the cache again"}, ${fmtTokens(tokens / cold.length)} on average: ${usd(rewriteUsd)} in all, where a warm cache would have read it for ${usd(warmUsd)}. A fresh session started from a short handoff note would have cost ${usd(saving)} less.`,
     currentUsd,
     optimizedUsd: currentUsd - saving,
@@ -1771,9 +1777,105 @@ function coldResume(ctx: Ctx): OptimizationFinding | null {
       .slice(0, 5)
       .map(
         (c) =>
-          `${c.event.ts.slice(0, 10)} · back after ${duration(c.gapMinutes)} · ${c.ttlMinutes === null ? "resent" : "rewrote"} ${fmtTokens(c.rewriteTokens)} · ${usd(c.rewriteUsd)}`,
+          `${c.event.ts.slice(0, 10)} · back after ${duration(c.gapMinutes)} · ${c.ttlMinutes === null ? "sent" : "wrote"} ${fmtTokens(c.rewriteTokens)} again · ${usd(c.rewriteUsd)}`,
       ),
     fix: `Before you ${away} in the middle of a long conversation, ask for a three-line handoff note (done, next, and the file to start from), then /clear and start from the note when you return.${handoff}`,
+  });
+}
+
+/** A start this far above a fresh one is setup worth looking at: MCP servers, agents, skills. */
+export const HEAVY_START = 60_000;
+/** The latest conversations per project, so the setup judged is the one in use now. */
+const HEAVY_RECENT = 5;
+
+/** What carrying `tokens` of setup cost one call: read from cache first, then written, then sent. */
+function carriedUsd(e: UsageEvent, tokens: number): number {
+  const price = priceFor(e.model);
+  if (!price) return 0;
+  const r = ratesFor(price, { at: e.ts, speed: e.speed, batch: e.batch });
+  const read = Math.min(tokens, e.cacheReadTokens);
+  const written = Math.min(tokens - read, e.cacheWrite5mTokens + e.cacheWrite1hTokens);
+  const writeRate =
+    e.cacheWrite1hTokens > e.cacheWrite5mTokens ? r.cacheWrite1hPerM : r.cacheWrite5mPerM;
+  return (
+    (read * r.cachedInputPerM + written * writeRate + (tokens - read - written) * r.inputPerM) / M
+  );
+}
+
+/**
+ * Lever: conversations that start heavy. Everything Claude Code loads before the
+ * first message (tools, MCP servers, agents, skills, memory files) is part of
+ * every call after it. The smallest recent start per project is taken as the
+ * setup, so a resumed conversation or a pasted file doesn't count.
+ */
+function heavyStart(ctx: Ctx): OptimizationFinding | null {
+  const byProject = new Map<string, UsageEvent[][]>();
+  for (const calls of ctx.sessions.values()) {
+    const main = calls.filter((e) => e.source === "claude-code" && !e.isSubagent);
+    if (main.length === 0) continue;
+    const project = main[0]!.project;
+    byProject.set(project, [...(byProject.get(project) ?? []), main]);
+  }
+
+  const heavy: Array<{ project: string; base: number; sessions: number; usd: number }> = [];
+  const events: UsageEvent[] = [];
+  let saving = 0;
+  for (const [project, sessions] of byProject) {
+    sessions.sort((a, b) => a[0]!.ts.localeCompare(b[0]!.ts));
+    const recent = sessions.slice(-HEAVY_RECENT);
+    if (recent.length < COLD_MIN) continue;
+    const base = Math.min(...recent.map((s) => contextOf(s[0]!)));
+    if (base < HEAVY_START) continue;
+    const excess = base - FRESH_START;
+    // Only conversations that started at least this heavy carried the setup in full.
+    const carried = sessions.filter((s) => contextOf(s[0]!) >= base);
+    let projectUsd = 0;
+    for (const s of carried) {
+      for (const e of s) projectUsd += carriedUsd(e, excess);
+      events.push(...s);
+    }
+    saving += projectUsd;
+    heavy.push({ project, base, sessions: carried.length, usd: projectUsd });
+  }
+  if (saving < 0.5 || heavy.length === 0) return null;
+
+  heavy.sort((a, b) => b.usd - a.usd);
+  const lightest = Math.min(...heavy.map((h) => h.base));
+  const conversations = heavy.reduce((s, h) => s + h.sessions, 0);
+  const where = heavy.length === 1 ? shortPath(heavy[0]!.project) : `${heavy.length} projects`;
+  const at = heavy.length === 1 ? fmtTokens(lightest) : `${fmtTokens(lightest)}+`;
+  const currentUsd = events.reduce((s, e) => s + e.cost.total, 0);
+
+  return build(ctx, {
+    rule: "heavy-start",
+    why: "Everything that loads before your first message is sent with every call after it. A cache read keeps each call cheap, but it is read again on every one, and it takes room the conversation could use before it compacts.",
+    tier: "test",
+    category: "context-bloat",
+    title: `Conversations in ${where} start at ${at} before any work`,
+    detail: `${conversations} conversations in ${where} started at ${at} or more, where a usual start is about ${fmtTokens(FRESH_START)}. The difference was part of all ${events.length} calls in them: up to ${usd(saving)} over the window, if most of it isn't needed.`,
+    currentUsd,
+    optimizedUsd: currentUsd - saving,
+    events,
+    evidence: evidence(
+      "estimated",
+      "Each conversation's first call is measured; what loads at the start isn't recorded, so the part you could drop is a guess",
+    ),
+    confidence: LEVER_CONFIDENCE,
+    impact: "medium",
+    risk: "needs-verification",
+    assumptions: [
+      `A usual start is about ${fmtTokens(FRESH_START)}: system prompt, built-in tools and a short CLAUDE.md.`,
+      `The smallest of the latest ${HEAVY_RECENT} starts in a project is taken as its setup.`,
+      "What loads at the start isn't recorded, so this is the most dropping it could save.",
+    ],
+    calculation: `Per project with ${COLD_MIN}+ Claude Code conversations: the smallest first call of the latest ${HEAVY_RECENT}, minus ${fmtTokens(FRESH_START)}, priced on every main call of each conversation that started at least that heavy, at the rate that call paid for it (cache read, cache write, or input).`,
+    observations: heavy
+      .slice(0, 5)
+      .map(
+        (h) =>
+          `${shortPath(h.project)} · ${h.sessions} conversation${h.sessions === 1 ? "" : "s"} from ${fmtTokens(h.base)} · ${usd(h.usd)}`,
+      ),
+    fix: "Type /context in Claude Code to see what fills the start. Turn off MCP servers you don't use (/mcp), remove agents and skills you don't use, and keep CLAUDE.md to what every task needs. A plugin or framework that installs many agents and skills is often most of it.",
   });
 }
 
@@ -1891,6 +1993,7 @@ const RULES: Array<{ name: string; run: (ctx: Ctx) => OptimizationFinding | null
   { name: "oversized-tool-output", run: oversizedResults },
   { name: "error-loops", run: errorLoops },
   { name: "cold-resume", run: coldResume },
+  { name: "heavy-start", run: heavyStart },
   { name: "context-compaction", run: contextCompaction },
   { name: "model-default", run: modelDefault },
 ];

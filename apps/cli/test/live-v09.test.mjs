@@ -15,6 +15,7 @@ import {
   renderRunSummary,
   renderStatus,
 } from "optimaizr";
+import { transcript } from "./fixtures/transcripts.mjs";
 
 const execFileAsync = promisify(execFile);
 
@@ -189,6 +190,55 @@ test("optimaizr apply context-compaction --at", { skip }, async () => {
     );
   }
   assert.equal(fs.existsSync(path.join(home, ".codex", "config.toml")), false);
+});
+
+test("a point at or past the model's window is not written", { skip }, async () => {
+  const home = tmp("compact-window");
+  const env = {
+    ...process.env,
+    HOME: home,
+    CLAUDE_CONFIG_DIR: path.join(home, ".claude"),
+    CODEX_HOME: path.join(home, ".codex"),
+    OPTIMAIZR_DIR: path.join(home, ".optimaizr"),
+    NO_COLOR: "1",
+  };
+  const run = async (...argv) =>
+    strip((await execFileAsync(process.execPath, [CLI, ...argv], { env, cwd: home })).stdout)
+      .replace(/\s+/g, " ")
+      .trim();
+  const projects = path.join(home, ".claude", "projects", "-w");
+  fs.mkdirSync(projects, { recursive: true });
+  const save = (name, model) => {
+    const recs = transcript(name, [{ prompt: "fix it" }, { model, ctx: 90_000 }]);
+    fs.writeFileSync(
+      path.join(projects, `${name}.jsonl`),
+      recs.map((r) => JSON.stringify(r)).join("\n"),
+    );
+  };
+  const settings = path.join(home, ".claude", "settings.json");
+
+  // Haiku 4.5 compacts near its 200K window already, so the default would be a no-op.
+  save("s1", "claude-haiku-4-5");
+  const haiku = await run("apply", "context-compaction");
+  assert.match(haiku, /Haiku 4\.5 compacts as its 200K window fills either way/);
+  assert.match(haiku, /Claude Code was left as it is/);
+  assert.match(haiku, /optimaizr apply context-compaction --at 150K/);
+  assert.match(haiku, /check \/context first/);
+  assert.equal(fs.existsSync(settings), false);
+
+  // Below the window it is a real change.
+  const lower = await run("apply", "context-compaction", "--at", "150K", "--dry-run");
+  assert.match(lower, /would set claude-code to compact at 150000/);
+  assert.doesNotMatch(lower, /either way/);
+
+  // With a 1M model in use as well, it is set, and says which model it moves.
+  save("s2", "claude-opus-5-5");
+  const both = await run("apply", "context-compaction");
+  assert.match(both, /Applied .*CLAUDE_CODE_AUTO_COMPACT_WINDOW unset -> 200000/);
+  assert.match(
+    both,
+    /Haiku 4\.5 compacts as its 200K window fills either way, so this changes Opus 5\.5 only/,
+  );
 });
 
 /* ------------------------------------------------------------------ *

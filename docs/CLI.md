@@ -165,14 +165,16 @@ What it adds:
   every running session within seconds.
 - **What a switch saved.** Each switched request is priced twice from the
   token counts the API returned: at the original model's rates and at the new
-  one's. The turn's line leads with the difference, as in `saved $0.10 vs
-Opus 5.5 · this turn $0.10 on Sonnet 5.5 · 1 request`, the band keeps a
-  running total, and `/optimaizr` adds it up. On the first request on the new
-  model, the conversation is written to its cache where the original model
-  would have read it from its own, so that request is priced against cache
-  reads and can come out negative; the line then says how much more it cost,
-  once. It is an estimate in one direction: the original model would also have
-  thought and written more, which isn't counted. Prices come from the same
+  one's. The turn's line leads with the difference, as in `~$0.10 less than
+the same tokens on Opus 5.5 · this turn $0.10 on Sonnet 5.5 · 1 request`, the
+  band keeps a running total (`saved ~$0.10`), and `/optimaizr` adds it up and
+  says how it was worked out. On the first request on the new model, the
+  conversation is written to its cache where the original model would have
+  read it from its own, so that request is priced against cache reads and can
+  come out negative; the line then says how much more it cost, once. The
+  figure is a price difference on the tokens that were used, not a measured
+  saving: the original model could have thought and written more, or finished
+  in fewer requests, and neither is counted. Prices come from the same
   catalogue as every other figure here, with cache writes priced as the engine
   prices them: the main conversation at the 1-hour rate, subagents at the
   5-minute rate.
@@ -275,11 +277,19 @@ npx optimaizr profile
     Why it matters  Every call re-reads the whole conversation, so each
                     call costs more than the last: re-reading took 56% of
                     your Claude Code spend.
-    What to do      Compact at 200K. Claude Code: add "env": {
+    What to do      Compact by hand when you finish a piece of work,
+                    saying what to keep (/compact keep the API decisions).
+                    Automatic compaction usually lands mid-task, and a
+                    summary can drop details from early in the
+                    conversation. Or have it compact at 200K on its own.
+                    Claude Code: add "env": {
                     "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "200000" } to
-                    ~/.claude/settings.json. Or compact by hand (/compact)
-                    when you change topic. A summary can drop details from
-                    early in a long conversation, so try it for a week and
+                    ~/.claude/settings.json, and it compacts a little
+                    before that point. The saving already pays for each
+                    summary and the cache it rebuilds, but a lower point
+                    compacts more often. To keep more of each
+                    conversation, pick a later point: optimaizr apply
+                    context-compaction --at 400K. Try it for a week and
                     compare.
 
 ------------------------------------------------------------------
@@ -292,16 +302,18 @@ npx optimaizr profile
 
   Clear waste and likely savings, item by item
 
-    FIX   Oversized context               $12.15/mo  likely
-    FIX   Oversized tool output           $0.847/mo  likely
-    TRY   Model mismatch                   $1.75/mo  likely
-    TRY   Excess reasoning                $0.415/mo  likely
+    FIX   Oversized context               $12.15/mo     1% of usage  likely
+    FIX   Oversized tool output           $0.847/mo    <1% of usage  likely
+    TRY   Model mismatch                   $1.75/mo    <1% of usage  likely
+    TRY   Excess reasoning                $0.415/mo    <1% of usage  likely
     +1 smaller, under $0.25/mo each: optimaizr recommend
 ```
 
 The money comes first, by tier, and is never added up. The biggest win is the
 largest opportunity of any tier; on a plan it is also put as more work per
-5-hour window (cutting a share s of usage leaves room for 1 / (1 - s) as much).
+5-hour window (cutting a share s of usage leaves room for 1 / (1 - s) as much),
+and each item below shows its share of your usage, about its share of your
+5-hour windows.
 "Where it goes" splits spend into re-reading context, loading it into the
 cache, output and new input. Below the screen shown here: each clear-waste and
 likely item, your plan block and the next step.
@@ -491,12 +503,29 @@ re-reading take over? All of it is measured, nothing is estimated:
   re-reading becomes half the cost of a call
 - the costliest tenth of sessions and their share, the sessions that passed
   200K, and spend by session length
+- cache writes: their share of tokens and of spend, what a session spends on
+  them (median and the top 1 in 10), and what each write was for (below)
 - cold cache returns: how often a long conversation was picked up after its
   cache expired, and what rewriting it cost against reading it warm
 
 Re-reading is priced at the cache-read rate, already the cheapest rate there
-is. It is the biggest share because every call pays it. `--json` prints the
-same numbers, and `profile --json` carries them as `sessions`.
+is. It is the biggest share because every call pays it. A cache write costs
+1.25x the input rate (5-minute cache) or 2x (1-hour), so a few percent of the
+tokens can be a quarter of the bill. Each write gets one cause:
+
+| Cause              | What happened                                                                                                                    |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------------------- |
+| new content        | messages and tool results added since the last call, written once                                                                |
+| new conversations  | the first call of a conversation, or a short one (under 50K) picked up after a break                                             |
+| after a compaction | the first call after a compaction writes the summary                                                                             |
+| subagents          | each subagent starts empty and writes its own context                                                                            |
+| after a break      | a cold cache return, the same calls as the section below                                                                         |
+| rebuilt while warm | most of the context written again inside the cache's lifetime: a rewind, a change to tools or settings, or a cache dropped early |
+| model switches     | the same, right after a change of model: each model has its own cache                                                            |
+
+The last three wrote again what the cache already held, and the section totals
+them. `--json` prints the same numbers, and `profile --json` carries them as
+`sessions`.
 
 ---
 
@@ -678,6 +707,12 @@ in `~/.codex/config.toml`. Both are read when a session starts. The previous
 values are kept in `~/.optimaizr/settings-changes.json`. Claude Code compacts a
 little before the number it is given: with 200000 set, it fired at 166-170K.
 
+A model compacts as its own window fills, so a point at or past that window
+changes nothing for it. If every model you use there has a window that small
+(Haiku 4.5's is 200K), the setting is left alone and a point below the window
+is suggested, like `--at 150K`. If you also use a 1M model, it is set, and
+says which model it moves.
+
 The finding also prices compacting later, at 300K, 400K and 600K, from the same
 replay. A later point keeps more of each conversation and saves less; pick the
 one you trust and pass it with `--at`.
@@ -756,6 +791,7 @@ same countdown.
 | `repeated-context`      | The same prefix re-sent across separate sessions                |
 | `oversized-input`       | Small jobs inheriting a whole session's context                 |
 | `cold-resume`           | A long conversation picked up after its cache expired           |
+| `heavy-start`           | Conversations that start heavy: MCP servers, agents, skills     |
 | `oversized-output`      | Responses far longer than the median, including truncated ones  |
 | `spend-concentration`   | A few workloads driving most of the bill                        |
 | `cost-spike`            | A sudden increase that call volume does not explain             |
@@ -951,7 +987,7 @@ Recorded data lives in `~/.optimaizr/` as plain JSONL. No daemon, no database, n
 network.
 
 ```bash
-npm test    # 85 tests, including integration against the real SDK
+npm test    # unit tests, plus integration against the real SDK
 npm run e2e  # drive the whole CLI against a mock endpoint - no key, no spend
 ```
 

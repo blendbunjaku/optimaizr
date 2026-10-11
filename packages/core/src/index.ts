@@ -18,6 +18,7 @@ export * from "./analyze/rules.js";
 export * from "./analyze/drilldown.js";
 export * from "./analyze/profile.js";
 export * from "./analyze/cold.js";
+export * from "./analyze/writes.js";
 export * from "./analyze/sessions.js";
 export * from "./analyze/budget.js";
 export * from "./analyze/plan.js";

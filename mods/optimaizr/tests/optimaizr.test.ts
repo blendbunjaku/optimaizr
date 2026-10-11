@@ -121,12 +121,18 @@ const overrides = (...list: object[]) =>
     overrides: list.map((o) => ({ rule: "model-fit", at: "x", ...o })),
   });
 
-async function step($: Engine, model = OPUS, agentId?: string, effort?: "low" | "xhigh") {
+async function step(
+  $: Engine,
+  model = OPUS,
+  agentId?: string,
+  effort?: "low" | "xhigh",
+  messageCount = 3,
+) {
   const stream = $.turn.step({
     turnId: "t1",
     index: 0,
     model,
-    messageCount: 3,
+    messageCount,
     ...(agentId ? { agentId } : {}),
     ...(effort ? { effort } : {}),
   });
@@ -170,7 +176,7 @@ test("the session file tells optimaizr live the mod is running", async ($, on) =
   await $.session.start(SESSION);
   const file = `${DIR}/mod/sessions/s1.json`;
   const beat = JSON.parse(w.files.get(file)!);
-  expect(beat).toMatchObject({ id: "s1", version: "0.10.2", cwd: CWD });
+  expect(beat).toMatchObject({ id: "s1", version: "0.10.3", cwd: CWD });
   expect(beat.endedAt).toBeUndefined();
 
   await $.session.end({ reason: "clear", sessionId: "s1", resume: { id: "s1" } });
@@ -469,7 +475,7 @@ const answered = ($: Engine) =>
     reason: "answer",
   });
 
-test("a switched turn leads with what it saved", async ($, on) => {
+test("a switched turn leads with its difference against the same tokens", async ($, on) => {
   // 1,000 in and 10,000 out: $0.204 on Opus 5.5, $0.102 on Sonnet 5.5.
   const w = world(on, {
     files: switchTo(SONNET),
@@ -481,13 +487,13 @@ test("a switched turn leads with what it saved", async ($, on) => {
   await step($);
 
   expect(textOf(await $.ui.render(spinner))).toBe(
-    "Thinking · Sonnet 5.5 · $0.10 · saved $0.10 · 58% of 5h…",
+    "Thinking · Sonnet 5.5 · $0.10 · saved ~$0.10 · 58% of 5h…",
   );
   expect((await answered($)).text).toBe(
-    "saved $0.10 vs Opus 5.5 · this turn $0.10 on Sonnet 5.5 · 1 request · 5h 58% → 58%",
+    "~$0.10 less than the same tokens on Opus 5.5 · this turn $0.10 on Sonnet 5.5 · 1 request · 5h 58% → 58%",
   );
   expect(textOf(await $.ui.render(band()))).toContain(
-    "switched  shop-api: Opus 5.5 → Sonnet 5.5 · saved $0.10 · harder task? /optimaizr off",
+    "switched  shop-api: Opus 5.5 → Sonnet 5.5 · saved ~$0.10 · harder task? /optimaizr off",
   );
 });
 
@@ -517,7 +523,7 @@ test("a subagent has no reload to pay: both models write its cache, at the 5-min
   await $.turn.start({ text: "keep going", turnId: "t1" });
   w.now.usd = 1.25;
   await step($, OPUS, "agent-1");
-  expect((await answered($)).text).toContain("saved $0.25 vs Opus 5.5");
+  expect((await answered($)).text).toContain("~$0.25 less than the same tokens on Opus 5.5");
 });
 test("an effort switch lowers effort, and never raises it", async ($, on) => {
   const w = world(on, { files: switchTo(OPUS, { effort: "low" }) });
@@ -587,7 +593,7 @@ test("/optimaizr adds up what was saved and held", async ($, on) => {
 
   const out = await $.command.run(command(""));
   expect(out.text).toContain(
-    "Saved      $0.20 by switching models: the same tokens at the original model's rates, less what they cost",
+    "Saved      ~$0.20 by switching models: the same tokens at the original model's rates, less what they cost",
   );
   expect(out.text).toContain("Guard      1 retry held");
 });
@@ -640,7 +646,9 @@ test("a savings milestone gets a toast", async ($, on) => {
   });
   await $.session.start(SESSION);
   await step($);
-  expect(w.toasts).toEqual(["optimAIzr: saved $0.50 this session by switching"]);
+  expect(w.toasts).toEqual([
+    "optimAIzr: switching saved ~$0.50 this session, against the same tokens on the original model",
+  ]);
 });
 
 test("/optimaizr hud opens the HUD with the session at a glance", async ($, on) => {
@@ -805,7 +813,7 @@ test("the HUD shows a saving as a share of the 5-hour window too", async ($, on)
       },
     }),
   );
-  expect(hud).toContain("saved $0.50");
+  expect(hud).toContain("saved ~$0.50");
   expect(hud).toContain("≈1.0% of your 5h window");
 });
 
@@ -831,7 +839,7 @@ test("a long idle conversation counts down to its cache expiring, then says what
   const warned = w.toasts.filter((t) => t.includes("the cache expires"));
   expect(warned).toHaveLength(1);
   expect(warned[0]).toContain(
-    "writes 300K again ($2.40). Leaving? /optimaizr handoff, then /clear.",
+    "writes 300K again ($2.40). Leaving? /optimaizr handoff saves a note now, while it costs cents, and after /clear the next conversation starts from it.",
   );
 });
 
@@ -857,7 +865,29 @@ test("a conversation past 200K is told once what each request re-reads", async (
     await answered($);
   }
   expect(w.toasts).toEqual([
-    "optimAIzr: this conversation is past 200K. Each request re-reads all 250K ($0.05). At a natural break, /optimaizr handoff, then /clear.",
+    "optimAIzr: this conversation is past 200K. Each request re-reads all 250K ($0.05). At a natural break: /compact shrinks it to a summary and carries on, or /optimaizr handoff saves a note and /clear starts fresh from it.",
+  ]);
+});
+
+test("a conversation that starts heavy says what fills it, once a session", async ($, on) => {
+  on("session.compact", () => ({ skip: "not in a test" }));
+  const w = world(on, { tokens: { ...TOKENS, cache_read_input_tokens: 132_000 } });
+  const clear = () => $.session.end({ reason: "clear", sessionId: "s1", resume: { id: "s1" } });
+  await $.session.start(SESSION);
+
+  // A resumed conversation carries its history, and a compacted one its summary.
+  await step($, OPUS, undefined, undefined, 40);
+  await $.session.compact({ trigger: "manual", messages: [] });
+  await step($);
+  await clear();
+  await step($, OPUS, "agent-1");
+  expect(w.toasts).toEqual([]);
+
+  await step($);
+  await clear();
+  await step($);
+  expect(w.toasts).toEqual([
+    "optimAIzr: this conversation started at 132K before any work, where a usual start is about 30K, and every message re-reads it. /context shows what fills it: MCP tools, agents, skills, memory files.",
   ]);
 });
 
@@ -909,6 +939,47 @@ test("/optimaizr handoff saves Claude's note, and the next conversation starts f
   expect((await $.prompt.context({ blocks: [] })).blocks).toHaveLength(1);
   await $.session.end({ reason: "clear", sessionId: "s1", resume: { id: "s1" } });
   expect((await $.prompt.context({ blocks: [] })).blocks).toEqual([]);
+});
+
+test("/optimaizr handoff on an expired cache says what the note costs, and goes ahead when run again", async ($, on) => {
+  const forks: string[] = [];
+  on("model.fork", ($, e) => {
+    forks.push(e.prompt);
+    return {
+      value: {
+        isAnswered: true as const,
+        text: NOTE,
+        usage: {
+          input_tokens: 10,
+          output_tokens: 400,
+          cache_read_input_tokens: 0,
+          cache_creation_input_tokens: 300_000,
+        },
+      },
+    };
+  });
+  const w = world(on);
+  w.now.ctx = 300_000;
+  await $.session.start(SESSION);
+  await step($);
+  await w.clock.advance(80 * MINUTE);
+
+  expect((await $.command.run(command("handoff"))).text).toBe(
+    "The cache expired while you were away (1h 20m), so the note writes all 300K again ($2.40), as your next message would. " +
+      "Run /optimaizr handoff again within 2 minutes to go ahead, or skip the note: /clear, and tell the new conversation in a line or two what you were doing.",
+  );
+  expect(forks).toHaveLength(0);
+
+  await w.clock.advance(MINUTE);
+  expect((await $.command.run(command("handoff"))).text).toContain(
+    "the cache had expired, so Claude read the conversation again",
+  );
+  expect(forks).toHaveLength(1);
+
+  // The confirmation covers one note: the next handoff asks again.
+  await w.clock.advance(3 * MINUTE);
+  expect((await $.command.run(command("handoff"))).text).toContain("The cache expired");
+  expect(forks).toHaveLength(1);
 });
 
 test("a handoff note from another session is used within 12 hours, not after", async ($, on) => {

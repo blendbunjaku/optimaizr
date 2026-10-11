@@ -13,7 +13,7 @@ import { contextOf } from "./tasks.js";
 /** Below this, rewriting the conversation costs about what a fresh start does. */
 export const COLD_MIN_CONTEXT = 50_000;
 /** A call that wrote at least this share of its context started from a cold cache. */
-const REWRITE_SHARE = 0.6;
+export const REWRITE_SHARE = 0.6;
 /**
  * OpenAI keeps a cached prefix for a few idle minutes and sets no fixed time,
  * so a miss after at least this long away counts as a return.

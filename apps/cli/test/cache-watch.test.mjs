@@ -80,11 +80,14 @@ test("a short pause in Codex is not a cold return", async () => {
   assert.equal(coldResumes(data.events).length, 0);
 });
 
-test("the cold-resume rule says resent for Codex, not rewrote", async () => {
+test("the cold-resume rule says sent for Codex, not written", async () => {
   const data = await loadCodex({ c1: codexRollout("c1", codexComeback({ returns: 3 })) });
   const finding = findWaste(data).find((f) => f.rule === "cold-resume");
   assert.ok(finding);
-  assert.match(finding.title, /^3 returns to an expired cache resent/);
+  assert.match(
+    finding.title,
+    /^You came back to an expired cache 3 times: .* of conversation sent again$/,
+  );
   assert.match(finding.why, /OpenAI keeps a conversation cached only while it is in use/);
   assert.match(finding.why, /0\.1x/);
   assert.match(finding.fix, /^Before you step away/);

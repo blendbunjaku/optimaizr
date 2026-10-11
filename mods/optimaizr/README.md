@@ -20,8 +20,9 @@ Needs Claude Code 2.1.287 or later.
   pace and when it resets: `61% of 5h · ~2h 25m left at this pace · resets 01:00`
 - **Each answer** gets one line: `optimaizr: this turn $0.18 · 4 requests · 5h 55% → 56%`
 - **What a switch saved:** a switched turn's line leads with it, e.g.
-  `saved $0.10 vs Opus 5.5 · this turn $0.10 on Sonnet 5.5 · …`, and the band
-  keeps a running total. It is the same tokens priced on both models.
+  `~$0.10 less than the same tokens on Opus 5.5 · this turn $0.10 on Sonnet 5.5 · …`,
+  and the band keeps a running total. It prices the tokens the new model used
+  on both models; it can't know what the original model would have used.
 - **`/optimaizr`** prints the session's spend, what it saved, both plan windows
   and any switch. **`/optimaizr hud`** shows it as gauges and a sparkline.
 - **Switches that pay:** subagents switch at once; a long conversation waits
@@ -35,7 +36,14 @@ Needs Claude Code 2.1.287 or later.
   file to start from) while the cache is still warm,
   so it costs cents. `/clear`, and the next conversation in that project
   starts from the note instead of re-reading the old one. A note is used
-  once and expires after 12 hours.
+  once and expires after 12 hours. Once the cache has expired, the note
+  costs what your next message would, so it says how much and goes ahead
+  only when you run it again. It is not `/compact`: `/compact` shrinks the
+  conversation you are in and carries on, a handoff starts a new one.
+- **A heavy start:** when a new conversation's first request carries 60K or
+  more before any work (a usual start is about 30K), one toast says so and
+  points to `/context`, which shows what fills it: MCP tools, agents, skills,
+  memory files. Once a session, never after `/resume` or compaction.
 - **A guard against retry loops:** when the same command fails twice in a row
   with nothing changed, the next identical attempt is held once and Claude is
   asked to change something first.
@@ -78,5 +86,4 @@ claude plugin validate mods/optimaizr
 claude plugin test mods/optimaizr
 ```
 
-The tests were last run on Claude Code 2.1.286, where mods still needed
-`CLAUDE_CODE_ENABLE_FUNCTION_HOOKS=1`. From 2.1.287 they are on by default.
+The tests were last run on Claude Code 2.1.296.
