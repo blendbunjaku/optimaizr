@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
@@ -534,7 +535,7 @@ test("every recommendation can be simulated; only replayable ones offer verify",
  * The built CLI — the two commands that used to disagree
  * ------------------------------------------------------------------ */
 
-const CLI = path.join(new URL("..", import.meta.url).pathname, "dist/cli.js");
+const CLI = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
 const HAS_CLI = fs.existsSync(CLI);
 
 /** Run the real CLI against a fixture home and transcript root. */
@@ -550,11 +551,31 @@ async function runCli(argv, env) {
   }
 }
 
+/**
+ * A fixture home whose usage came through the SDK, written to the ledger. Agent
+ * findings get steps instead, so the verification gate is SDK traffic's.
+ */
+async function sdkHome(records) {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "optimaizr-cli-"));
+  const data = await ingestClaudeCode({ root: writeFixture(records) });
+  const dir = path.join(home, ".optimaizr");
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(
+    path.join(dir, "events.jsonl"),
+    data.events.map((e) => JSON.stringify({ ...e, source: "sdk" })).join("\n") + "\n",
+  );
+  return {
+    HOME: home,
+    CLAUDE_CONFIG_DIR: path.join(home, ".claude"),
+    CODEX_HOME: path.join(home, ".codex"),
+    OPTIMAIZR_DIR: dir,
+  };
+}
+
 test(
   "the built CLI's verify and apply agree about oversized-input",
   { skip: HAS_CLI ? false : "dist/cli.js is not built" },
   async () => {
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), "optimaizr-cli-"));
     const records = [];
     for (let i = 0; i < 40; i++) {
       records.push(
@@ -588,19 +609,7 @@ test(
         }),
       );
     }
-    // The transcript reader looks under ~/.claude/projects.
-    const projects = path.join(home, ".claude", "projects");
-    fs.mkdirSync(path.join(projects, "-Users-someone-project"), { recursive: true });
-    fs.writeFileSync(
-      path.join(projects, "-Users-someone-project", "session.jsonl"),
-      records.map((r) => JSON.stringify(r)).join("\n") + "\n",
-    );
-
-    const env = {
-      HOME: home,
-      CLAUDE_CONFIG_DIR: path.join(home, ".claude"),
-      OPTIMAIZR_DIR: path.join(home, ".optimaizr"),
-    };
+    const env = await sdkHome(records);
 
     const verify = await runCli(["verify", "oversized-input"], env);
     // The original bug, in the exact words it shipped with.
@@ -638,21 +647,8 @@ test(
   "the built CLI applies a not_required finding without asking to verify",
   { skip: HAS_CLI ? false : "dist/cli.js is not built" },
   async () => {
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), "optimaizr-cli2-"));
     // Repeated identical reads in one session: pure waste, nothing to verify.
-    const records = repeatReadsRecords();
-    const projects = path.join(home, ".claude", "projects");
-    fs.mkdirSync(path.join(projects, "-Users-someone-project"), { recursive: true });
-    fs.writeFileSync(
-      path.join(projects, "-Users-someone-project", "session.jsonl"),
-      records.map((r) => JSON.stringify(r)).join("\n") + "\n",
-    );
-
-    const env = {
-      HOME: home,
-      CLAUDE_CONFIG_DIR: path.join(home, ".claude"),
-      OPTIMAIZR_DIR: path.join(home, ".optimaizr"),
-    };
+    const env = await sdkHome(repeatReadsRecords());
 
     const verify = await runCli(["verify", "repeat-tool-calls"], env);
     assert.match(verify.stdout, /not_required/);

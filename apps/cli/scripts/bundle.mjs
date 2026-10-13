@@ -4,13 +4,11 @@
 // deps. Provider SDKs are optional peers and are loaded at runtime.
 
 import { build } from "esbuild";
-import { chmod, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, copyFile, readFile, rm, writeFile } from "node:fs/promises";
 
 const { version } = JSON.parse(await readFile(new URL("../package.json", import.meta.url), "utf8"));
 // `optimaizr changelog` works offline, so the notes travel inside the bundle.
 const changelog = await readFile(new URL("../../../CHANGELOG.md", import.meta.url), "utf8");
-
-const SHEBANG = "#!/usr/bin/env node";
 
 // start clean so old files don't end up in the tarball
 await rm("dist", { recursive: true, force: true });
@@ -35,7 +33,7 @@ const common = {
 await build({
   ...common,
   entryPoints: ["src/cli.ts"],
-  outfile: "dist/cli.js",
+  outfile: "dist/main.js",
 });
 
 await build({
@@ -44,12 +42,13 @@ await build({
   outfile: "dist/index.js",
 });
 
-// esbuild can move the shebang off line 1, which breaks the bin. Put it back.
-const cli = await readFile("dist/cli.js", "utf8");
-const body = cli.startsWith(SHEBANG) ? cli.slice(SHEBANG.length).trimStart() : cli;
-await writeFile("dist/cli.js", `${SHEBANG}\n${body}`);
+// The bundle is imported, not run, so it needs no shebang.
+const main = await readFile("dist/main.js", "utf8");
+if (main.startsWith("#!")) await writeFile("dist/main.js", main.slice(main.indexOf("\n") + 1));
 
+// The bin checks the Node version, then imports the bundle.
+await copyFile("scripts/entry.mjs", "dist/cli.js");
 // otherwise `npx optimaizr` fails with EACCES
 await chmod("dist/cli.js", 0o755);
 
-console.log("bundled dist/cli.js and dist/index.js");
+console.log("bundled dist/main.js and dist/index.js, with dist/cli.js as the bin");

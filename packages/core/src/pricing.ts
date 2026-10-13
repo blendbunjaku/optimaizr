@@ -58,6 +58,8 @@ export interface ModelPrice {
   fast?: { inputPerM: number; outputPerM: number };
   /** Short note used by `optimaizr guide` when recommending a route. */
   bestFor: string;
+  /** False prices a model without proposing switches to it, e.g. one too new to vouch for. */
+  switchTarget?: false;
 }
 
 /**
@@ -312,6 +314,20 @@ export const BUILTIN_MODELS: ModelPrice[] = [
     maxOutputTokens: 64_000,
     capabilities: [...anthropicCaps, "reasoning"],
     bestFor: "Previous balanced generation.",
+  },
+  {
+    id: "claude-haiku-5-5",
+    label: "Haiku 5.5",
+    provider: "anthropic",
+    tier: "fast",
+    // Every rate is 5x once the prompt, cache reads and writes included, is over 100K.
+    rates: tiered(0.1, 0.5, 100_000, 0.5, 2.5, "2026-10-07"),
+    contextTokens: 1_000_000,
+    maxOutputTokens: 128_000,
+    capabilities: [...anthropicCaps, "reasoning"],
+    bestFor:
+      "Sub-agents and short, well-specified turns. A tenth of Haiku 4.5 under 100K of prompt, 5x that past it.",
+    switchTarget: false,
   },
   {
     id: "claude-haiku-4-5",

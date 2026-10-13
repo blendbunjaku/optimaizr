@@ -18,7 +18,10 @@ Needs Claude Code 2.1.287 or later.
   window is: `Thinking · $0.18 · 61% of 5h…`
 - **The band above the prompt** shows the window, how long it lasts at this
   pace and when it resets: `61% of 5h · ~2h 25m left at this pace · resets 01:00`
-- **Each answer** gets one line: `optimaizr: this turn $0.18 · 4 requests · 5h 55% → 56%`
+- **Each answer** gets one line: `optimaizr: this turn $0.18 · 2m 10s · 4 requests · ~0.4% of 5h`.
+  The share is the turn's own, from its dollars, not the meter before and after:
+  other sessions move the meter too. It shows once `optimaizr sessions` or
+  `optimaizr live` has worked out what 1% of your window costs.
 - **What a switch saved:** a switched turn's line leads with it, e.g.
   `~$0.10 less than the same tokens on Opus 5.5 · this turn $0.10 on Sonnet 5.5 · …`,
   and the band keeps a running total. It prices the tokens the new model used
@@ -68,7 +71,8 @@ It reads the usage figures Claude Code already shows you (cost, token counts,
 context fill, plan windows) and the commands Claude runs, kept in memory for
 the retry guard. It never reads your prompts or file contents and makes no
 network calls of its own. It
-reads `~/.optimaizr/overrides.json` and writes one small file per session to
+reads `~/.optimaizr/overrides.json` and `~/.optimaizr/window-rate.json`, and
+writes one small file per session to
 `~/.optimaizr/mod/sessions`, which is how `optimaizr live` knows it is running.
 That file also carries Claude Code's own 5-hour and weekly meters, so
 `optimaizr profile` and `optimaizr live` can show your real windows.

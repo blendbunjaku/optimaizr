@@ -13,16 +13,20 @@ Every fix is checked against your own quality bar first, on your own traffic,
 so you're never trading cost for worse output.
 
 ```
-$107.72 observed   |   $84.77/month at this rate
+  51% of your spend went on re-reading the conversation so far; the
+  answers themselves were 22%.
+  Start here: optimaizr apply context-compaction   compact sooner, so there is less to re-read
 
-  tokens in  317.7M    (310.8M cached, 98% hit rate)
-  tokens out 1.3M      (443.1K reasoning, 33% of output spend)
+  Your Claude Pro did $1,146/mo of work at API prices: 57x what you pay
 
-  $7.49/month recoverable - 9% of your projected spend
-
-  MEDIUM  439 mechanical calls ran on an over-specified model
-          $5.62/mo | needs verification | model-fit
+  Savings found
+    Clear waste              $9.44/mo  $114.87/yr · fix it, nothing to lose
+    Likely, if you try     +$92.81/mo  cold cache returns, model mismatch
+    Up to, if you test     $272.14/mo  compact earlier · 37% of calls carry over 200K of conversation
 ```
+
+Once a change is in, `optimaizr results` puts the days after it against the
+days before, on your own usage.
 
 ---
 
@@ -86,7 +90,7 @@ needs it.
 | `optimaizr audit`           | The savings audit: what you spend, what is recoverable, and why      |
 | `optimaizr profile`         | One screen: what your plan does, savings found, the biggest win      |
 | `optimaizr scan`            | Spend, savings, and what to do about it                              |
-| `optimaizr sessions`        | How your sessions run: length, size, where re-reading takes over     |
+| `optimaizr sessions`        | Your costliest conversations, and where re-reading takes over        |
 | `optimaizr why`             | Drill into where the money actually goes                             |
 | `optimaizr live`            | Watch calls as they happen and surface fixes interactively           |
 | `optimaizr statusline on`   | Context, re-read cost and cache countdown under Claude Code's prompt |
@@ -97,8 +101,10 @@ needs it.
 | `optimaizr waste`           | Just the opportunities                                               |
 | `optimaizr tokens`          | Token analytics and the priciest individual calls                    |
 | `optimaizr verify <rule>`   | Prove a fix against your quality bar before applying it              |
-| `optimaizr apply <rule>`    | Get the exact change, gated on a passing verification                |
-| `optimaizr undo <rule>`     | Take back a switch or a setting optimAIzr applied                    |
+| `optimaizr apply`           | What optimAIzr changes for you, and what you change yourself         |
+| `optimaizr apply <rule>`    | Make the change, or get its steps; `--done` records one you made     |
+| `optimaizr results`         | Each change against the days before it, on your own usage            |
+| `optimaizr undo <rule>`     | Take back a change optimAIzr made, or mark one you made as undone    |
 | `optimaizr import <file>`   | Load a CSV or JSON usage export you already have                     |
 | `optimaizr report`          | Write a shareable HTML dashboard                                     |
 | `optimaizr guide`           | Which model for which job, with the arithmetic                       |
@@ -112,9 +118,10 @@ Flags: `--why` (show every calculation and assumption), `--days N`,
 
 `live` also takes `--backfill N` (replay recorded history first), `--window N`,
 `--min-usd N` (default $0.25), `--source all|agents|sdk`, `--no-prompt` (print
-recommendations instead of asking), and `--auto` (apply confident model and
-effort switches through the Claude Code mod without asking). With `--json` it
-never prompts.
+recommendations instead of asking), `--no-turns` (no line after each Claude
+Code turn) and `--auto` (apply confident model and effort switches through the
+Claude Code mod without asking). With `--json` it never prompts. `sessions`
+takes `--top N`, how many conversations to list (10 by default).
 
 ---
 
@@ -141,8 +148,11 @@ What it adds:
   and when it resets. The readings come from Claude Code's own limit meter and
   are shared by every session on the machine. Off a plan, it shows what the
   session has cost instead.
-- **Each answer** gets one line: `optimaizr: this turn $0.18 · 4 requests · 5h 55%
-→ 56%`. Set the plugin's `turnLine` option to `false` to turn it off.
+- **Each answer** gets one line: `optimaizr: this turn $0.18 · 2m 10s · 4
+requests · ~0.4% of 5h`. The share is the turn's own, from its dollars at what
+  1% of your window costs (see [Watching live](#watching-live)), not the meter
+  before and after: other sessions move the meter too. Set the plugin's
+  `turnLine` option to `false` to turn it off.
 - **`/optimaizr`** prints the session's spend, both plan windows and any active
   switch. `/optimaizr hud` opens the same as a HUD, with the saving also shown as an
   estimated share of your 5-hour window (from how far the window moved against
@@ -180,10 +190,12 @@ the same tokens on Opus 5.5 · this turn $0.10 on Sonnet 5.5 · 1 request`, the
   5-minute rate.
 - **Effort.** Accepting a `reasoning-effort` finding in `live` writes an effort
   switch: the same model, asked to think less on that work. The mod only ever
-  lowers effort, and `/optimaizr off` goes back. Like a model switch, the first
-  request at the new effort reads the conversation once without the cache (in
-  one test, $0.23 for that request against $0.02 to $0.03 for the next ones).
-  Claude Code doesn't report how much a request would have reasoned at the old
+  lowers effort, and `/optimaizr off` goes back. In one test of the mod
+  switching a session to low, the first request at the new effort read the
+  conversation without the cache ($0.23 against $0.02 to $0.03 for the next
+  ones). Effort changes made with `/effort` between the other levels kept the
+  cache in all 10 cases seen so far, so it may be low that costs the reload. Claude
+  Code doesn't report how much a request would have reasoned at the old
   setting, so effort switches carry no dollar figure.
 - **A retry guard.** When the same command fails twice in a row and nothing has
   changed since (no successful edit or command in between), the mod holds the
@@ -317,6 +329,22 @@ and each item below shows its share of your usage, about its share of your
 "Where it goes" splits spend into re-reading context, loading it into the
 cache, output and new input. Below the screen shown here: each clear-waste and
 likely item, your plan block and the next step.
+
+Before anything is applied, the profile opens with one fact from your own
+usage and the one command to start with. Once a change is in, that place goes
+to an Applied block, with how each change is doing so far:
+
+```
+  Applied
+    Compact earlier: Claude Code at 200K since Oct 7 · 28% less per prompt so far
+    Model mismatch: Opus 5.5 -> Sonnet 5.5 in eatmaxxing since Oct 2
+      too early to tell
+    Before against after, for each: optimaizr results
+```
+
+A finding with a change in place for at least half of its spend leaves the
+savings and the biggest win, so the profile doesn't keep offering what you
+already did. An undone change, or one for another project, doesn't count.
 
 Every figure is the same one `waste`, `audit` and `recommend` report. It is
 read-only and fully local, and takes the same `--days`, `--project`,
@@ -492,9 +520,28 @@ connected, the provider level is where the comparison starts.
 
 ### How your sessions run
 
-`optimaizr sessions` answers the questions a re-reading figure raises: are the
-costs in a few long sessions or many medium ones, and at what size does
-re-reading take over? All of it is measured, nothing is estimated:
+`optimaizr sessions` opens with your costliest conversations, by the title
+Claude Code gave each one:
+
+```
+  Costliest conversations (subagents included)
+         cost   of 5h   worked   conversation
+       $91.16   ~222%   1h 53m   Refactor the billing webhooks             api · Oct 1
+       $48.20   ~118%   1h 02m   Landing page rebuild                      site · Sep 29
+    The top 10 of 120 conversations, 51% of spend. Worked: time the agent spent on it, pauses over 15m left out.
+    5h share at $0.410 per 1%, learned from 27 windows of your plan meter.
+```
+
+A conversation's cost includes its subagents. Worked is the time from each
+prompt to the agent's last reply, with any pause over 15 minutes left out (a
+question left open, a break), and a prompt queued while another ran counted
+once. The share of the 5-hour window is the dollars at what 1% of your window
+costs; past 100%, the conversation ran over more than one window. `--top N`
+lists more, and `--json` gives every conversation with its `windowPercent`.
+
+Then it answers the questions a re-reading figure raises: are the costs in a
+few long sessions or many medium ones, and at what size does re-reading take
+over? All of it is measured, nothing is estimated:
 
 - calls, prompts and peak context per session (median and the top 1 in 10)
 - the cache hit rate
@@ -657,7 +704,7 @@ Define the bar in `optimaizr.config.json`:
       { "type": "max-chars", "value": 2000 }
     ],
     "judge": {
-      "model": "claude-opus-5",
+      "model": "claude-opus-5-5",
       "criteria": "Which response is more accurate and complete?",
       "minWinRate": 0.45
     }
@@ -726,6 +773,96 @@ habit: `/compact keep the API decisions`.
 
 ---
 
+## Did it work?
+
+`optimaizr apply` on its own lists both kinds of change: the ones optimAIzr
+makes for you, on or off, and the ones only you can make, with what each is
+worth:
+
+```
+  Changes optimAIzr makes for you
+    context-compaction      on   Claude Code and Codex at 200K, since Oct 7
+    statusline              off  optimaizr apply statusline
+    Undo any of them: optimaizr undo <rule>
+
+  Changes you make yourself
+    cold-resume             Cold cache returns        $91.43/mo
+    model-default           Smaller default model     $71.13/mo
+    oversized-input         Oversized context          $8.22/mo
+    The steps for one: optimaizr apply <rule>. Made it? optimaizr apply <rule> --done
+```
+
+For a Claude Code or Codex finding, `optimaizr apply <rule>` prints the steps:
+the change is in how the agent is used, so there is nothing to gate or write.
+Once you have made it, tell optimAIzr when:
+
+```bash
+optimaizr apply cold-resume --done
+optimaizr apply context-compaction --done --at 300K --agent claude   # set by hand
+optimaizr undo cold-resume                                           # stopped doing it
+```
+
+`--done` takes any rule there is, even one with nothing found in this window,
+and keeps the agent and project the finding covered. Findings from your app's
+SDK traffic still need a passing `verify` (or `--accept-risk`) first, and get
+their change as `optimaizr-change.md`.
+
+Every change, made by optimAIzr or recorded by you, goes into
+`~/.optimaizr/changes.jsonl`, one line each, never rewritten: an undo is a line
+of its own. Compaction settings and model switches from before 0.11 are read
+from where they were kept.
+
+`optimaizr results` splits your usage at each change and puts the days after it
+against the days before: 14, or as many as the change has been in, up to 30.
+
+```
+  Compact earlier: Claude Code at 200K
+  applied Oct 7, 5 days ago
+
+  Working: 28% less per prompt than the 14 days before. It comes with a
+  cost: compactions a day and waiting for summaries a day went up.
+  Early reading, 5 days in: one heavy day can still swing it.
+
+                                     before     after
+    cost per prompt                   $1.06    $0.762   -28%
+    cost per call                    $0.142    $0.071   -50%
+    calls per prompt                    7.5        11   +44%
+    tool errors per prompt             0.21      0.35   +66%
+    calls past 200K                     60%        0%   -60 pts
+    median context                     288K       99K   -66%
+    compactions a day                  0.23       5.9   25x  trade-off
+    landed mid-task                    100%       95%   -5 pts
+    waiting for summaries a day        0.4m      8.0m   19x  trade-off
+
+  Since the change: 29 conversations, 233 prompts, 41 compactions, fired
+  at 168K on the median, 0 calls past 200K.
+
+  Worth knowing
+  · Against just the 5 days before the change it is 10% less instead
+    of 28% less, so part of the difference may have been under way
+    already.
+```
+
+The verdict is judged on cost per prompt (per call where there are no
+prompts, as with SDK traffic), counted only for the agent and project the
+change covers. A verdict needs 3 active days and 100 prompts after the change
+(300 calls for SDK traffic); until then it says how far along it is and when
+to look again. A move of under 10% either way is no clear effect. The other rows
+are there so a saving that costs you something shows it: more calls, more tool
+errors, more time waiting on summaries. Codex changes get the same rows, from
+Codex's own compactions, except the wait: Codex doesn't record how long a
+summary takes.
+
+What it can't tell apart, it names: a baseline shorter than 14 days, a
+different mix of projects before and after, another change in the same days,
+or a difference that was already under way in the days just before. `results
+<rule>` shows one change; `--json` gives the whole report.
+
+`optimaizr metrics` counts realised savings only from these readings: what
+each measured change saved since it went in, at the measured rate.
+
+---
+
 ## Watching live
 
 `optimaizr live` follows Claude Code, Codex and your wrapped apps as they run.
@@ -746,6 +883,23 @@ that is 50 cents or more, and a call that did come back to an expired cache is
 shown with what it paid against a warm read. With `--json` these arrive as
 `{"cache": {"kind": "expiring" | "cold", ...}}`.
 
+When a Claude Code turn ends, it says how long the agent worked, what the turn
+cost and its own share of your 5-hour window, then the conversation so far:
+
+```
+  ✓  14:32:08  2m 10s · $0.620 · ~1.5% of 5h  Fix the login bug
+        this conversation $7.80 · ~19% of 5h · 41m 00s
+```
+
+The share is the turn's dollars over what 1% of your window costs, not the
+meter before and after: with three or four sessions open, all of them move it.
+What 1% costs is learned from the meter's history (Claude Desktop keeps one,
+and the status line logs a reading each time the meter moves) and what Claude
+Code spent while it moved, once three windows have each moved 5 points or
+more. Until then it is your plan's estimated limit over 100, and the line says
+which it used. This works for conversations in the VS Code extension too.
+`--no-turns` hides it, and with `--json` each turn arrives as `{"turn": ...}`.
+
 ### Under Claude Code's prompt
 
 ```
@@ -765,7 +919,9 @@ and after each message:
 
 It reads the end of the session's transcript for the last call's time and
 cache writes, and Claude Code's own 5-hour meter from the input it is given
-(the weekly one too, from 75%). Nothing is written. The command uses the node
+(the weekly one too, from 75%). The one thing it writes: when the 5-hour
+meter moves, the time and the new percent go to `~/.optimaizr/meter.jsonl`, to
+learn what 1% of the window costs. The command uses the node
 and script it was applied with, by full path, so a different `node` first on
 Claude Code's PATH can't break it. A status line you already have is never
 replaced: `statusline on` says so and changes nothing. `apply statusline` and
@@ -835,9 +991,10 @@ change is not a card: Claude Sonnet 5's scheduled rise to $3/$15 on
 call from that date by exactly 1.5x. There is a regression test pinning the rate
 across that boundary.
 
-Cache reads bill at 10% of the input rate, 5-minute writes at 125%, 1-hour
-writes at 200%, and batch traffic at 50%, all per-provider policy, all
-overridable per model.
+On Anthropic models cache reads bill at 10% of the input rate by default,
+5-minute writes at 125%, 1-hour writes at 200%, and batch traffic at 50%. That
+is per-provider policy, and a model can set its own: Opus 5.5 reads at 5%
+($0.20/M against $4/M input) and Fable 5.1 at 2.5%.
 
 **Some things aren't billed per token at all.** Server-side web search bills
 $10 per 1,000 searches regardless of tokens, so a report that sums only
@@ -941,6 +1098,7 @@ recommend   optimaizr recommend  what can I change?
 simulate    optimaizr simulate   what would that cost?
 verify      optimaizr verify     would the output still be good?
 optimise    optimaizr apply      the exact change, gated on a passing verify
+measure     optimaizr results    did it work?
 ```
 
 `simulate` and `verify` are deliberately different things. Simulation is

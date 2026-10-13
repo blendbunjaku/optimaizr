@@ -7,6 +7,7 @@ import { costOf, providerOf } from "../pricing.js";
 import { userPath } from "./claudecode.js";
 import type {
   CallEvent,
+  CompactionRecord,
   Dataset,
   RateLimitSnapshot,
   RateLimitWindow,
@@ -129,6 +130,12 @@ export interface CodexState {
   turns: number;
   /** Compactions so far: what was read before one is gone from context. */
   epoch: number;
+  /** Each compaction, with the context it replaced. */
+  compactions: CompactionRecord[];
+  /** The context the latest call read, input and cached together. */
+  lastContext: number;
+  /** The latest response item was a tool call or its output: work under way. */
+  toolLast: boolean;
   /** The latest limit meter, including one from a refresh that billed nothing. */
   limits?: RateLimitSnapshot;
 }
@@ -145,6 +152,9 @@ export function createCodexState(file: string): CodexState {
     pending: new Map(),
     turns: 0,
     epoch: 0,
+    compactions: [],
+    lastContext: 0,
+    toolLast: false,
   };
 }
 
@@ -185,6 +195,8 @@ export function consumeCodexLine(state: CodexState, line: string): CallEvent | n
 
   if (row.type === "response_item") {
     const kind = p.type;
+    if (typeof kind === "string" && /_call(_output)?$/.test(kind)) state.toolLast = true;
+    else if (kind === "message") state.toolLast = false;
     if (kind === "function_call" || kind === "custom_tool_call") {
       const id = typeof p.call_id === "string" ? p.call_id : `t${state.pending.size}`;
       const name = typeof p.name === "string" ? p.name : "unknown";
@@ -202,6 +214,19 @@ export function consumeCodexLine(state: CodexState, line: string): CallEvent | n
 
   if (row.type === "event_msg" && p.type === "context_compacted") {
     state.epoch++;
+    // Codex doesn't say how big the context was or how long the summary took,
+    // so the size is the last call's and the time is left out.
+    if (state.lastContext > 0) {
+      state.compactions.push({
+        source: "codex",
+        ts: row.timestamp ?? new Date().toISOString(),
+        sessionId: state.sessionId,
+        project: state.cwd,
+        trigger: "unknown",
+        preTokens: state.lastContext,
+        midTask: state.toolLast,
+      });
+    }
     return null;
   }
 
@@ -229,6 +254,7 @@ export function consumeCodexLine(state: CodexState, line: string): CallEvent | n
   if (total > 0 && total <= state.lastTotal) return null;
   if (num(last.total_tokens) === 0) return null;
   state.lastTotal = total;
+  state.lastContext = num(last.input_tokens);
 
   const ts = row.timestamp ?? new Date().toISOString();
   const usage = usageShape(last);
@@ -293,7 +319,10 @@ export function rateLimitsOf(raw: unknown, at?: string): RateLimitSnapshot | und
   return { planType: typeof r.plan_type === "string" ? r.plan_type : null, windows };
 }
 
-async function readRollout(file: string, warnings: string[]): Promise<CallEvent[]> {
+async function readRollout(
+  file: string,
+  warnings: string[],
+): Promise<{ events: CallEvent[]; compactions: CompactionRecord[] }> {
   const events: CallEvent[] = [];
   const state = createCodexState(file);
   let bad = 0;
@@ -316,7 +345,7 @@ async function readRollout(file: string, warnings: string[]): Promise<CallEvent[
   }
 
   if (bad) warnings.push(`${path.basename(file)}: skipped ${bad} unparseable line(s)`);
-  return events;
+  return { events, compactions: state.compactions };
 }
 
 export async function ingestCodex(opts: CodexIngestOptions = {}): Promise<Dataset> {
@@ -335,9 +364,13 @@ export async function ingestCodex(opts: CodexIngestOptions = {}): Promise<Datase
   const files = listRollouts(root);
   const cutoff = opts.days ? Date.now() - opts.days * 86_400_000 : null;
   const events: CallEvent[] = [];
+  const compactions: CompactionRecord[] = [];
+  const kept = (e: { ts: string; project: string }) =>
+    !(cutoff && new Date(e.ts).getTime() < cutoff) &&
+    !(opts.project && !e.project.toLowerCase().includes(opts.project.toLowerCase()));
 
   for (const file of files) {
-    let parsed: CallEvent[];
+    let parsed: Awaited<ReturnType<typeof readRollout>>;
     try {
       parsed = await readRollout(file, warnings);
     } catch (err) {
@@ -345,19 +378,17 @@ export async function ingestCodex(opts: CodexIngestOptions = {}): Promise<Datase
       warnings.push(`${path.basename(file)}: ${err instanceof Error ? err.message : String(err)}`);
       continue;
     }
-    for (const e of parsed) {
-      if (cutoff && new Date(e.ts).getTime() < cutoff) continue;
-      if (opts.project && !e.project.toLowerCase().includes(opts.project.toLowerCase())) continue;
-      events.push(e);
-    }
+    events.push(...parsed.events.filter(kept));
+    compactions.push(...parsed.compactions.filter(kept));
   }
 
   events.sort((a, b) => a.ts.localeCompare(b.ts));
+  compactions.sort((a, b) => a.ts.localeCompare(b.ts));
 
   const from = events[0]?.ts ?? "";
   const to = events[events.length - 1]?.ts ?? "";
   const days =
     from && to ? Math.max(1, (new Date(to).getTime() - new Date(from).getTime()) / 86_400_000) : 0;
 
-  return { events, window: { from, to, days }, sources: [root], warnings };
+  return { events, window: { from, to, days }, sources: [root], warnings, compactions };
 }

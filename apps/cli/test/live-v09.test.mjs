@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
@@ -114,7 +115,7 @@ test("Codex: an existing limit is replaced, and undo puts the old one back", () 
   assert.equal(fs.readFileSync(p.codexConfig, "utf8"), "model_auto_compact_token_limit = 350000\n");
 });
 
-const CLI = path.join(new URL("..", import.meta.url).pathname, "dist/cli.js");
+const CLI = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
 const skip = fs.existsSync(CLI) ? false : "dist/cli.js is not built";
 
 test("optimaizr apply and undo context-compaction", { skip }, async () => {

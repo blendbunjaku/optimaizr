@@ -4,6 +4,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import {
   coldResumes,
@@ -292,7 +293,7 @@ test("the latest conversation is the transcript written to last", () => {
  * The commands, run as Claude Code and a person would
  * ------------------------------------------------------------------ */
 
-const CLI = path.join(new URL("..", import.meta.url).pathname, "dist/cli.js");
+const CLI = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
 const skip = fs.existsSync(CLI) ? false : "dist/cli.js is not built";
 
 /** Run the built CLI in an empty home, with `stdin` piped in. */

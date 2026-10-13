@@ -422,7 +422,7 @@ function downgradeTargetFor(modelId: string): ModelPrice | null {
     let best: ModelPrice | null = null;
     let sibling: ModelPrice | null = null;
     for (const m of allModels()) {
-      if (m.provider !== from.provider || m.tier !== tier) continue;
+      if (m.provider !== from.provider || m.tier !== tier || m.switchTarget === false) continue;
       const rate = blendedRate(m);
       if (rate >= ceiling) continue;
       // The model's own smaller variant (gpt-5.4 to gpt-5.4-mini) beats a

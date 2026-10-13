@@ -14,6 +14,7 @@ import {
   createCodexLimitTracker,
   createSessionTracker,
   dim,
+  endsTurn,
   green,
   LIVE_DEFAULTS,
   type LiveRecommendation,
@@ -30,9 +31,12 @@ import {
   renderContextNotice,
   renderLiveRecommendation,
   renderSessionCrossing,
+  renderTurnDone,
   resetTime,
+  turnCalls,
   usd,
   windowLabel,
+  workMs,
   wrap as wrapText,
   yellow,
 } from "@optimaizr/core";
@@ -53,8 +57,12 @@ import {
   latestClaudeWindows,
   ledgerPath,
   type ModelOverride,
+  openChanges,
+  overrideEntry,
   overridesPath,
   readOverrides,
+  recordChange,
+  recordUndo,
   removeOverrides,
   sdkOverrideRewriter,
   statuslineApplied,
@@ -67,6 +75,7 @@ import { budgetOf, planNote, resolvePlan } from "../config.js";
 import { load, readLimitHits, summaryOptions } from "../data.js";
 import { createLivePrompt } from "../live-prompt.js";
 import { createStatusLine, emptyStatus, recordCall, renderRunSummary } from "../live-status.js";
+import { shareRate } from "../share.js";
 import { statuslineOff } from "./statusline.js";
 
 /**
@@ -247,10 +256,11 @@ export async function cmdLive(args: Args): Promise<void> {
   const planChoice = resolvePlan(args);
   const plan = planChoice.plan;
   const dayOpts = summaryOptions(args);
-  const seed =
+  const seedData =
     limitUsd !== null || plan !== null || watchesAgents
-      ? (await load({ ...args, flags: { ...args.flags, days: "46" } })).events
-      : [];
+      ? await load({ ...args, flags: { ...args.flags, days: "46" } })
+      : null;
+  const seed = seedData?.events ?? [];
   const counted = new Set(seed.map((e) => e.id));
 
   // Seed the budget with what the month already used, so a run starting at 83%
@@ -296,6 +306,51 @@ export async function cmdLive(args: Args): Promise<void> {
       .at(-1);
     codexTracker = createCodexLimitTracker({ seed: latest?.rateLimits ?? null });
   }
+
+  // A line after each finished Claude Code turn: how long it worked, what it
+  // cost, its own share of the 5h window, and the conversation so far.
+  const showTurns = watchesAgents && !args.flags["no-turns"];
+  const rate = showTurns ? shareRate(seed, { limitUsd: planNow?.limit?.usd }) : null;
+  const titles = new Map(Object.entries(seedData?.titles ?? {}));
+  const convos = new Map<string, CallEvent[]>();
+  const onTurn = (event: CallEvent): void => {
+    if (!showTurns || event.source !== "claude-code") return;
+    let list = convos.get(event.sessionId);
+    if (!list) {
+      list = seed.filter((e) => e.sessionId === event.sessionId);
+      convos.set(event.sessionId, list);
+    }
+    list.push(event);
+    if (!endsTurn(event)) return;
+    const turn = turnCalls(list, event);
+    const costUsd = turn.reduce((s, e) => s + e.cost.total, 0);
+    if (costUsd < 0.005) return;
+    const done = {
+      event,
+      title: titles.get(event.sessionId),
+      workMs: workMs(turn),
+      costUsd,
+      conversation: { costUsd: list.reduce((s, e) => s + e.cost.total, 0), workMs: workMs(list) },
+      usdPerPercent: rate?.usdPerPercent ?? null,
+    };
+    if (json) {
+      const of5h = (usd: number) => (rate ? usd / rate.usdPerPercent : null);
+      console.log(
+        JSON.stringify({
+          turn: {
+            sessionId: event.sessionId,
+            title: done.title ?? null,
+            workMs: done.workMs,
+            costUsd,
+            windowPercent: of5h(costUsd),
+            conversation: { ...done.conversation, windowPercent: of5h(done.conversation.costUsd) },
+          },
+        }),
+      );
+    } else {
+      console.log(`\n${renderTurnDone(done)}`);
+    }
+  };
 
   // A conversation that jumps, or grows past the compaction line, is said once;
   // crossing the line also offers to compact earlier from now on, once per agent.
@@ -407,6 +462,7 @@ export async function cmdLive(args: Args): Promise<void> {
     if (counted.has(event.id)) return;
     counted.add(event.id);
     recordCall(status, event);
+    onTurn(event);
     onContext(event);
     onCache(event);
     statusLine.update();
@@ -487,6 +543,17 @@ export async function cmdLive(args: Args): Promise<void> {
     }
     if (source === "all" || source === "sdk") watching.push(ledgerPath());
     for (const w of watching) console.log(`  ${dim(`watching ${w}`)}`);
+    if (showTurns) {
+      const basis =
+        rate?.basis === "meter"
+          ? `, share of 5h at ${usd(rate.usdPerPercent)} per 1% (learned from ${rate.windows} windows)`
+          : rate
+            ? `, share of 5h at ${usd(rate.usdPerPercent)} per 1% (your plan's estimated limit)`
+            : "";
+      console.log(
+        `  ${dim(`after each Claude Code turn: time and cost${basis} · --no-turns hides it`)}`,
+      );
+    }
     if (watchesAgents && auto) {
       console.log(
         `  ${dim("auto: confident model and effort switches apply to Claude Code sessions running the mod, no question; p or /optimaizr off undoes")}`,
@@ -528,7 +595,11 @@ export async function cmdLive(args: Args): Promise<void> {
   }
   if (watchesAgents) {
     tails.push(
-      tailTranscripts(onEvent, { keepAlive: true, ...(backfill > 0 ? { backfill } : {}) }),
+      tailTranscripts(onEvent, {
+        keepAlive: true,
+        ...(backfill > 0 ? { backfill } : {}),
+        onTitle: (id, title) => titles.set(id, title),
+      }),
     );
     tails.push(tailCodex(onEvent, { keepAlive: true, ...(backfill > 0 ? { backfill } : {}) }));
   }
@@ -571,6 +642,20 @@ export function describeOverride(o: ModelOverride): string {
 }
 
 /**
+ * A change made by hand is put back by hand; optimAIzr only notes when, so
+ * `results` stops counting it. False when there was none to note.
+ */
+function recordByHandUndo(rule: string): boolean {
+  if (!openChanges(rule).some((c) => c.how === "by-hand")) return false;
+  recordChange({ kind: "undo", rule, at: new Date().toISOString() });
+  console.log(
+    `  ${green("Recorded")} ${dim(`${rule} as undone today, so results stop counting it here.`)}`,
+  );
+  console.log(`  ${dim("Put the change itself back the way you made it.")}`);
+  return true;
+}
+
+/**
  * `optimaizr undo <rule>`: take back a model override accepted in `live`.
  * Wrapped apps and the mod re-read overrides before every request, so it
  * applies at once.
@@ -582,7 +667,7 @@ export function cmdUndo(args: Args): void {
 
   if (rule === "context-compaction") {
     const results = undoCompaction();
-    if (results.length === 0)
+    if (results.length === 0 && !recordByHandUndo(rule))
       console.log(`  ${dim("optimAIzr has not changed when anything compacts.")}`);
     for (const r of results) {
       console.log(`  ${r.ok ? green("Reverted") : red("Could not revert")} ${r.detail}`);
@@ -621,10 +706,13 @@ export function cmdUndo(args: Args): void {
   }
 
   const removed = removeOverrides(rule);
+  if (removed.length > 0) recordUndo(rule, removed.map(overrideEntry));
   if (removed.length === 0) {
-    console.log(`  ${dim(`No live override from ${rule} is active.`)}`);
-    // The Claude Code change lives in the user's own settings file.
-    console.log(`  ${dim("A Claude Code change is undone in ~/.claude/settings.json.")}`);
+    if (!recordByHandUndo(rule)) {
+      console.log(`  ${dim(`No live override from ${rule} is active.`)}`);
+      // The Claude Code change lives in the user's own settings file.
+      console.log(`  ${dim("A Claude Code change is undone in ~/.claude/settings.json.")}`);
+    }
   } else {
     for (const o of removed) console.log(`  ${green("Reverted")} ${describeOverride(o)}`);
     const who = [

@@ -13,12 +13,15 @@ import type { Summary, TopCall } from "../analyze/summary.js";
 import type { DrillNode, DrillTree } from "../analyze/drilldown.js";
 import type { Profile } from "../analyze/profile.js";
 import type { SessionStats } from "../analyze/sessions.js";
+import { type ConversationRow, windowShareLabel, workLabel } from "../analyze/conversations.js";
 import type { WriteCause } from "../analyze/writes.js";
 import type { BudgetCrossing, BudgetStatus } from "../analyze/budget.js";
 import type { PlanView, SessionCrossing } from "../analyze/plan.js";
 import type { CodexLimitCrossing, CodexPlanView } from "../analyze/codex-plan.js";
 import type { CacheState } from "../analyze/cache-watch.js";
 import type { ColdResume } from "../analyze/cold.js";
+import { compactPointOf } from "../analyze/results.js";
+import type { AppliedChange, ChangeResult, ResultRow, ResultsReport } from "../analyze/results.js";
 
 /** Terminal rendering. No dependencies; colour is disabled when not a TTY or NO_COLOR is set. */
 
@@ -607,6 +610,11 @@ export function ruleLabel(rule: string): string {
   return RULE_LABEL[rule] ?? rule;
 }
 
+/** A rule optimAIzr has a name for, whether or not this window found anything for it. */
+export function isKnownRule(rule: string): boolean {
+  return Object.prototype.hasOwnProperty.call(RULE_LABEL, rule);
+}
+
 /** A share of spend as a plain bar: no warning colours, it's a breakdown. */
 function shareBar(share: number, width = 20): string {
   const filled = Math.max(0, Math.min(width, Math.round(share * width)));
@@ -630,6 +638,14 @@ export function renderProfile(p: Profile): string {
   out.push("");
   out.push(rule());
   out.push("");
+
+  // What you changed comes first, so a second run starts where the first left off.
+  if (p.applied.length > 0) out.push(...renderApplied(p.applied), "");
+  if (p.firstLook) {
+    for (const line of wrap(p.firstLook.fact, 70)) out.push(`  ${bold(line)}`);
+    out.push(`  ${dim("Start here:")} ${blue(p.firstLook.command)}   ${dim(p.firstLook.why)}`);
+    out.push("");
+  }
 
   // The headline: what the plan is worth, else what the usage costs.
   const multiple = (m: number) => `${m >= 10 ? Math.round(m) : m.toFixed(1)}x`;
@@ -695,7 +711,7 @@ export function renderProfile(p: Profile): string {
     out.push(
       r.tier === "test"
         ? `    ${blue(`Up to ${pct(win.share)} less usage`)} ${dim(`(~${usd(r.savings.monthlyUsd)}/mo)${work}`)}`
-        : `    ${green(`${usd(r.savings.monthlyUsd)}/mo`)} ${dim(`, ${pct(win.share)} of your usage${work}`)}`,
+        : `    ${green(`${usd(r.savings.monthlyUsd)}/mo`)}${dim(`, ${pct(win.share)} of your usage${work}`)}`,
     );
     out.push("");
     out.push(...story(r, "    "));
@@ -790,6 +806,210 @@ export function renderProfile(p: Profile): string {
 }
 
 /* ------------------------------------------------------------------ *
+ * Results: what an applied change did
+ * ------------------------------------------------------------------ */
+
+const AGENT_NAME: Record<string, string> = {
+  "claude-code": "Claude Code",
+  codex: "Codex",
+  sdk: "your apps",
+  import: "imported usage",
+};
+
+/** "Compact earlier: Claude Code at 200K", "Model mismatch: Opus 5.5 -> Sonnet 5.5 in api". */
+export function changeName(c: AppliedChange): string {
+  const label = ruleLabel(c.rule);
+  if (c.rule === "context-compaction") {
+    const who = c.source ? `${AGENT_NAME[c.source] ?? c.source} at ` : "at ";
+    return `${label}: ${who}${Math.round(compactPointOf(c) / 1000)}K`;
+  }
+  if (c.to) {
+    const from = c.from ? `${modelLabel(c.from)} -> ` : "";
+    return `${label}: ${from}${modelLabel(c.to)}${c.project ? ` in ${projectName(c.project)}` : ""}`;
+  }
+  return c.project ? `${label} in ${projectName(c.project)}` : label;
+}
+
+function resultValue(unit: ResultRow["unit"], v: number | null): string {
+  if (v === null) return "-";
+  if (unit === "usd") return usd(v);
+  if (unit === "share") return pct(v);
+  if (unit === "tokens") return kTokens(v);
+  if (unit === "minutes") return `${v < 10 ? v.toFixed(1) : Math.round(v)}m`;
+  return v < 1 ? v.toFixed(2) : v < 10 ? v.toFixed(1) : String(Math.round(v));
+}
+
+function resultChange(r: ResultRow): string {
+  if (r.change === null) return "";
+  const size = Math.round(Math.abs(r.change) * 100);
+  if (size === 0) return dim("same");
+  // Past double, a multiple reads better than +2252%.
+  const times = 1 + r.change;
+  const text =
+    r.unit !== "share" && times >= 2
+      ? `${times < 10 ? times.toFixed(1) : Math.round(times)}x`
+      : `${r.change < 0 ? "-" : "+"}${size}${r.unit === "share" ? " pts" : "%"}`;
+  const good = r.better === "lower" ? r.change < 0 : r.change > 0;
+  if (size < 5) return dim(text);
+  if (good) return green(text);
+  return r.worse ? yellow(`${text}  trade-off`) : text;
+}
+
+/** "33% less per prompt", for the verdict and the profile's applied line. */
+function perUnit(r: ChangeResult): string {
+  const c = r.headline?.change ?? 0;
+  const size = Math.round(Math.abs(c) * 100);
+  return `${size}% ${c < 0 ? "less" : "more"} per ${r.measure}`;
+}
+
+function sinceWhen(iso: string, now: number): string {
+  const d = Math.floor((now - Date.parse(iso)) / 86_400_000);
+  return `${localDay(iso)}, ${d === 0 ? "today" : d === 1 ? "yesterday" : `${d} days ago`}`;
+}
+
+function verdictLine(r: ChangeResult): string {
+  const base = `the ${days(r.before.days)} before`;
+  switch (r.verdict) {
+    case "too-early": {
+      const p = r.progress;
+      const unit = r.measure === "prompt" ? "prompts" : "calls";
+      const around = p.readyAround
+        ? ` First reading around ${monthDay(p.readyAround)}.`
+        : " At this pace that is more than three weeks out.";
+      // Say what is still short, not "7 of 3 active days".
+      const dayText = `${p.activeDays} of ${p.needActiveDays} active days`;
+      const countText = `${p.count} of ${p.needCount} ${unit}`;
+      const sofar =
+        p.activeDays >= p.needActiveDays
+          ? `${countText} so far, over ${p.activeDays} active days`
+          : p.count >= p.needCount
+            ? `${dayText} so far, with ${p.count} ${unit}`
+            : `${dayText} and ${countText} so far`;
+      return `${yellow("Too early to tell:")} ${sofar}.${around}`;
+    }
+    case "no-baseline":
+      return `${yellow("Not enough from before the change to compare:")} ${r.before.activeDays} active days in ${base}.`;
+    case "working": {
+      const costs = r.rows.filter((x) => x.worse).map((x) => x.label);
+      const extra = r.withCost ? ` It comes with a cost: ${costs.join(" and ")} went up.` : "";
+      return `${green("Working:")} ${perUnit(r)} than ${base}.${extra}`;
+    }
+    case "worse":
+      return `${red("Not working:")} ${perUnit(r)} than ${base}.`;
+    default:
+      return `${bold("No clear effect yet:")} ${perUnit(r)} than ${base}, within the usual swing.`;
+  }
+}
+
+export function renderResults(report: ResultsReport, opts: { now?: number } = {}): string {
+  const now = opts.now ?? Date.parse(report.generatedAt);
+  const out: string[] = [""];
+  out.push(`  ${bold("optimAIzr")} ${dim("|")} results`);
+  out.push("");
+  if (report.results.length === 0) {
+    out.push("  No changes to measure yet.");
+    out.push(
+      `  ${dim("Apply one and optimAIzr compares the days after it with the days before.")}`,
+    );
+    out.push("");
+    out.push(`    ${blue("optimaizr apply")}   ${dim("what you can change")}`);
+    out.push(
+      `    ${blue("optimaizr apply <rule> --done")}   ${dim("record a change you made yourself")}`,
+    );
+    out.push("");
+    return out.join("\n");
+  }
+
+  let tables = false;
+  for (const r of report.results) {
+    out.push(rule());
+    out.push("");
+    const how = r.change.how === "by-hand" ? "made by hand" : "applied";
+    const undone = r.change.until ? `, undone ${localDay(r.change.until)}` : "";
+    out.push(`  ${bold(changeName(r.change))}`);
+    out.push(`  ${dim(`${how} ${sinceWhen(r.change.at, now)}${undone}`)}`);
+    out.push("");
+    for (const line of wrap(verdictLine(r), 70)) out.push(`  ${line}`);
+    if (r.early) {
+      const inDays = days(Math.max(1, Math.floor(r.after.days)));
+      out.push(`  ${dim(`Early reading, ${inDays} in: one heavy day can still swing it.`)}`);
+    }
+    out.push("");
+
+    if (r.verdict !== "too-early" && r.verdict !== "no-baseline") {
+      tables = true;
+      const width = Math.max(...r.rows.map((x) => x.label.length)) + 2;
+      out.push(`    ${pad("", width)}${dim(padLeft("before", 10))}${dim(padLeft("after", 10))}`);
+      for (const x of r.rows) {
+        out.push(
+          `    ${pad(x.label, width)}${padLeft(resultValue(x.unit, x.before), 10)}${padLeft(resultValue(x.unit, x.after), 10)}   ${resultChange(x)}`,
+        );
+      }
+      out.push("");
+    }
+
+    const since =
+      r.after.calls === 0
+        ? "No calls since the change yet."
+        : `Since the change: ${r.since.map((f) => f.text).join(", ")}.`;
+    for (const line of wrap(since, 70)) out.push(`  ${dim(line)}`);
+    out.push("");
+
+    if (r.caveats.length > 0) {
+      out.push(`  ${bold("Worth knowing")}`);
+      for (const c of r.caveats) {
+        wrap(c, 66).forEach((line, i) => out.push(`  ${i === 0 ? "· " : "  "}${dim(line)}`));
+      }
+      out.push("");
+    }
+
+    if (r.next.length > 0) {
+      const width = Math.max(...r.next.map((n) => n.command.length)) + 3;
+      for (const n of r.next) out.push(`    ${blue(pad(n.command, width))}${dim(n.why)}`);
+      out.push("");
+    }
+  }
+  out.push(rule());
+  if (tables) {
+    out.push(`  ${dim("Dollars are API-equivalent at list prices. On a plan, the percentage is")}`);
+    out.push(`  ${dim("what counts: it is about that share of your usage limits.")}`);
+  }
+  out.push("");
+  return out.join("\n");
+}
+
+/** How a change is going in a few words, for the profile. */
+function appliedState(r: ChangeResult): string {
+  switch (r.verdict) {
+    case "too-early":
+      return r.progress.readyAround
+        ? `first reading around ${monthDay(r.progress.readyAround)}`
+        : "too early to tell";
+    case "no-baseline":
+      return "not enough from before it to compare";
+    case "working":
+      return green(`${perUnit(r)} so far`);
+    case "worse":
+      return red(`${perUnit(r)} so far`);
+    default:
+      return `no clear effect yet (${perUnit(r)})`;
+  }
+}
+
+/** The changes still in place, one line each, two when it would run long. */
+function renderApplied(results: readonly ChangeResult[]): string[] {
+  const out = [`  ${bold("Applied")}`];
+  for (const r of results) {
+    const name = `${changeName(r.change)} ${dim(`since ${localDay(r.change.at)}`)}`;
+    const line = `    ${name} ${dim("·")} ${appliedState(r)}`;
+    if (visible(line) <= 84) out.push(line);
+    else out.push(`    ${name}`, `      ${appliedState(r)}`);
+  }
+  out.push(`    ${dim("Before against after, for each:")} ${blue("optimaizr results")}`);
+  return out;
+}
+
+/* ------------------------------------------------------------------ *
  * Sessions
  * ------------------------------------------------------------------ */
 
@@ -813,7 +1033,49 @@ function bandLabel(from: number, to: number | null): string {
   return to === null ? `${start}+` : `${start}-${kTokens(to)}`;
 }
 
-export function renderSessions(c: SessionStats, s: Summary): string {
+/** What `renderSessions` lists above the session facts: the costliest conversations. */
+export interface ConversationList {
+  rows: readonly ConversationRow[];
+  /** Turns dollars into a share of the 5h window; null leaves the share out. */
+  rate: { usdPerPercent: number; basis: "meter" | "plan"; windows?: number } | null;
+  top?: number;
+}
+
+function renderConversations(list: ConversationList, totalUsd: number): string[] {
+  const top = list.rows.slice(0, list.top ?? 10);
+  if (top.length === 0) return [];
+  const rate = list.rate;
+  const out: string[] = [];
+  out.push(`  ${bold("Costliest conversations")} ${dim("(subagents included)")}`);
+  out.push(
+    `    ${dim(`${padLeft("cost", 9)}${rate ? padLeft("of 5h", 8) : ""}${padLeft("worked", 9)}   conversation`)}`,
+  );
+  for (const r of top) {
+    const name = r.title ? clip(r.title, 40) : dim(`${r.sessionId.slice(0, 8)} (no title)`);
+    const where = `${projectName(r.project)} · ${monthDay(r.lastTs.slice(0, 10))}`;
+    out.push(
+      `    ${padLeft(usd(r.costUsd), 9)}${rate ? padLeft(windowShareLabel(r.costUsd, rate.usdPerPercent), 8) : ""}${padLeft(workLabel(r.workMs), 9)}   ${pad(name, 42)}${dim(where)}`,
+    );
+  }
+  const share = totalUsd > 0 ? top.reduce((s, r) => s + r.costUsd, 0) / totalUsd : 0;
+  const n = list.rows.length;
+  out.push(
+    `    ${dim(`${top.length === n ? `All ${n}` : `The top ${top.length} of ${n}`} conversation${n === 1 ? "" : "s"}, ${pct(share)} of spend. Worked: time the agent spent on it, pauses over 15m left out.`)}`,
+  );
+  if (rate?.basis === "meter") {
+    out.push(
+      `    ${dim(`5h share at ${usd(rate.usdPerPercent)} per 1%, learned from ${rate.windows} windows of your plan meter.`)}`,
+    );
+  } else if (rate) {
+    out.push(
+      `    ${dim(`5h share at ${usd(rate.usdPerPercent)} per 1%, from your plan's estimated limit.`)}`,
+    );
+  }
+  out.push("");
+  return out;
+}
+
+export function renderSessions(c: SessionStats, s: Summary, convos?: ConversationList): string {
   const out: string[] = [];
   out.push("");
   out.push(`  ${bold("optimAIzr")} ${dim("|")} sessions`);
@@ -823,6 +1085,7 @@ export function renderSessions(c: SessionStats, s: Summary): string {
   out.push("");
   out.push(rule());
   out.push("");
+  if (convos) out.push(...renderConversations(convos, c.costUsd));
 
   const row = (label: string, median: string, p90: string) =>
     out.push(`    ${pad(label, 24)}${pad(`median ${median}`, 16)}${dim(`1 in 10 over ${p90}`)}`);
@@ -1024,7 +1287,8 @@ export function localTime(iso: string): string {
   return new Date(iso).toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" });
 }
 
-function localDay(iso: string): string {
+/** The day on this machine's calendar, e.g. `Oct 7`. */
+export function localDay(iso: string): string {
   const d = new Date(iso);
   return `${MONTHS[d.getMonth()]} ${d.getDate()}`;
 }
@@ -1299,6 +1563,39 @@ export function minutesLabel(ms: number): string {
   const m = Math.max(0, Math.round(ms / 60_000));
   if (m < 60) return `${m}m`;
   return `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, "0")}m`;
+}
+
+/** `live`: a Claude Code turn finished. */
+export interface TurnDone {
+  /** The turn's last call. */
+  event: UsageEvent;
+  title?: string;
+  workMs: number;
+  costUsd: number;
+  conversation: { costUsd: number; workMs: number };
+  usdPerPercent: number | null;
+}
+
+/**
+ * How long the turn took, what it cost, and its own share of the 5h window,
+ * then the same for the whole conversation so far. Several conversations can
+ * run at once, so each turn says which one it was.
+ */
+export function renderTurnDone(t: TurnDone): string {
+  const e = t.event;
+  const share = (n: number) =>
+    t.usdPerPercent ? [`${windowShareLabel(n, t.usdPerPercent)} of 5h`] : [];
+  const name = t.title ? clip(t.title, 48) : `${callSession(e)} ${projectName(e.project)}`;
+  const turn = [workLabel(t.workMs), usd(t.costUsd), ...share(t.costUsd)].join(dim(" · "));
+  const convo = [
+    usd(t.conversation.costUsd),
+    ...share(t.conversation.costUsd),
+    workLabel(t.conversation.workMs),
+  ].join(dim(" · "));
+  return [
+    `  ${green("✓")}  ${dim(new Date(e.endTs ?? e.ts).toLocaleTimeString())}  ${bold(turn)}  ${dim(name)}`,
+    `        ${dim("this conversation")} ${convo}`,
+  ].join("\n");
 }
 
 /** `live`: a long conversation's cache is about to expire. */

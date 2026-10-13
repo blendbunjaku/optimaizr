@@ -7,17 +7,23 @@ import {
   callActivity,
   type CallEvent,
   callSession,
+  changeName,
   COMPACT_AT,
+  type Dataset,
   dim,
   findWaste,
   green,
+  isKnownRule,
+  localDay,
   modelLabel,
+  monthDay,
   priceFor,
   projectName,
   projectionDays,
   readVerification,
   red,
   resolveVerification,
+  ruleLabel,
   setStatus,
   simulate,
   tokens as fmtTokens,
@@ -27,33 +33,55 @@ import {
   wrap as wrapText,
   yellow,
 } from "@optimaizr/core";
-import { applyCompaction, type CompactAgent, logVerification } from "@optimaizr/local";
+import {
+  appliedChanges,
+  applyCompaction,
+  type ChangeEntry,
+  type CompactAgent,
+  compactionApplied,
+  compactionStatus,
+  logVerification,
+  openChanges,
+  readOverrides,
+  recordChange,
+  statuslineApplied,
+} from "@optimaizr/local";
 import type { Args } from "../args.js";
 import { load } from "../data.js";
+import { describeOverride } from "./live.js";
 import { statuslineOn } from "./statusline.js";
 
 /**
- * `optimaizr apply`: turn a verified finding into a concrete change, written to
- * `optimaizr-change.md`. It never edits your code.
+ * `optimaizr apply`: make the change, or say how. Settings are written for
+ * you; a change to how your agent is used comes as steps; an app change is
+ * written to `optimaizr-change.md`. It never edits your code.
  */
 export async function cmdApply(args: Args): Promise<void> {
-  const ruleName = args.positional[0];
-  if (!ruleName) {
-    console.log(`  ${red("usage:")} optimaizr apply <rule> ${dim("[--accept-risk]")}`);
-    process.exitCode = 1;
-    return;
-  }
-
+  // `apply --done cold-resume` reads the rule as the flag's value.
+  const ruleName =
+    args.positional[0] ?? (typeof args.flags.done === "string" ? args.flags.done : undefined);
   if (ruleName === "statusline") return statuslineOn();
   const data = await load(args);
+  if (!ruleName) return listLevers(data);
+  if (args.flags.done) return recordDone(args, ruleName, data);
   // A setting, not a request rewrite: written to the agents' own config files,
   // with the previous value kept for `optimaizr undo context-compaction`.
   if (ruleName === "context-compaction") return applyCompactionLever(args, data.events);
   const finding = findWaste(data).find((f) => f.rule === ruleName);
   if (!finding) {
     console.log(`  ${red("No such finding:")} ${ruleName}`);
+    if (isKnownRule(ruleName)) {
+      console.log(
+        `  ${dim("Nothing for it in this window. Made the change already?")} ${blue(`optimaizr apply ${ruleName} --done`)}`,
+      );
+    }
     process.exitCode = 1;
     return;
+  }
+  // Claude Code and Codex habits have no request to replay, so no gate: the steps.
+  const hit = data.events.filter(finding.affects);
+  if (hit.length > 0 && hit.every((e) => e.source === "claude-code" || e.source === "codex")) {
+    return printSteps(finding);
   }
 
   // The gate, resolved by the same function `verify` uses so they can't disagree.
@@ -154,6 +182,179 @@ export async function cmdApply(args: Args): Promise<void> {
   console.log(
     `  ${dim("optimAIzr does not edit your code - review the change and apply it yourself.")}`,
   );
+  console.log(
+    `  ${dim("Once it is live:")} ${blue(`optimaizr apply ${ruleName} --done`)}${dim(", so optimaizr results can measure it.")}`,
+  );
+  console.log("");
+}
+
+/**
+ * A change only you can make in Claude Code or Codex: the steps, and how to
+ * tell optimAIzr once it is made.
+ */
+function printSteps(finding: ReturnType<typeof findWaste>[number]): void {
+  const done = openChanges(finding.rule).find((c) => c.how === "by-hand");
+  console.log("");
+  console.log(`  ${bold(finding.title)}`);
+  console.log(
+    `  ${green(`${usd(finding.savings.monthlyUsd)}/mo`)} ${dim("estimated,")} ${green(usd(finding.savings.annualUsd))}${dim("/yr")}`,
+  );
+  console.log("");
+  console.log(`  ${bold("What to do")}`);
+  for (const line of wrapText(finding.fix, 68)) console.log(`    ${line}`);
+  console.log("");
+  if (done) {
+    console.log(
+      `  ${dim(`You recorded this as done on ${localDay(done.at)}. How it is going:`)} ${blue("optimaizr results")}`,
+    );
+  } else {
+    console.log(
+      `  ${dim("optimAIzr can't make this one for you: it is in how the agent is used.")}`,
+    );
+    console.log(
+      `  ${dim("When it is done:")} ${blue(`optimaizr apply ${finding.rule} --done`)}${dim(", and optimaizr results measures it from then.")}`,
+    );
+  }
+  console.log("");
+}
+
+/** Who a finding's calls came from, when that is one agent or one project. */
+function scopeOf(data: Dataset, rule: string): Pick<ChangeEntry, "source" | "project"> {
+  const finding = findWaste(data).find((f) => f.rule === rule);
+  if (!finding) return {};
+  const hit = data.events.filter(finding.affects);
+  const sources = new Set(hit.map((e) => e.source));
+  const projects = new Set(hit.map((e) => e.project));
+  return {
+    ...(sources.size === 1 ? { source: [...sources][0]! } : {}),
+    ...(projects.size === 1 ? { project: [...projects][0]! } : {}),
+  };
+}
+
+/**
+ * `apply <rule> --done`: you made the change yourself, so it goes into the
+ * change history from now. It changes nothing, so there is no gate.
+ */
+function recordDone(args: Args, rule: string, data: Dataset): void {
+  console.log("");
+  if (!isKnownRule(rule)) {
+    console.log(`  ${red("No such rule:")} ${rule}`);
+    console.log(`  ${dim("See the ones there are:")} ${blue("optimaizr apply")}`);
+    console.log("");
+    process.exitCode = 1;
+    return;
+  }
+  let scope: Pick<ChangeEntry, "source" | "project" | "value"> = scopeOf(data, rule);
+  if (rule === "context-compaction") {
+    const tokens = args.flags.at === undefined ? COMPACT_AT : tokenCount(String(args.flags.at));
+    if (!(tokens >= COMPACT_MIN && tokens <= COMPACT_MAX)) {
+      console.log(`  ${red("--at takes a size from 100K to 1M,")} ${dim("like --at 400K")}`);
+      console.log("");
+      process.exitCode = 1;
+      return;
+    }
+    const agent = typeof args.flags.agent === "string" ? args.flags.agent.toLowerCase() : null;
+    const source = agent === "codex" ? "codex" : agent?.startsWith("claude") ? "claude-code" : null;
+    scope = { ...(source ? { source } : {}), value: String(tokens) };
+  }
+  const at = new Date().toISOString();
+  const entry: ChangeEntry = { kind: "record", rule, ...scope, at };
+  const change = { id: "", how: "by-hand" as const, ...entry };
+  const already = openChanges(rule).find(
+    (c) =>
+      (c.source ?? null) === (entry.source ?? null) &&
+      (c.project ?? null) === (entry.project ?? null) &&
+      (c.value ?? null) === (entry.value ?? null),
+  );
+  if (already) {
+    console.log(
+      `  ${dim("Already recorded:")} ${changeName(already)} ${dim(`since ${localDay(already.at)}.`)}`,
+    );
+    console.log(`  ${dim("How it is going:")} ${blue("optimaizr results")}`);
+    console.log("");
+    return;
+  }
+  recordChange(entry);
+  console.log(`  ${green("Recorded")} ${changeName(change)} ${dim("as made today.")}`);
+  printResultsHint(rule);
+}
+
+/**
+ * Bare `optimaizr apply`: what optimAIzr changes for you and whether it is on,
+ * then what you change yourself.
+ */
+function listLevers(data: Dataset): void {
+  const inPlace = appliedChanges().filter((c) => !c.until);
+  const doneOf = (rule: string) => inPlace.find((c) => c.rule === rule && c.how === "by-hand");
+  const row = (name: string, state: string) => console.log(`    ${name.padEnd(24)}${state}`);
+  const on = (what: string) => `${green("on ")}  ${what}`;
+  const off = (cmd: string) => `${dim("off")}  ${blue(cmd)}`;
+
+  console.log("");
+  console.log(`  ${bold("optimAIzr")} ${dim("|")} apply`);
+  console.log("");
+  console.log(`  ${bold("Changes optimAIzr makes for you")}`);
+  const set = compactionStatus();
+  const ours = compactionApplied();
+  // Agents on the same point since the same day share one line.
+  const points = new Map<string, string[]>();
+  for (const a of ["claude-code", "codex"] as const) {
+    if (!set[a]) continue;
+    const since = inPlace.find((c) => c.rule === "context-compaction" && c.source === a);
+    const k = `${Math.round((Number(set[a]) || COMPACT_AT) / 1000)}K`;
+    const when = since ? `, since ${localDay(since.at)}` : ours.includes(a) ? "" : ", set by hand";
+    const key = `at ${k}${when}`;
+    points.set(key, [...(points.get(key) ?? []), a === "claude-code" ? "Claude Code" : "Codex"]);
+  }
+  row(
+    "context-compaction",
+    points.size > 0
+      ? on([...points].map(([key, names]) => `${names.join(" and ")} ${key}`).join("; "))
+      : off("optimaizr apply context-compaction"),
+  );
+  row("statusline", statuslineApplied() ? on("in Claude Code") : off("optimaizr apply statusline"));
+  for (const o of readOverrides()) {
+    row(o.rule, on(`${describeOverride(o)}, since ${localDay(o.at)}`));
+  }
+  console.log(`    ${dim("Undo any of them:")} ${blue("optimaizr undo <rule>")}`);
+  console.log("");
+
+  const findings = findWaste(data)
+    .filter((f) => !f.advisory && f.rule !== "context-compaction" && isKnownRule(f.rule))
+    .sort((a, b) => b.savings.monthlyUsd - a.savings.monthlyUsd);
+  // Cents a month are noise here too; `recommend` lists everything.
+  const shown = findings.filter((f) => doneOf(f.rule) || f.savings.monthlyUsd >= 0.25);
+  // Recorded as done, though this window no longer finds anything for it.
+  const recorded = inPlace.filter(
+    (c) =>
+      c.how === "by-hand" &&
+      c.rule !== "context-compaction" &&
+      !findings.some((f) => f.rule === c.rule),
+  );
+  console.log(`  ${bold("Changes you make yourself")}`);
+  if (shown.length === 0 && recorded.length === 0) {
+    console.log(`    ${dim("Nothing worth changing in this window.")}`);
+  }
+  for (const f of shown) {
+    const done = doneOf(f.rule);
+    const saves = `${usd(f.savings.monthlyUsd)}/mo`.padStart(11);
+    row(
+      f.rule,
+      done
+        ? `${green("done")} ${dim(`since ${localDay(done.at)}`)}`
+        : `${ruleLabel(f.rule).padEnd(24)}${saves}`,
+    );
+  }
+  for (const c of recorded) row(c.rule, `${green("done")} ${dim(`since ${localDay(c.at)}`)}`);
+  if (findings.length > shown.length) {
+    const n = findings.length - shown.length;
+    console.log(`    ${dim(`+${n} smaller, under $0.25/mo each: optimaizr recommend`)}`);
+  }
+  console.log(
+    `    ${dim("The steps for one:")} ${blue("optimaizr apply <rule>")}${dim(". Made it?")} ${blue("optimaizr apply <rule> --done")}`,
+  );
+  console.log("");
+  console.log(`  ${dim("How each change is going:")} ${blue("optimaizr results")}`);
   console.log("");
 }
 
@@ -395,8 +596,14 @@ function applyCompactionLever(args: Args, events: CallEvent[]): void {
   for (const note of notes) console.log(`  ${dim(note)}`);
   console.log("");
   console.log(`  ${dim("A summary can drop details from early in a long conversation.")}`);
+  printResultsHint("context-compaction");
+}
+
+/** After any change: when there will be enough to judge it, and the command that does. */
+export function printResultsHint(rule: string, undo = true): void {
+  const first = new Date(Date.now() + 3 * 86_400_000).toISOString().slice(0, 10);
   console.log(
-    `  ${dim("Try it for a week, then compare with")} ${blue("optimaizr profile")}${dim(". Undo:")} ${blue("optimaizr undo context-compaction")}`,
+    `  ${dim(`Check how it's going from ${monthDay(first)}:`)} ${blue("optimaizr results")}${undo ? `${dim(". Undo:")} ${blue(`optimaizr undo ${rule}`)}` : ""}`,
   );
   console.log("");
 }

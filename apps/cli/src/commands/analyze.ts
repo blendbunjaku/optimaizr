@@ -6,11 +6,13 @@ import {
   bold,
   buildDrillTree,
   computeMetrics,
+  conversations,
   dim,
   drillTo,
   findWaste,
   green,
   likelyMonthly,
+  measureResults,
   recoverableAnnual,
   recoverableMonthly,
   red,
@@ -22,6 +24,7 @@ import {
   renderRecommendations,
   renderSessions,
   renderSummary,
+  resultsDays,
   rule,
   ruleErrorWarning,
   savingsOverlap,
@@ -31,8 +34,10 @@ import {
   toRecommendations,
   usd,
 } from "@optimaizr/core";
+import { appliedChanges } from "@optimaizr/local";
 import { Args, num } from "../args.js";
 import { emptyNotice, load, stripFns, summaryOptions } from "../data.js";
+import { planLimitUsd, shareRate } from "../share.js";
 
 export async function cmdScan(args: Args): Promise<void> {
   const data = await load(args);
@@ -289,11 +294,16 @@ export async function cmdSessions(args: Args): Promise<void> {
   if (data.events.length === 0) return emptyNotice();
 
   const c = sessionStats(data);
+  const rows = conversations(data);
+  const rate = shareRate(data.events, { limitUsd: planLimitUsd(args, data.events) });
   if (args.flags.json) {
-    console.log(JSON.stringify(c, null, 2));
+    const of5h = (usd: number) => (rate ? usd / rate.usdPerPercent : null);
+    const list = rows.map((r) => ({ ...r, windowPercent: of5h(r.costUsd) }));
+    console.log(JSON.stringify({ ...c, conversations: list, windowRate: rate }, null, 2));
     return;
   }
-  console.log(renderSessions(c, summarize(data, summaryOptions(args))));
+  const top = num(args.flags.top, 10);
+  console.log(renderSessions(c, summarize(data, summaryOptions(args)), { rows, rate, top }));
 }
 
 /** `optimaizr metrics`: how much was analysed and found, computed locally. */
@@ -303,7 +313,13 @@ export async function cmdMetrics(args: Args): Promise<void> {
 
   const findings = findWaste(data);
   const recs = toRecommendations(findings, data.events.length);
-  const m = computeMetrics(data, findings, recs);
+  const changes = appliedChanges();
+  const history =
+    changes.length > 0 && args.flags.days
+      ? await load({ ...args, flags: { ...args.flags, days: String(resultsDays(changes)) } })
+      : data;
+  const results = measureResults(history, changes).results;
+  const m = computeMetrics(data, findings, recs, { changes, results });
 
   if (args.flags.json) {
     console.log(JSON.stringify(m, null, 2));
@@ -333,12 +349,21 @@ export async function cmdMetrics(args: Args): Promise<void> {
   row("  simulated", String(m.recommendationsSimulated));
   row("  verified", String(m.recommendationsVerified));
   row("  applied", String(m.recommendationsAccepted));
+  row("changes in place", String(m.changesInPlace));
   console.log("");
-  row("simulated savings", usd(m.simulatedSavingsUsd));
-  row("realised savings", usd(m.realisedSavingsUsd));
+  row("simulated savings", `${usd(m.simulatedSavingsUsd)}/mo`);
+  if (m.changesMeasured === 0) {
+    row("realised savings", dim("nothing measured yet, see optimaizr results"));
+  } else {
+    const saved = m.realisedSavingsUsd;
+    const amount = saved >= 0 ? green(usd(saved)) : red(`${usd(-saved)} more`);
+    const n = m.changesMeasured;
+    row("realised savings", `${amount} ${dim(`measured over ${n} change${n === 1 ? "" : "s"}`)}`);
+  }
   console.log("");
   console.log(`  ${dim("Identified is not realised. The gap between the two is the number")}`);
-  console.log(`  ${dim("that actually matters, so both are always shown together.")}`);
+  console.log(`  ${dim("that actually matters, so both are always shown together. Realised")}`);
+  console.log(`  ${dim("is before against after for each change: optimaizr results")}`);
   console.log("");
   row("findings: measured", String(m.findingsByEvidence.measured));
   row("findings: inferred", String(m.findingsByEvidence.inferred));

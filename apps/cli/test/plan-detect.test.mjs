@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
@@ -306,7 +307,7 @@ test("a Codex reading from days ago carries its date", () => {
  * The built CLI
  * ------------------------------------------------------------------ */
 
-const CLI = path.join(new URL("..", import.meta.url).pathname, "dist/cli.js");
+const CLI = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
 const skip = fs.existsSync(CLI) ? false : "dist/cli.js is not built";
 
 /** A home with one Claude Code call and, optionally, a signed-in account. */

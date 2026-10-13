@@ -9,19 +9,21 @@ import {
   dim,
   green,
   localTime,
+  measureResults,
   parsePlan,
   planView,
   red,
   renderCardHtml,
   renderCardSvg,
   renderProfile,
+  resultsDays,
   ruleErrorWarning,
   sessionBlocks,
   summarize,
   usd,
   wrap as wrapText,
 } from "@optimaizr/core";
-import { latestClaudeWindows, optimaizrDir } from "@optimaizr/local";
+import { appliedChanges, latestClaudeWindows, optimaizrDir } from "@optimaizr/local";
 import type { Args } from "../args.js";
 import { budgetOf, planNote, resolvePlan } from "../config.js";
 import {
@@ -194,6 +196,13 @@ export async function cmdProfile(args: Args): Promise<void> {
   const { findings, errors } = analyze(data);
   const limitUsd = budgetOf(args);
   const plan = planOptions(args);
+  // Without --days the profile already holds every day the results need.
+  const changes = appliedChanges();
+  const history =
+    changes.length > 0 && args.flags.days
+      ? await load({ ...args, flags: { ...args.flags, days: String(resultsDays(changes)) } })
+      : data;
+  const results = measureResults(history, changes).results;
   const profile = buildProfile(
     data,
     summary,
@@ -206,6 +215,7 @@ export async function cmdProfile(args: Args): Promise<void> {
           events: await loadForBudget(args),
         },
     plan.options,
+    { changes, results },
   );
 
   if (args.flags.json) {

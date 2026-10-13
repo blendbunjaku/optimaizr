@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
@@ -10,6 +11,7 @@ import {
   analyze,
   buildProfile,
   ingestClaudeCode,
+  measureResults,
   recoverableMonthly,
   recoverableWindow,
   renderProfile,
@@ -198,10 +200,70 @@ test("the rendered profile answers usage, waste and what next", async () => {
 });
 
 /* ------------------------------------------------------------------ *
+ * Applied changes
+ * ------------------------------------------------------------------ */
+
+const change = (rule, extra = {}) => ({
+  id: `${rule}:all:2026-09-29T00:00:00.000Z`,
+  rule,
+  how: "by-hand",
+  at: "2026-09-29T00:00:00.000Z",
+  ...extra,
+});
+
+test("a change still in place drops out of the savings and the biggest win", async () => {
+  const { data, summary, findings, profile } = await profileOf(oversizedRecords());
+  const top = profile.opportunities[0].rule;
+  const changes = [change(top)];
+  const after = buildProfile(data, summary, findings, undefined, undefined, {
+    changes,
+    results: measureResults(data, changes).results,
+  });
+
+  assert.deepEqual(after.appliedRules, [top]);
+  assert.ok(!after.opportunities.some((r) => r.rule === top));
+  assert.notEqual(after.biggestWin?.recommendation.rule, top);
+  assert.equal(after.savingsMonthlyUsd, recoverableMonthly(findings.filter((f) => f.rule !== top)));
+  assert.equal(after.firstLook, null);
+
+  const text = renderProfile(after);
+  assert.match(text, /Applied/);
+  assert.match(text, /optimaizr results/);
+  assert.ok(text.indexOf("Applied") < text.indexOf("Savings found"));
+});
+
+test("an undone change, or one for another project, still leaves the finding", async () => {
+  const { data, summary, findings, profile } = await profileOf(oversizedRecords());
+  const top = profile.opportunities[0].rule;
+  for (const c of [
+    change(top, { until: "2026-09-30T00:00:00.000Z" }),
+    change(top, { project: "/Users/someone/elsewhere" }),
+  ]) {
+    const p = buildProfile(data, summary, findings, undefined, undefined, {
+      changes: [c],
+      results: [],
+    });
+    assert.deepEqual(p.appliedRules, []);
+    assert.equal(p.opportunities[0].rule, top);
+  }
+});
+
+test("before anything is applied, the profile opens with one fact and one command", async () => {
+  const { profile } = await profileOf(oversizedRecords());
+  assert.ok(profile.firstLook, "expected a first look");
+  assert.match(profile.firstLook.fact, /re-reading the conversation/);
+  assert.match(profile.firstLook.command, /^optimaizr /);
+
+  const text = renderProfile(profile);
+  assert.match(text, /Start here:/);
+  assert.doesNotMatch(text, /Applied/);
+});
+
+/* ------------------------------------------------------------------ *
  * The built CLI
  * ------------------------------------------------------------------ */
 
-const CLI = path.join(new URL("..", import.meta.url).pathname, "dist/cli.js");
+const CLI = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
 const HAS_CLI = fs.existsSync(CLI);
 const skip = HAS_CLI ? false : "dist/cli.js is not built";
 

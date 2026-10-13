@@ -66,6 +66,7 @@ export async function ingest(sources: AdapterSource[]): Promise<Dataset> {
   const warnings: string[] = [];
   const failures: string[] = [];
   const compactions: CompactionRecord[] = [];
+  const titles: Record<string, string> = {};
 
   for (const source of sources) {
     for (const adapter of adapters) {
@@ -83,6 +84,7 @@ export async function ingest(sources: AdapterSource[]): Promise<Dataset> {
       for (const s of result.sources) readSources.push(s);
       for (const w of result.warnings) warnings.push(w);
       for (const c of result.compactions ?? []) compactions.push(c);
+      Object.assign(titles, result.titles);
     }
   }
 
@@ -100,6 +102,7 @@ export async function ingest(sources: AdapterSource[]): Promise<Dataset> {
     warnings,
     failures,
     compactions,
+    titles,
   };
 }
 

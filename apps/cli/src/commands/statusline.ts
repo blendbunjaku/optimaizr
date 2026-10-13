@@ -10,6 +10,7 @@ import {
 import {
   applyStatusline,
   latestClaudeTranscript,
+  recordMeter,
   statuslineApplied,
   statuslineCommand,
   transcriptCacheState,
@@ -36,6 +37,15 @@ export async function cmdStatusline(): Promise<void> {
       now: Date.now(),
       color: !process.env.NO_COLOR,
     });
+    // Each move of the 5h meter is logged, to learn what 1% of it costs.
+    const five = input.rate_limits?.five_hour?.used_percentage;
+    if (typeof five === "number") {
+      try {
+        recordMeter(five);
+      } catch {
+        // A read-only home only loses the reading.
+      }
+    }
   } catch {
     // The name alone still says it is installed.
   }

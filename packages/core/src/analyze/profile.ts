@@ -12,6 +12,7 @@ import { planView, type PlanView } from "./plan.js";
 import { buildTasks, contextOf } from "./tasks.js";
 import { priceFor } from "../pricing.js";
 import { codexPlanView, type CodexPlanView } from "./codex-plan.js";
+import { coveredRules, type AppliedChange, type ChangeResult } from "./results.js";
 import { toRecommendations } from "../recommend/recommendations.js";
 import type { Dataset, OptimizationFinding, Recommendation, UsageEvent } from "../domain/types.js";
 import type { Summary } from "./summary.js";
@@ -66,6 +67,19 @@ export interface Profile {
   plan: PlanView | null;
   /** Present when Codex reported a ChatGPT plan's meter in the last 30 days. */
   codex: CodexPlanView | null;
+
+  /** How each change still in place is going, newest first. */
+  applied: ChangeResult[];
+  /** Rules those changes cover, left out of every figure above. */
+  appliedRules: string[];
+  /** Before anything was applied: one fact from your own logs and where to start. */
+  firstLook: FirstLook | null;
+}
+
+export interface FirstLook {
+  fact: string;
+  command: string;
+  why: string;
 }
 
 export interface BiggestWin {
@@ -176,14 +190,21 @@ export interface SpendBreakdown {
 export function buildProfile(
   data: Dataset,
   summary: Summary,
-  findings: OptimizationFinding[],
+  found: OptimizationFinding[],
   /**
    * A monthly cap to project against. `events` overrides the dataset when the
    * caller filtered it to fewer days than the month needs (`--days 7`).
    */
   budget?: Omit<BudgetOptions, "savingsShare"> & { events?: UsageEvent[] },
   plan?: Parameters<typeof planView>[2],
+  /** Changes you made, so what they cover stops being suggested. */
+  applied?: { changes: readonly AppliedChange[]; results: readonly ChangeResult[] },
 ): Profile {
+  const changes = applied?.changes ?? [];
+  const covered = coveredRules(found, data.events, changes);
+  // The window still holds the days before the change, so its finding would
+  // keep suggesting the change you already made.
+  const findings = found.filter((f) => !covered.has(f.rule));
   const waste = findings.filter((f) => !f.advisory && f.tier === "fix");
   const c = summary.cost;
   const of = (n: number) => (c.total > 0 ? n / c.total : 0);
@@ -196,6 +217,14 @@ export function buildProfile(
   // The screen leads with the biggest win, so the next step follows it.
   const next = biggestWin?.recommendation ?? bottleneck;
   const savingsMonthlyUsd = recoverableMonthly(findings);
+  const breakdown: SpendBreakdown = {
+    reread: of(c.cacheRead),
+    output: of(c.output),
+    cacheWrite: of(c.cacheWrite),
+    input: of(c.input),
+    tools: of(c.serverTools),
+  };
+  const sessions = sessionStats(data);
 
   return {
     window: summary.window,
@@ -225,17 +254,11 @@ export function buildProfile(
     levers: recs.filter((r) => r.tier === "test"),
     biggestWin,
     habits: habitsOf(data.events, share(savingsMonthlyUsd), bottleneck),
-    breakdown: {
-      reread: of(c.cacheRead),
-      output: of(c.output),
-      cacheWrite: of(c.cacheWrite),
-      input: of(c.input),
-      tools: of(c.serverTools),
-    },
+    breakdown,
     // Every recommendation can be simulated; with none, the drill-down is the
     // most useful place to look instead.
     nextCommand: next ? `optimaizr simulate ${next.id}` : "optimaizr why",
-    sessions: sessionStats(data),
+    sessions,
     budget: budget
       ? budgetStatus(budget.events ?? data.events, {
           ...budget,
@@ -244,7 +267,45 @@ export function buildProfile(
       : null,
     plan: plan ? planView(data.events, findings, plan) : null,
     codex: codexPlanView(data.events, findings, { now: plan?.now }),
+    applied: (applied?.results ?? []).filter((r) => !r.change.until),
+    appliedRules: [...covered],
+    firstLook: changes.length === 0 ? firstLookOf(breakdown, sessions, recs, biggestWin) : null,
   };
+}
+
+/**
+ * The fact most people don't expect, tied to what fixes it: coming back to a
+ * cold cache when that is the biggest win, else how much is re-reading.
+ */
+function firstLookOf(
+  b: SpendBreakdown,
+  sessions: SessionStats,
+  recs: Recommendation[],
+  win: BiggestWin | null,
+): FirstLook | null {
+  const cold = sessions.coldResumes;
+  const times = cold.warmUsd > 0 ? cold.costUsd / cold.warmUsd : 0;
+  if (win?.recommendation.rule === "cold-resume" && cold.count >= 5 && times >= 2) {
+    return {
+      fact: `${cold.count} times you came back to a conversation after its cache expired, and loading it again cost ${Math.round(times)}x what a warm return does.`,
+      command: "optimaizr apply cold-resume",
+      why: "what to do about it",
+    };
+  }
+  if (b.reread < 0.3) return null;
+  const answers = b.output >= 0.01 ? `; the answers themselves were ${pctOf(b.output)}` : "";
+  const fact = `${pctOf(b.reread)} of your spend went on re-reading the conversation so far${answers}.`;
+  if (recs.some((r) => r.rule === "context-compaction")) {
+    return {
+      fact,
+      command: "optimaizr apply context-compaction",
+      why: "compact sooner, so there is less to re-read",
+    };
+  }
+  if (win) {
+    return { fact, command: `optimaizr apply ${win.recommendation.rule}`, why: "the biggest win" };
+  }
+  return { fact, command: "optimaizr sessions", why: "where in a conversation it happens" };
 }
 
 /** The largest opportunity of any tier; clear waste wins a tie. */

@@ -96,6 +96,8 @@ export interface AdapterResult {
   /** Non-fatal problems: unparseable rows, unknown models. */
   warnings: string[];
   compactions?: CompactionRecord[];
+  /** Conversation titles by session id. */
+  titles?: Record<string, string>;
 }
 
 /* ------------------------------------------------------------------ *
@@ -144,6 +146,10 @@ export interface UsageEvent {
    * which are independent requests.
    */
   turnId?: string;
+  /** When the prompt in `turnId` was sent, for agent transcripts. */
+  turnStartedAt?: string;
+  /** When the response's last record was written: `ts` is its first. */
+  endTs?: string;
   /** Compactions before this call in its session: a re-read after one is not a repeat. */
   contextEpoch?: number;
   /** What the whole task this call belongs to was doing. Derived, not reported. */
@@ -481,8 +487,10 @@ export interface Dataset {
    * one means missing data, so it must be shown where it can't be missed.
    */
   failures?: string[];
-  /** Real compactions, where the source records them (Claude Code does). */
+  /** Real compactions, where the source records them (Claude Code and Codex do). */
   compactions?: CompactionRecord[];
+  /** Conversation titles by session id, where the agent writes one (Claude Code does). */
+  titles?: Record<string, string>;
 }
 
 /** A detector that threw. Reported so a crashed rule never looks like a clean $0. */

@@ -23,9 +23,9 @@ export function cmdGuide(): void {
   console.log(`  ${bold("optimAIzr")} ${dim("| model routing guide")}`);
   console.log("");
   console.log(`  ${dim("Prices are USD per million tokens, from the live catalogue.")}`);
-  console.log(`  ${dim("Cache reads bill at a fraction of the input rate - a tenth or")}`);
-  console.log(`  ${dim("less on current models, half on some older ones - so a stable")}`);
-  console.log(`  ${dim("prefix is the largest single lever on cost.")}`);
+  console.log(`  ${dim("Cache reads bill at a fraction of the input rate: a tenth on most")}`);
+  console.log(`  ${dim("current models, a twentieth on Opus 5.5, half on some older ones.")}`);
+  console.log(`  ${dim("So a stable prefix is the largest single lever on cost.")}`);
   console.log("");
 
   const tiers: Array<[string, string]> = [
@@ -125,6 +125,10 @@ export function cmdPrivacy(): void {
       "Off by default. Sends route names, model ids, token medians and tool names - never prompts, completions or tool payloads. Run 'live --jev --dry-run' to print the exact bytes first.",
     ],
     ["Telemetry", "None. No analytics, no usage reporting, no crash reporting."],
+    [
+      "Agent logs",
+      "Claude Code and Codex logs are read for usage. What each tool call was given (a path, a command, the first 200 characters of anything else) is read in memory only, never stored. Prompts and answers aren't used.",
+    ],
     ["Usage records", `${optimaizrDir()}/events.jsonl - tokens, cost, latency, model.`],
     [
       "Live overrides",
@@ -133,6 +137,10 @@ export function cmdPrivacy(): void {
     [
       "Claude Code mod",
       `Reads usage figures and the commands Claude runs (in memory, for the retry guard), never prompts or file contents, and makes no network calls. Each session it runs in keeps ${optimaizrDir()}/mod/sessions/<id>.json: id, folder, version, times and Claude Code's own plan meters.`,
+    ],
+    [
+      "5-hour meter",
+      `${optimaizrDir()}/meter.jsonl - the time and the percent each time Claude Code's 5-hour meter moves, logged by the status line. Claude Desktop's plan-usage-history.json is read too. From both, ${optimaizrDir()}/window-rate.json keeps what 1% of the window costs, for 'live' and the mod.`,
     ],
     ["Prompt contents", "Not stored unless you explicitly enable capture."],
     ["Capture", "Off by default. Sampled, redacted and local-only when on."],
@@ -143,6 +151,10 @@ export function cmdPrivacy(): void {
       "Settings changes",
       `${optimaizrDir()}/settings-changes.json - what 'apply context-compaction' changed in Claude Code or Codex, so 'undo' can put it back.`,
     ],
+    [
+      "Change history",
+      `${optimaizrDir()}/changes.jsonl - which change, to what and when, for 'optimaizr results'. No usage, prompts or code.`,
+    ],
     ["Retention", `Until you delete it. 'rm -rf ${optimaizrDir()}' removes everything.`],
   ];
   for (const [k, v] of rows) {
@@ -152,8 +164,9 @@ export function cmdPrivacy(): void {
   }
   console.log("");
   console.log(`  ${bold("What a usage record contains")}`);
-  console.log(`  ${dim("model, timestamps, token counts, cost, latency, tool names,")}`);
-  console.log(`  ${dim("file paths touched by tools, and a hash of your prompt prefix.")}`);
+  console.log(`  ${dim("model, timestamps, token counts, cost, latency, tool names, the")}`);
+  console.log(`  ${dim("first 200 characters of each tool call's input, and a hash of")}`);
+  console.log(`  ${dim("your prompt prefix.")}`);
   console.log(`  ${dim("The prefix hash is one-way and cannot reconstruct the prompt.")}`);
   console.log("");
 }
@@ -229,14 +242,15 @@ export const HELP_GROUPS: Array<{ title: string; commands: Array<[string, string
       ["optimaizr", "your profile: usage, waste and the biggest win"],
       ["optimaizr live", "watch calls as they happen: cache countdown, fixes"],
       ["optimaizr statusline on", "cache countdown and re-read cost under Claude Code's prompt"],
-      ["optimaizr sessions", "how long your conversations run and where the cost climbs"],
+      ["optimaizr sessions", "your costliest conversations and where the cost climbs"],
     ],
   },
   {
     title: "Change things",
     commands: [
-      ["optimaizr apply <rule>", "get the exact change, once verified"],
-      ["optimaizr undo <rule>", "revert a setting optimAIzr applied (alone, lists them)"],
+      ["optimaizr apply <rule>", "make the change (alone, lists what you can change)"],
+      ["optimaizr results", "did it work: the days after each change against before"],
+      ["optimaizr undo <rule>", "revert a change optimAIzr made (alone, lists them)"],
       ["optimaizr verify <rule>", "prove a fix against your quality bar first"],
       ["optimaizr show <rule>", "the requests a recommendation touches"],
       ["optimaizr simulate <rule>", "what the change would cost"],
@@ -292,10 +306,15 @@ export function cmdHelp(): void {
   console.log(
     `  ${dim("--accept-risk   apply a fix no replay can settle, on your own judgement")}`,
   );
+  console.log(
+    `  ${dim("--done          apply: record a change you made, so results can measure it")}`,
+  );
   console.log(`  ${dim("--backfill N    live: replay the last N recorded calls first")}`);
   console.log(`  ${dim("--window N      live: calls held in the rolling window")}`);
   console.log(`  ${dim("--min-usd N     live: don't announce below this observed amount")}`);
   console.log(`  ${dim("--no-prompt     live: print recommendations, never ask")}`);
+  console.log(`  ${dim("--no-turns      live: no line after each Claude Code turn")}`);
+  console.log(`  ${dim("--top N         sessions: how many conversations to list (default 10)")}`);
   console.log(
     `  ${dim("--auto          live: apply confident switches through the Claude Code mod")}`,
   );

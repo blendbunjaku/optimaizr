@@ -20,6 +20,8 @@ export * from "./analyze/profile.js";
 export * from "./analyze/cold.js";
 export * from "./analyze/writes.js";
 export * from "./analyze/sessions.js";
+export * from "./analyze/conversations.js";
+export * from "./analyze/results.js";
 export * from "./analyze/budget.js";
 export * from "./analyze/plan.js";
 export * from "./analyze/codex-plan.js";

@@ -27,6 +27,7 @@ import {
 } from "./commands/info.js";
 import { cmdLive, cmdUndo } from "./commands/live.js";
 import { cmdMod } from "./commands/mod.js";
+import { cmdResults } from "./commands/results.js";
 import { cmdStatusline, cmdStatuslineSwitch } from "./commands/statusline.js";
 import { cmdCard, cmdLimit, cmdProfile } from "./commands/plan.js";
 import { cmdVerify } from "./commands/verify.js";
@@ -104,6 +105,9 @@ async function run(args: ReturnType<typeof parseArgs>): Promise<void> {
       return cmdApply(args);
     case "undo":
       return cmdUndo(args);
+    case "results":
+    case "result":
+      return cmdResults(args);
     case "mod":
     case "mods":
       return cmdMod(args);

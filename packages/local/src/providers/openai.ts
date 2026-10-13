@@ -14,6 +14,11 @@ registerAdapter({
   async read(s: AdapterSource): Promise<AdapterResult> {
     if (s.kind !== "local-transcripts") return { events: [], sources: [], warnings: [] };
     const data = await ingestCodex({ root: s.root, days: s.days, project: s.project });
-    return { events: data.events, sources: data.sources, warnings: data.warnings };
+    return {
+      events: data.events,
+      sources: data.sources,
+      warnings: data.warnings,
+      compactions: data.compactions,
+    };
   },
 });

@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 
 import { codexHome, COMPACT_AT } from "@optimaizr/core";
+import { type ChangeEntry, recordChange, recordUndo } from "./changes.js";
 import { optimaizrDir } from "./ledger.js";
 import { claudeSettingsPath } from "./rewriters.js";
 
@@ -33,6 +34,8 @@ export interface CompactionPaths {
   codexConfig?: string;
   /** Where the previous values are kept for undo. */
   ledger?: string;
+  /** Where `optimaizr results` reads changes from; next to the ledger by default. */
+  journal?: string;
 }
 
 export interface CompactionResult {
@@ -42,10 +45,12 @@ export interface CompactionResult {
 }
 
 function paths(opts: CompactionPaths) {
+  const ledger = opts.ledger ?? path.join(optimaizrDir(), "settings-changes.json");
   return {
     claude: opts.claudeSettings ?? claudeSettingsPath(),
     codex: opts.codexConfig ?? path.join(codexHome(), "config.toml"),
-    ledger: opts.ledger ?? path.join(optimaizrDir(), "settings-changes.json"),
+    ledger,
+    journal: opts.journal ?? path.join(path.dirname(ledger), "changes.jsonl"),
   };
 }
 
@@ -185,6 +190,11 @@ export function applyCompaction(
     if (!ledger.some((c) => c.agent === agent)) {
       ledger.push({ agent, file, previous: current, value, at });
     }
+    // Every change, the first and each `--at` after it, so results can split at each.
+    recordChange(
+      { kind: "apply", rule: "context-compaction", source: agent, value, at },
+      p.journal,
+    );
     const was = current === null ? "unset" : current;
     const how =
       agent === "claude-code"
@@ -220,6 +230,15 @@ export function undoCompaction(opts: CompactionPaths = {}): CompactionResult[] {
         `${c.file}: ${c.previous === null ? "setting removed" : `back to ${c.previous}`}. ${AGENT_NAME[c.agent]} picks it up from its next session.`,
     });
   }
+  const reverted = ledger.filter((c) => results.some((r) => r.agent === c.agent && r.ok));
+  const undone = reverted.map((c): ChangeEntry => ({
+    kind: "apply",
+    rule: "context-compaction",
+    source: c.agent,
+    value: c.value,
+    at: c.at,
+  }));
+  if (undone.length > 0) recordUndo("context-compaction", undone, { journal: p.journal });
   writeLedger(
     p.ledger,
     ledger.filter((c) => results.some((r) => r.agent === c.agent && !r.ok)),

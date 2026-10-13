@@ -34,6 +34,7 @@ import {
   OPENING_MESSAGES,
   type Override,
   parseOverrides,
+  parseWindowRate,
   PAYBACK_REQUESTS,
   paybackRequests,
   percent,
@@ -64,7 +65,7 @@ import {
 // It reads usage figures and the commands Claude runs, never prompt text or file
 // contents. The one text it keeps is the note /optimaizr handoff asks Claude for.
 
-const VERSION = "0.10.3";
+const VERSION = "0.11.0";
 // The HUD /optimaizr hud opens beside the conversation.
 const PANE = "optimaizr";
 // overrides.json is read again at most this often, so `optimaizr undo` lands fast.
@@ -83,7 +84,6 @@ type Api = EngineInterface;
 
 type Turn = {
   startUsd: number;
-  startPct?: number;
   calls: number;
   switched?: Override;
   saved?: number;
@@ -351,6 +351,12 @@ async function startFrom($: Api): Promise<string | null> {
   return state.convo.handoff;
 }
 
+// Written by `optimaizr live` and `optimaizr sessions`; read once per answer.
+async function windowRate($: Api): Promise<number | null> {
+  const text = await $.fs.read(`${state.dir}/window-rate.json`).catch(() => "");
+  return parseWindowRate(typeof text === "string" ? text : "");
+}
+
 async function switches($: Api): Promise<Override[]> {
   const now = await $.clock.now();
   if (now - state.readAt < REREAD_MS) return state.overrides;
@@ -475,7 +481,6 @@ export const register: Register = (on, options) => {
     await measure($).catch(() => undefined);
     state.turn = {
       startUsd: state.usage?.cost?.usd ?? 0,
-      startPct: fiveHour(state.usage?.rateLimits)?.percentUsed,
       calls: 0,
       held: 0,
     };
@@ -655,7 +660,7 @@ export const register: Register = (on, options) => {
     const spent = (state.usage?.cost?.usd ?? 0) - t.startUsd;
     state.turnCosts = [...state.turnCosts, Math.max(0, spent)].slice(-24);
     if (!showTurnLine || spent < 0.005) return r;
-    const after = fiveHour(state.usage?.rateLimits)?.percentUsed;
+    const rate = await windowRate($).catch(() => null);
     const line = turnLine({
       usd: spent,
       calls: t.calls,
@@ -670,8 +675,8 @@ export const register: Register = (on, options) => {
         : {}),
       ...(t.effort ? { effort: t.effort } : {}),
       held: t.held,
-      ...(t.startPct !== undefined ? { before: t.startPct } : {}),
-      ...(after !== undefined ? { after } : {}),
+      ...(typeof e.durationMs === "number" ? { ms: e.durationMs } : {}),
+      ...(rate ? { of5h: spent / rate } : {}),
     });
     return { ...r, text: line };
   });

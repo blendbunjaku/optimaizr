@@ -18,6 +18,7 @@ registerAdapter({
       sources: data.sources,
       warnings: data.warnings,
       compactions: data.compactions,
+      titles: data.titles,
     };
   },
 });

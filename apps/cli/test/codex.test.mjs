@@ -70,6 +70,38 @@ test("one populated token_count becomes one call", async () => {
   assert.equal(e.effort, "medium");
 });
 
+test("a compaction keeps the context it replaced and whether work was under way", async () => {
+  const item = (ts, payload) => ({ type: "response_item", timestamp: ts, payload });
+  const compacted = (ts) => ({
+    type: "event_msg",
+    timestamp: ts,
+    payload: { type: "context_compacted" },
+  });
+  const root = rollout([
+    meta(),
+    turn(),
+    tokens("2026-04-08T18:23:15.000Z", usage(180_000, 170_000, 300, 0)),
+    item("2026-04-08T18:23:16.000Z", { type: "function_call", call_id: "c1", name: "shell" }),
+    item("2026-04-08T18:23:17.000Z", { type: "function_call_output", call_id: "c1", output: "ok" }),
+    compacted("2026-04-08T18:23:20.000Z"),
+    tokens("2026-04-08T18:25:00.000Z", usage(30_000, 0, 300, 0), usage(210_000, 170_000, 600, 0)),
+    item("2026-04-08T18:25:01.000Z", { type: "message", role: "assistant", content: [] }),
+    compacted("2026-04-08T18:30:00.000Z"),
+  ]);
+
+  const { compactions } = await ingestCodex({ root });
+  assert.equal(compactions.length, 2);
+  assert.deepEqual(
+    compactions.map((c) => [c.source, c.sessionId, c.project, c.preTokens, c.midTask]),
+    [
+      ["codex", "sess-1", "/Users/someone/project", 180_000, true],
+      ["codex", "sess-1", "/Users/someone/project", 30_000, false],
+    ],
+  );
+  // Codex doesn't say how long a summary took.
+  assert.equal(compactions[0].durationMs, undefined);
+});
+
 test("OpenAI token semantics are unpacked, not double counted", async () => {
   const root = rollout([
     meta(),

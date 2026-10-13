@@ -110,6 +110,9 @@ interface Partial {
   isSubagent: boolean;
   stopReason?: string | null;
   turnId?: string;
+  turnStartedAt?: string;
+  /** The newest record's time: a response is written block by block. */
+  endTs: string;
   contextEpoch: number;
   tools: Map<string, ToolCall>;
 }
@@ -117,6 +120,7 @@ interface Partial {
 /** The prompt a thread is answering, and how often it has been compacted. */
 interface Thread {
   turnId?: string;
+  turnStartedAt?: string;
   epoch: number;
   /** Why its last reply stopped: "tool_use" means the work was still going. */
   lastStop?: string | null;
@@ -135,6 +139,8 @@ export interface TranscriptState {
   threads: Map<string, Thread>;
   /** Main-conversation compactions by record uuid: a resumed session copies them. */
   compactions: Map<string, CompactionRecord>;
+  /** The latest title Claude Code gave each conversation, by session id. */
+  titles: Map<string, string>;
 }
 
 export function createTranscriptState(): TranscriptState {
@@ -144,6 +150,7 @@ export function createTranscriptState(): TranscriptState {
     touchedAt: new Map(),
     threads: new Map(),
     compactions: new Map(),
+    titles: new Map(),
   };
 }
 
@@ -296,11 +303,20 @@ export function consumeTranscriptLine(
     return true;
   }
 
+  // Claude Code names each conversation and rewrites the name as it goes; the last one wins.
+  if (rec.type === "ai-title") {
+    if (typeof rec.aiTitle === "string" && rec.aiTitle.trim() && rec.sessionId) {
+      state.titles.set(rec.sessionId, rec.aiTitle.trim());
+    }
+    return true;
+  }
+
   // Tool results live on the user side and tell us how much each tool pushed into context.
   if (rec.type === "user") {
     if (isPrompt(rec)) {
-      threadOf(state, file, rec).turnId =
-        rec.uuid ?? `${file}:${state.threads.size}:${rec.timestamp}`;
+      const thread = threadOf(state, file, rec);
+      thread.turnId = rec.uuid ?? `${file}:${state.threads.size}:${rec.timestamp}`;
+      thread.turnStartedAt = typeof rec.timestamp === "string" ? rec.timestamp : undefined;
     }
     const content = rec.message?.content;
     if (Array.isArray(content)) {
@@ -331,6 +347,7 @@ export function consumeTranscriptLine(
   const weight = tokenWeight(usage);
 
   const thread = threadOf(state, file, rec);
+  const recordTs: string = rec.timestamp ?? new Date().toISOString();
   let p = out.get(messageId);
   if (!p) {
     p = {
@@ -338,13 +355,15 @@ export function consumeTranscriptLine(
       usage,
       usageWeight: weight,
       model,
-      ts: rec.timestamp ?? new Date().toISOString(),
+      ts: recordTs,
+      endTs: recordTs,
       sessionId: rec.sessionId ?? path.basename(file, ".jsonl"),
       cwd: rec.cwd,
       effort: rec.effort ?? null,
       isSubagent: Boolean(rec.isSidechain),
       stopReason: msg.stop_reason ?? null,
       turnId: thread.turnId,
+      ...(thread.turnStartedAt ? { turnStartedAt: thread.turnStartedAt } : {}),
       contextEpoch: thread.epoch,
       tools: new Map(),
     };
@@ -356,6 +375,7 @@ export function consumeTranscriptLine(
     if (msg.stop_reason) p.stopReason = msg.stop_reason;
   }
   thread.lastStop = msg.stop_reason ?? p.stopReason ?? null;
+  if (recordTs > p.endTs) p.endTs = recordTs;
 
   // Every record that touches this response resets its settle clock.
   state.touchedAt.set(messageId, at);
@@ -477,7 +497,10 @@ export async function ingestClaudeCode(opts: IngestOptions = {}): Promise<Datase
     .filter((c) => !opts.project || c.project.toLowerCase().includes(opts.project.toLowerCase()))
     .sort((a, b) => a.ts.localeCompare(b.ts));
 
-  return { events, window: { from, to, days }, sources: files, warnings, compactions };
+  const sessions = new Set(events.map((e) => e.sessionId));
+  const titles = Object.fromEntries([...state.titles].filter(([id]) => sessions.has(id)));
+
+  return { events, window: { from, to, days }, sources: files, warnings, compactions, titles };
 }
 
 /**
@@ -523,6 +546,8 @@ export function buildTranscriptEvent(p: Partial, state: TranscriptState): CallEv
     serviceTier: u.service_tier ?? null,
     isSubagent: p.isSubagent,
     ...(p.turnId ? { turnId: p.turnId } : {}),
+    ...(p.turnStartedAt ? { turnStartedAt: p.turnStartedAt } : {}),
+    ...(p.endTs !== p.ts ? { endTs: p.endTs } : {}),
     ...(p.contextEpoch ? { contextEpoch: p.contextEpoch } : {}),
     tools,
     cost: costOf(u, p.model, { at: p.ts, speed: u.speed }),

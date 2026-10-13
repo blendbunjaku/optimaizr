@@ -1,0 +1,2 @@
+# LF everywhere, so a Windows checkout reads the changelog and fixtures as written.
+* text=auto eol=lf

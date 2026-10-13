@@ -176,7 +176,7 @@ test("the session file tells optimaizr live the mod is running", async ($, on) =
   await $.session.start(SESSION);
   const file = `${DIR}/mod/sessions/s1.json`;
   const beat = JSON.parse(w.files.get(file)!);
-  expect(beat).toMatchObject({ id: "s1", version: "0.10.3", cwd: CWD });
+  expect(beat).toMatchObject({ id: "s1", version: "0.11.0", cwd: CWD });
   expect(beat.endedAt).toBeUndefined();
 
   await $.session.end({ reason: "clear", sessionId: "s1", resume: { id: "s1" } });
@@ -346,7 +346,8 @@ test("each answer gets one line with what the turn cost", async ($, on) => {
     turnId: "t1",
     reason: "answer",
   });
-  expect(done.text).toBe("this turn $0.42 · 1 request · 5h 58% → 61%");
+  // No learned rate yet, so no share: the meter before and after counts other sessions too.
+  expect(done.text).toBe("this turn $0.42 · 14s · 1 request");
 
   const sub = await $.turn.complete({
     answer: "Subagent done.",
@@ -357,6 +358,23 @@ test("each answer gets one line with what the turn cost", async ($, on) => {
     reason: "answer",
   });
   expect(sub.text).toBe("Subagent done.");
+});
+
+test("with a learned rate the line gives the turn's own share of the 5h window", async ($, on) => {
+  const w = world(on, { files: { [`${DIR}/window-rate.json`]: '{"usdPerPercent": 0.5}' } });
+  await $.session.start(SESSION);
+  await $.turn.start({ text: "add rate limiting", turnId: "t1" });
+  w.now.usd = 1.42;
+  await step($);
+
+  const done = await $.turn.complete({
+    answer: "Done.",
+    durationMs: 130_000,
+    isAborted: false,
+    turnId: "t1",
+    reason: "answer",
+  });
+  expect(done.text).toBe("this turn $0.42 · 2m 10s · 1 request · ~0.8% of 5h");
 });
 
 test("/optimaizr prints the session's figures and its switches", async ($, on) => {
@@ -490,7 +508,7 @@ test("a switched turn leads with its difference against the same tokens", async 
     "Thinking · Sonnet 5.5 · $0.10 · saved ~$0.10 · 58% of 5h…",
   );
   expect((await answered($)).text).toBe(
-    "~$0.10 less than the same tokens on Opus 5.5 · this turn $0.10 on Sonnet 5.5 · 1 request · 5h 58% → 58%",
+    "~$0.10 less than the same tokens on Opus 5.5 · this turn $0.10 on Sonnet 5.5 · 9s · 1 request",
   );
   expect(textOf(await $.ui.render(band()))).toContain(
     "switched  shop-api: Opus 5.5 → Sonnet 5.5 · saved ~$0.10 · harder task? /optimaizr off",
@@ -509,7 +527,7 @@ test("the first request on a new model says when it costs more, and why", async 
   w.now.usd = 1.4;
   await step($);
   expect((await answered($)).text).toBe(
-    "this turn $0.40 on Sonnet 5.5 · 1 request · $0.38 more than Opus 5.5 once, to load the conversation · 5h 58% → 58%",
+    "this turn $0.40 on Sonnet 5.5 · 9s · 1 request · $0.38 more than Opus 5.5 once, to load the conversation",
   );
 });
 
@@ -534,9 +552,7 @@ test("an effort switch lowers effort, and never raises it", async ($, on) => {
   await step($, OPUS, undefined, "low");
   expect(w.sent).toEqual([OPUS, OPUS]);
   expect(w.efforts).toEqual(["low", "low"]);
-  expect((await answered($)).text).toBe(
-    "this turn $0.08 at low effort · 2 requests · 5h 58% → 58%",
-  );
+  expect((await answered($)).text).toBe("this turn $0.08 at low effort · 9s · 2 requests");
   expect(w.logs).toEqual([
     "Lowered this session to low effort on Opus 5.5 (model-fit). Harder task? /optimaizr off goes back to its own effort.",
   ]);

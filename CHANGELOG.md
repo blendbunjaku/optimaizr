@@ -1,5 +1,69 @@
 # Changelog
 
+## 0.11.0
+
+**Did the change work? optimAIzr now measures it, on your own usage.**
+
+- **`optimaizr results`.** For each change you made, the days after it against
+  the days before (14, or as many as it has been in, up to 30), judged on cost
+  per prompt for the agent and project it covers. Next to it: calls per prompt,
+  tool errors, calls past the compaction point, compactions a day and time
+  spent waiting on summaries, so a saving that costs you something shows it.
+  Codex is measured the same way, from its own compactions, except for the
+  wait: Codex doesn't record how long a summary takes. Until there are 3
+  active days and 100 prompts it says how far along it is and when to look
+  again. It names what it can't separate: a short baseline, a shift between
+  projects, another change in the same days, a drop that was already under
+  way.
+- **A journal of changes.** Every change optimAIzr makes, and every undo, goes
+  into `~/.optimaizr/changes.jsonl`. Compaction settings and model switches
+  from earlier versions are read from where they were kept, so a change made
+  on 0.10 is measured too.
+- **`optimaizr apply` lists what you can change.** On its own it shows the
+  changes optimAIzr makes for you, on or off, and the ones only you can make,
+  with what each is worth. For a Claude Code or Codex finding, `apply <rule>`
+  prints the steps, with no verification gate and no file to write. Once you
+  have made a change, `optimaizr apply <rule> --done` records it, with the
+  agent and project it covers, so `results` can measure it, and
+  `optimaizr undo <rule>` records when you stopped. Findings from your app's
+  SDK traffic still need a passing `verify`.
+- **The profile knows what you changed.** An Applied block at the top says how
+  each change is doing so far, and a finding with a change in place for at
+  least half of its spend leaves the savings and the biggest win. Until
+  anything is applied, the profile opens with one fact from your own usage and
+  the one command to start with.
+- **`optimaizr metrics`** counts realised savings only from what `results`
+  measured, and shows how many changes are in place.
+- **What each conversation cost.** `optimaizr sessions` opens with your
+  costliest conversations, by the title Claude Code gave them: what each cost
+  with its subagents, how long the agent worked on it (pauses over 15 minutes
+  left out) and its share of the 5-hour window. `--top N` lists more, and
+  `--json` gives them all.
+- **A line after every turn.** `optimaizr live` says when a Claude Code turn
+  ends, how long it took, what it cost and its own share of the 5-hour window,
+  then the conversation so far: `2m 10s · $0.620 · ~1.5% of 5h`. The share
+  comes from the turn's dollars, not the meter before and after, because other
+  sessions move the meter too. It works for the VS Code extension. `--no-turns`
+  hides it. The mod's turn line adds the time and the same share.
+- **What 1% of your window costs, learned.** From Claude Desktop's meter
+  history and the readings `optimaizr statusline` now logs to
+  `~/.optimaizr/meter.jsonl` when the meter moves, against what Claude Code
+  spent meanwhile, once three windows have moved 5 points or more. Until then,
+  your plan's estimated limit over 100.
+- **More machines.** CI builds and tests on Linux, macOS and Windows, on Node
+  20.11, 22 and 24. On an older Node, `optimaizr` says which version it needs
+  instead of failing somewhere inside.
+- **Corrections.** The docs and `optimaizr privacy` say that what each tool
+  call was given (a path, a command, the first 200 characters of anything
+  else) is read from agent logs in memory and never stored, and that a
+  `wrap()` record keeps those 200 characters. `guide` and the docs give each
+  model's own cache rate: Opus 5.5 reads at a twentieth of input, not a
+  tenth. The docs and the mod no longer say every effort switch reloads the
+  cache: only a switch to low has been seen to. The biggest win's line lost a
+  stray space before its comma.
+- **Haiku 5.5 is priced,** with its 5x rate past 100K of prompt. Suggested
+  switches still go to Haiku 4.5.
+
 ## 0.10.3
 
 - **Conversations that start heavy.** A new finding, `heavy-start`, measures

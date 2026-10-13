@@ -21,7 +21,9 @@ npx optimaizr
 ```
 
 No account, no upload, no telemetry. It reads token counts from the logs already
-on your machine, never your prompts.
+on your machine, never your prompts or Claude's answers. To spot repeated work
+it also reads what each tool call was given (a file path, a command, the first
+200 characters of anything else), in memory only, and stores none of it.
 
 ```
   Your Claude Pro did $938.12/mo of work at API prices: 47x what you pay
@@ -55,9 +57,10 @@ optimaizr statusline on
 passes 200K, and 5 minutes before a cache expires, and offers a fix you take
 with **Y**.
 
-**Where long sessions turn expensive.** `optimaizr sessions` finds the context
-size where re-reading takes over, what each cache write was for, and every time
-you came back too late.
+**Where long sessions turn expensive.** `optimaizr sessions` opens with your
+costliest conversations, by the title Claude Code gave them, then finds the
+context size where re-reading takes over, what each cache write was for, and
+every time you came back too late.
 
 ```
   Cold cache returns
@@ -84,7 +87,7 @@ your 5-hour window as you work, **Y** in `live` moves the session you're in to a
 cheaper model, and `/optimaizr handoff` writes a note to start fresh from.
 
 ```
-  ⏺ optimaizr: this turn $0.18 · 4 requests · 5h 55% → 56%
+  ⏺ optimaizr: this turn $0.18 · 2m 10s · 4 requests · ~0.4% of 5h
 
   optimAIzr  █████████░░░░░░░  56% of 5h · resets 15:00
 ```
@@ -118,8 +121,12 @@ exports. Node 20.11 or later.
 
 ## Recent releases
 
+- **0.11** (Oct 12, 2026): `optimaizr results` puts the days after each change
+  against the days before, on your own usage. `optimaizr apply` lists what you
+  can change, and `--done` records a change you made yourself. `sessions`
+  ranks your costliest conversations, and `live` says what each turn cost.
 - **0.10** (Oct 7, 2026): a cache countdown under Claude Code's prompt, no mod
-  needed. Now 0.10.3: spot conversations that start heavy, and see what each
+  needed. In 0.10.3: spot conversations that start heavy, and see what each
   cache write was for in `optimaizr sessions`.
 - **0.9** (Oct 6, 2026): your plan detected, savings labelled by how sure they
   are, compacting earlier in one command.

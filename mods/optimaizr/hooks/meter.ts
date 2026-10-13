@@ -1,7 +1,7 @@
 // Pure helpers for register.tsx. Nothing here touches `$`, so the figures the
 // band, the spinner and /optimaizr show can be tested on their own.
 
-import { PRICES, type Price } from "./prices.ts";
+import { PRICES, type Price, type Rates } from "./prices.ts";
 
 export type RateLimit = { kind: string; percentUsed: number; resetsAt?: string };
 
@@ -90,6 +90,15 @@ export function duration(ms: number): string {
   return m < 60 ? `${m}m` : `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, "0")}m`;
 }
 
+/** How long a turn took: `42s`, `2m 10s`, `1h 05m`. */
+export function elapsed(ms: number): string {
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m ${String(s % 60).padStart(2, "0")}s`;
+  return `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, "0")}m`;
+}
+
 /** Local wall-clock time, `01:00`. */
 export function clock(iso: string): string {
   const d = new Date(iso);
@@ -109,6 +118,20 @@ export function windowShare(saved: number, spent: { usd: number; pct: number }):
 /** `0.4%`, `2.1%`, `12%`. */
 export function share(pct: number): string {
   return pct < 10 ? `${pct.toFixed(1)}%` : `${Math.round(pct)}%`;
+}
+
+/**
+ * The dollars per 1% of the 5h window `optimaizr live` or `sessions` learned
+ * from the plan meter. The meter only shows whole percents, so a turn's own
+ * share comes from its cost. Null when the file is missing or unreadable.
+ */
+export function parseWindowRate(text: string): number | null {
+  try {
+    const r = JSON.parse(text)?.usdPerPercent;
+    return typeof r === "number" && Number.isFinite(r) && r > 0 ? r : null;
+  } catch {
+    return null;
+  }
 }
 
 /** The meter's colour as the window fills: calm, then a warning, then urgent. */
@@ -216,6 +239,10 @@ export function effortFor(
 
 const priceOf = (model: string): Price | undefined => PRICES[baseModel(model)];
 
+/** The rates a request of `promptTokens` pays: a tiered model costs more past its threshold. */
+const ratesAt = (p: Price, promptTokens: number): Rates =>
+  p.above && promptTokens > p.above.tokens ? p.above : p;
+
 /**
  * What a request's tokens cost at a model's rates. `warm`: its cache writes would
  * have been reads. `hour`: the main conversation caches for an hour, at 2x input;
@@ -226,8 +253,12 @@ export function costAt(
   t: Tokens,
   opts: { warm?: boolean; hour?: boolean } = {},
 ): number | null {
-  const p = priceOf(model);
-  if (!p) return null;
+  const price = priceOf(model);
+  if (!price) return null;
+  const p = ratesAt(
+    price,
+    t.input_tokens + t.cache_read_input_tokens + t.cache_creation_input_tokens,
+  );
   const write = opts.warm ? p.cacheRead : opts.hour ? p.cacheWrite1h : p.cacheWrite;
   return (
     (t.input_tokens * p.input +
@@ -246,9 +277,11 @@ export function costAt(
  */
 /** What reloading a conversation of `contextTokens` into the new model's cache costs, over reading it on the old one. */
 export function reloadCost(o: Override, contextTokens: number): number | null {
-  const from = priceOf(o.from);
-  const to = priceOf(o.to);
-  if (!from || !to) return null;
+  const fromPrice = priceOf(o.from);
+  const toPrice = priceOf(o.to);
+  if (!fromPrice || !toPrice) return null;
+  const from = ratesAt(fromPrice, contextTokens);
+  const to = ratesAt(toPrice, contextTokens);
   return (contextTokens * (to.cacheWrite1h - from.cacheRead)) / 1_000_000;
 }
 
@@ -297,8 +330,9 @@ export function carryCost(
   model: string,
   contextTokens: number,
 ): { read: number; rewrite: number } | null {
-  const p = priceOf(model);
-  if (!p) return null;
+  const price = priceOf(model);
+  if (!price) return null;
+  const p = ratesAt(price, contextTokens);
   return {
     read: (contextTokens * p.cacheRead) / 1_000_000,
     rewrite: (contextTokens * p.cacheWrite1h) / 1_000_000,
@@ -515,8 +549,10 @@ export function turnLine(t: {
   switched?: { from: string; to: string; saved: number | null };
   effort?: string;
   held?: number;
-  before?: number;
-  after?: number;
+  /** How long the turn took. */
+  ms?: number;
+  /** Its own share of the 5h window, in percent. */
+  of5h?: number;
 }): string {
   const parts: string[] = [];
   const s = t.switched;
@@ -530,14 +566,14 @@ export function turnLine(t: {
   } else {
     parts.push(`this turn ${usd(t.usd)}${t.effort ? ` at ${t.effort} effort` : ""}`);
   }
+  if (t.ms !== undefined) parts.push(elapsed(t.ms));
   parts.push(plural(t.calls, "request"));
   if (s && s.saved !== null && s.saved <= -0.005) {
     parts.push(`${usd(-s.saved)} more than ${s.from} once, to load the conversation`);
   }
   if (t.held) parts.push(`${plural(t.held, "retry", "retries")} held`);
-  if (t.before !== undefined && t.after !== undefined) {
-    parts.push(`5h ${percent(t.before)} → ${percent(t.after)}`);
-  }
+  // Its own share, not the meter before and after: other sessions move the meter too.
+  if (t.of5h !== undefined) parts.push(`${t.of5h < 0.1 ? "<0.1" : `~${share(t.of5h)}`} of 5h`);
   return parts.join(" · ");
 }
 

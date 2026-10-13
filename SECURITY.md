@@ -37,20 +37,28 @@ The Claude Code mod (`mods/optimaizr`) makes no network calls. Inside Claude
 Code it reads the session's usage figures (cost, token counts, the context
 window's fill, the plan's rate-limit windows) and the commands Claude runs,
 which it keeps in memory to spot a retry loop. It never reads your prompts,
-Claude's answers or file contents, and stores none of them.
+Claude's answers or file contents, and stores none of them. It reads
+`~/.optimaizr/window-rate.json` for a turn's share of the 5-hour window.
 `claude plugin validate mods/optimaizr` lists every call it makes.
 
 ## What is read
 
-| Path                    | Why                                       |
-| ----------------------- | ----------------------------------------- |
-| `~/.claude/projects`    | Claude Code transcripts (usage per call)  |
-| `~/.codex/sessions`     | Codex rollouts (usage and plan meter)     |
-| `~/.optimaizr/*.json`   | Your config and custom model prices       |
-| `~/.claude.json`        | Only your plan fields, to detect the plan |
-| Files you pass `import` | A CSV or JSON usage export                |
+| Path                                       | Why                                                             |
+| ------------------------------------------ | --------------------------------------------------------------- |
+| `~/.claude/projects`                       | Claude Code transcripts (usage per call)                        |
+| `~/.codex/sessions`                        | Codex rollouts (usage and plan meter)                           |
+| `~/.optimaizr/*.json`                      | Your config and custom model prices                             |
+| `~/.claude.json`                           | Only your plan fields, to detect the plan                       |
+| Claude Desktop's `plan-usage-history.json` | Its 5-hour meter readings, to learn what 1% of the window costs |
+| Files you pass `import`                    | A CSV or JSON usage export                                      |
 
-Transcripts are never copied or modified.
+Transcripts are never copied or modified. From each call optimAIzr takes the
+usage figures, and from each tool call its name and what it was given: the
+file path, the command, the search pattern or URL, and for other tools the
+first 200 characters of their input. Those are read in memory, to spot repeated
+reads and retry loops, and are never written to `~/.optimaizr`; a finding, and
+a report you write, can name the file or command it is about. Of a tool's
+result only its size is kept. Your prompts and Claude's answers are not used.
 
 ## What is written
 
@@ -58,18 +66,21 @@ Everything optimAIzr keeps lives in `~/.optimaizr/` as plain JSON and JSONL.
 Nothing is encrypted, because nothing leaves the machine and the files inherit
 your user permissions.
 
-| File                    | Contents                                                                                                                                                |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `events.jsonl`          | One record per call from `wrap()` or `import`: model, time, token counts, cost, latency, tool names, and a hash of the prefix.                          |
-| `samples.jsonl`         | **Only if you enable capture.** Redacted request/response pairs for `verify`.                                                                           |
-| `decisions.json`        | Which recommendations you viewed, simulated or applied.                                                                                                 |
-| `verifications.json`    | The current verification state per rule, which `apply` checks.                                                                                          |
-| `verifications.jsonl`   | Every verification attempt, append-only.                                                                                                                |
-| `overrides.json`        | Model swaps you accepted in `live`, applied by `wrap()` and the Claude Code mod until you run `optimaizr undo`.                                         |
-| `mod/sessions/*.json`   | Written by the Claude Code mod, one per session: its id, working directory, mod version, times and Claude Code's own plan meters. Removed after 7 days. |
-| `settings-changes.json` | What `apply context-compaction` changed in Claude Code or Codex, so `undo` can put it back.                                                             |
-| `update.json`           | When the version check last ran, the latest version it saw, and the last version that ran here.                                                         |
-| `limits.jsonl`          | Times you recorded hitting a Claude session limit with `optimaizr limit`.                                                                               |
+| File                    | Contents                                                                                                                                                                                                |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `events.jsonl`          | One record per call from `wrap()` or `import`: model, time, token counts, cost, latency, each tool call's name and the first 200 characters of its input, and a hash of the prefix.                     |
+| `samples.jsonl`         | **Only if you enable capture.** Redacted request/response pairs for `verify`.                                                                                                                           |
+| `decisions.json`        | Which recommendations you viewed, simulated or applied.                                                                                                                                                 |
+| `verifications.json`    | The current verification state per rule, which `apply` checks.                                                                                                                                          |
+| `verifications.jsonl`   | Every verification attempt, append-only.                                                                                                                                                                |
+| `overrides.json`        | Model swaps you accepted in `live`, applied by `wrap()` and the Claude Code mod until you run `optimaizr undo`.                                                                                         |
+| `mod/sessions/*.json`   | Written by the Claude Code mod, one per session: its id, working directory, mod version, times and Claude Code's own plan meters. Removed after 7 days.                                                 |
+| `changes.jsonl`         | Every change optimAIzr made, every one you recorded with `apply --done`, and every undo: rule, agent, project, the value set and when. Append-only, for `optimaizr results`. No usage, prompts or code. |
+| `settings-changes.json` | What `apply context-compaction` changed in Claude Code or Codex, so `undo` can put it back.                                                                                                             |
+| `update.json`           | When the version check last ran, the latest version it saw, and the last version that ran here.                                                                                                         |
+| `meter.jsonl`           | Claude Code's 5-hour meter as the status line sees it: the time and the percent, one line each time it moves.                                                                                           |
+| `window-rate.json`      | What 1% of the 5-hour window costs at list prices, learned from the meter, for `live` and the mod's turn line.                                                                                          |
+| `limits.jsonl`          | Times you recorded hitting a Claude session limit with `optimaizr limit`.                                                                                                                               |
 
 Outside that directory, optimAIzr writes only:
 
@@ -89,6 +100,11 @@ Outside that directory, optimAIzr writes only:
 **Not stored by default.** A usage record holds token _counts_, not contents.
 The prefix hash is a SHA-1 of your tools and system prompt, cut to 12
 characters, used to spot cache-defeating churn. It can't be reversed.
+
+The one exception is what your app's model asked its tools to do. A record from
+`wrap()` keeps the first 200 characters of each tool call's input, so a
+repeated call can be matched. If your tools take personal data as input, that
+is where it would show.
 
 `verify` is the only feature that needs real prompts, because it replays them.
 So capture is:

@@ -220,6 +220,8 @@ export interface TranscriptTailOptions {
   /** Read existing files from the beginning rather than from their end. */
   backfill?: number | boolean;
   keepAlive?: boolean;
+  /** Claude Code named or renamed a conversation. */
+  onTitle?: (sessionId: string, title: string) => void;
 }
 
 interface Followed<S> {
@@ -382,6 +384,9 @@ export function tailTranscripts(
     createState: () => createTranscriptState(),
     onLine: (state, line, file) => {
       consumeTranscriptLine(state, line, file);
+      if (opts.onTitle && line.includes('"ai-title"')) {
+        for (const [id, title] of state.titles) opts.onTitle(id, title);
+      }
       return null; // a transcript response is only final once it goes quiet
     },
     drain: (state, force) => takeSettled(state, force ? 0 : quietMs),

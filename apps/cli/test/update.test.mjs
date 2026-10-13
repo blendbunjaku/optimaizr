@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
@@ -75,7 +76,7 @@ test("the changelog splits into versions", () => {
   assert.equal(sections[0].body, "- new");
 });
 
-const CLI = path.join(new URL("..", import.meta.url).pathname, "dist/cli.js");
+const CLI = fileURLToPath(new URL("../dist/cli.js", import.meta.url));
 const skip = fs.existsSync(CLI) ? false : "dist/cli.js is not built";
 
 test("optimaizr changelog prints this version's notes, offline", { skip }, async () => {
@@ -92,7 +93,10 @@ test("optimaizr changelog prints this version's notes, offline", { skip }, async
     fs.readFileSync(new URL("../package.json", import.meta.url), "utf8"),
   ).version;
   assert.match(stdout, new RegExp(`optimAIzr ${version.replace(/\./g, "\\.")}`));
-  assert.match(stdout, /optimaizr statusline on/);
+  // The first bullet of this version's notes, as the changelog prints it.
+  const notes = fs.readFileSync(new URL("../../../CHANGELOG.md", import.meta.url), "utf8");
+  const lead = notes.split(`## ${version}\n`)[1].match(/^- \*\*(.+?)\*\*/m)[1];
+  assert.ok(stdout.includes(lead.replace(/`/g, "")), lead);
   assert.match(stdout, /optimaizr changelog --all/);
   // Piped output: no update notice and nothing written.
   assert.equal(fs.existsSync(path.join(home, ".optimaizr")), false);
