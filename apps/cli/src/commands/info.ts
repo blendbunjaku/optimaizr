@@ -127,7 +127,7 @@ export function cmdPrivacy(): void {
     ["Telemetry", "None. No analytics, no usage reporting, no crash reporting."],
     [
       "Agent logs",
-      "Claude Code and Codex logs are read for usage. What each tool call was given (a path, a command, the first 200 characters of anything else) is read in memory only, never stored. Prompts and answers aren't used.",
+      "Claude Code and Codex logs, and opencode's database (read-only), are read for usage. What each tool call was given (a path, a command, the first 200 characters of anything else) is read in memory only, never stored. Prompts and answers aren't used.",
     ],
     ["Usage records", `${optimaizrDir()}/events.jsonl - tokens, cost, latency, model.`],
     [

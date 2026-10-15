@@ -7,6 +7,8 @@ import {
   type Dataset,
   dim,
   ingest,
+  OPENCODE_SQLITE_WARNING,
+  OPENCODE_V2_WARNING,
   opencodeDbPath,
   type OptimizationFinding,
   red,
@@ -95,6 +97,12 @@ export function summaryOptions(args: Args): SummaryOptions {
     }
   }
   return { timeZone };
+}
+
+/** opencode history that is there but left out: on Node 20, or written by opencode 2.0. */
+export function opencodeUnread(data: Dataset): string[] {
+  if (!fs.existsSync(opencodeDbPath())) return [];
+  return data.warnings.filter((w) => w === OPENCODE_SQLITE_WARNING || w === OPENCODE_V2_WARNING);
 }
 
 export function emptyNotice(data?: Dataset): void {

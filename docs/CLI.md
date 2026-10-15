@@ -74,12 +74,13 @@ optimaizr live                 # in a second terminal while you work
 optimaizr statusline on        # Claude Code: context and cache countdown under the prompt
 ```
 
-Reads Claude Code transcripts straight from `~/.claude/projects` and Codex
-sessions from `~/.codex/sessions`. No instrumentation, no config, no production
-changes, and both land in one dataset, so Anthropic and OpenAI agent spend sit
-in the same report. The [Claude Code mod](#inside-claude-code) is optional: it
-adds switching models mid-session and `/optimaizr handoff`, and nothing above
-needs it.
+Reads Claude Code transcripts straight from `~/.claude/projects`, Codex sessions
+from `~/.codex/sessions` and opencode 1.x history from
+`~/.local/share/opencode/opencode.db` (on Node 22.13 or later). No
+instrumentation, no config, no production changes, and all three land in one
+dataset, so Anthropic and OpenAI agent spend sit in the same report. The
+[Claude Code mod](#inside-claude-code) is optional: it adds switching models
+mid-session and `/optimaizr handoff`, and nothing above needs it.
 
 ---
 
@@ -865,15 +866,15 @@ each measured change saved since it went in, at the measured rate.
 
 ## Watching live
 
-`optimaizr live` follows Claude Code, Codex and your wrapped apps as they run.
-On a terminal it keeps one status line at the bottom (calls, spend this run,
-the last call and its context, what it found, when it last checked). It says
-when a conversation's context jumps by 50K or more in one call, or passes 200K,
-with what re-reading it costs on that call, and the first time a conversation
-passes 200K it offers to compact earlier from then on. Findings come as cards
-with what happened, the change, the money and how sure it is; press **Y** to
-apply, **N** to skip, **D** for the evidence. On Ctrl-C it prints what the run
-saw and found.
+`optimaizr live` follows Claude Code, Codex, opencode and your wrapped apps as
+they run. On a terminal it keeps one status line at the bottom (calls, spend
+this run, the last call and its context, what it found, when it last checked).
+It says when a conversation's context jumps by 50K or more in one call, or
+passes 200K, with what re-reading it costs on that call, and the first time a
+Claude Code or Codex conversation passes 200K it offers to compact earlier from
+then on. Findings come as cards with what happened, the change, the money and
+how sure it is; press **Y** to apply, **N** to skip, **D** for the evidence. On
+Ctrl-C it prints what the run saw and found.
 
 It also follows each long conversation's cache (50K tokens or more). The status
 line shows the warm cache that expires first (`cache 161.0K warm 42m`, or for

@@ -18,6 +18,7 @@ import {
   ingestOpencode,
   loadSqlite,
   mapOpencodeRows,
+  OPENCODE_SQLITE_WARNING,
   OPENCODE_V2_WARNING,
   opencodeDbPath,
   readOpencodeRows,
@@ -863,6 +864,75 @@ test("a missing database warns before checking SQLite availability", async () =>
   });
   assert.equal(data.events.length, 0);
   assert.ok(data.warnings[0].startsWith("No opencode history found at"));
+});
+
+test("no opencode at the default path adds no note", async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "opencode-none-"));
+  const was = process.env.XDG_DATA_HOME;
+  process.env.XDG_DATA_HOME = dir;
+  t.after(() => {
+    if (was === undefined) delete process.env.XDG_DATA_HOME;
+    else process.env.XDG_DATA_HOME = was;
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+  const data = await ingestOpencode();
+  assert.equal(data.events.length, 0);
+  assert.deepEqual(data.warnings, []);
+});
+
+test("the profile says when opencode history was left out", (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "opencode-profile-"));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const projects = path.join(dir, ".claude", "projects", "-home-someone-project");
+  fs.mkdirSync(projects, { recursive: true });
+  const call = {
+    type: "assistant",
+    timestamp: new Date(Date.now() - 3_600_000).toISOString(),
+    sessionId: "s1",
+    cwd: "/home/someone/project",
+    message: {
+      id: "m1",
+      model: "claude-sonnet-5",
+      stop_reason: "end_turn",
+      usage: { input_tokens: 10, output_tokens: 100, cache_read_input_tokens: 5000 },
+    },
+  };
+  fs.writeFileSync(path.join(projects, "s1.jsonl"), JSON.stringify(call) + "\n");
+  const xdg = path.join(dir, ".local", "share");
+  fs.mkdirSync(path.join(xdg, "opencode"), { recursive: true });
+  const file = path.join(xdg, "opencode", "opencode.db");
+  // Left out on every Node: too old for node:sqlite, or only opencode 2.0 history.
+  if (sqlite) {
+    const db = new sqlite.DatabaseSync(file);
+    db.exec("CREATE TABLE session_v2 (id text PRIMARY KEY); INSERT INTO session_v2 VALUES ('v2');");
+    db.close();
+  } else {
+    fs.writeFileSync(file, "not sqlite");
+  }
+  const result = spawnSync(
+    process.execPath,
+    [fileURLToPath(new URL("../dist/cli.js", import.meta.url))],
+    {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        HOME: dir,
+        USERPROFILE: dir,
+        XDG_DATA_HOME: xdg,
+        CLAUDE_CONFIG_DIR: path.join(dir, ".claude"),
+        CODEX_HOME: path.join(dir, ".codex"),
+        OPTIMAIZR_DIR: path.join(dir, ".optimaizr"),
+        OPTIMAIZR_NO_UPDATE_CHECK: "1",
+        NO_COLOR: "1",
+      },
+    },
+  );
+  assert.equal(result.status, 0, result.stderr);
+  assert.doesNotMatch(result.stdout, /nothing to analyse yet/);
+  assert.ok(
+    result.stdout.includes(`note: ${sqlite ? OPENCODE_V2_WARNING : OPENCODE_SQLITE_WARNING}`),
+    result.stdout,
+  );
 });
 
 test("an existing non-database file warns, including when SQLite is unavailable", async (t) => {
