@@ -441,6 +441,8 @@ function emptyDataset(warnings: string[]): Dataset {
 export const OPENCODE_V2_WARNING =
   "opencode: history from opencode 2.0 (session_v2) isn't read yet, only 1.x sessions";
 
+export const OPENCODE_SQLITE_WARNING = "opencode history needs Node 22.13+ (node:sqlite); skipped";
+
 /**
  * opencode 2.0 writes `session_v2` and `session_message` and stops writing
  * the 1.x tables. Which of the two this database has.
@@ -458,10 +460,13 @@ export function opencodeSchema(db: SqliteDb): { v1: boolean; v2: boolean } {
 
 export async function ingestOpencode(opts: OpencodeIngestOptions = {}): Promise<Dataset> {
   const file = opts.db ?? opencodeDbPath();
-  if (!fs.existsSync(file)) return emptyDataset([`No opencode history found at ${file}`]);
+  // Most people don't use opencode, so its absence at the default path is no news.
+  if (!fs.existsSync(file)) {
+    return emptyDataset(opts.db ? [`No opencode history found at ${file}`] : []);
+  }
 
   const sqlite = await loadSqlite();
-  if (!sqlite) return emptyDataset(["opencode history needs Node 22.13+ (node:sqlite); skipped"]);
+  if (!sqlite) return emptyDataset([OPENCODE_SQLITE_WARNING]);
 
   try {
     const db = new sqlite.DatabaseSync(file, { readOnly: true });

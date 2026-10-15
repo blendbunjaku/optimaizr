@@ -31,6 +31,7 @@ import {
   limitsPath,
   load,
   loadForBudget,
+  opencodeUnread,
   readLimitHits,
   summaryOptions,
 } from "../data.js";
@@ -231,6 +232,10 @@ export async function cmdProfile(args: Args): Promise<void> {
     for (const line of note) console.log(`  ${line}`);
     console.log("");
   }
+  // Otherwise opencode spend would be missing from the totals without a word.
+  const unread = opencodeUnread(data);
+  for (const w of unread) console.log(`  ${dim(`note: ${w}`)}`);
+  if (unread.length) console.log("");
   for (const e of errors) console.log(`  ${red(`warning: ${ruleErrorWarning(e)}`)}`);
   if (errors.length) console.log("");
 }

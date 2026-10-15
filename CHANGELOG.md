@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.11.1
+
+- **opencode support.** optimAIzr reads opencode's history next to Claude
+  Code and Codex, with no setup: `~/.local/share/opencode/opencode.db`, opened
+  read-only. Every report covers it, `optimaizr live` follows it as it runs,
+  and `apply` gives the steps for its findings. Compacting earlier is still set
+  for Claude Code and Codex only. It needs Node 22.13 or later, for Node's
+  built-in SQLite.
+- **Left out, and said so.** History from opencode 2.0 isn't read yet. When
+  the database holds it, or Node is too old to open it, the report and `live`
+  say so instead of leaving it out quietly.
+- **SECURITY.md and `optimaizr privacy`** list the opencode database and what
+  is read from it: session titles and folders, the usage on each reply, and
+  tool calls without their output. Never your prompts or the replies' text.
+- **Coming from 0.10?** 0.11.0 is the one to read: `optimaizr results`
+  measures whether a change worked on your own usage, and `optimaizr sessions`
+  opens with your costliest conversations. `optimaizr changelog 0.11.0` has
+  all of it.
+
 ## 0.11.0
 
 **Did the change work? optimAIzr now measures it, on your own usage.**

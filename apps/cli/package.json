@@ -1,8 +1,8 @@
 {
   "name": "optimaizr",
-  "version": "0.11.0",
+  "version": "0.11.1",
   "private": false,
-  "description": "Spend fewer tokens on the same work. A local CLI that finds wasted tokens in Claude Code, Codex and your own API calls.",
+  "description": "Spend fewer tokens on the same work. A local CLI that finds wasted tokens in Claude Code, Codex, opencode and your own API calls.",
   "type": "module",
   "bin": {
     "optimaizr": "dist/cli.js"
@@ -51,6 +51,8 @@
     "claude",
     "claude-code",
     "claude-code-mod",
+    "codex",
+    "opencode",
     "tokens",
     "finops"
   ],

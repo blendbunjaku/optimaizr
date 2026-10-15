@@ -1,6 +1,7 @@
 # optimAIzr
 
 [![npm](https://img.shields.io/npm/v/optimaizr)](https://www.npmjs.com/package/optimaizr)
+[![GitHub stars](https://img.shields.io/github/stars/blendbunjaku/optimaizr?style=flat)](https://github.com/blendbunjaku/optimaizr/stargazers)
 [![CI](https://github.com/blendbunjaku/optimaizr/actions/workflows/ci.yml/badge.svg)](https://github.com/blendbunjaku/optimaizr/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](https://github.com/blendbunjaku/optimaizr/blob/main/LICENSE)
 [![Node](https://img.shields.io/node/v/optimaizr)](https://nodejs.org)
@@ -14,7 +15,7 @@ code. It's Claude re-reading your conversation on every call, cheap per token
 but paid again and again, and writing it into the cache again after a break, at
 up to twice the input price. optimAIzr shows
 where your tokens go, warns you before the expensive moments, and fixes what it
-can in one command. For Claude Code and Codex.
+can in one command. For Claude Code, Codex and opencode.
 
 ```bash
 npx optimaizr
@@ -148,10 +149,15 @@ cheaper model, and `/optimaizr handoff` writes a note to start fresh from.
 
 ## Works with
 
-Claude Code and Codex with no setup. Your Claude plan (Pro, Max, Team) and
-ChatGPT plan are detected. Your own app with one line,
-`optimaizr.wrap(new Anthropic())` or `new OpenAI()`, and CSV or JSON usage
-exports. Node 20.11 or later.
+Claude Code, Codex and opencode 1.x with no setup. opencode history is read
+from `~/.local/share/opencode/opencode.db` (under `$XDG_DATA_HOME` when that is
+set) and needs Node 22.13 or later. History from opencode 2.0 isn't read yet.
+Reports, `live` and the steps in `apply` cover all three;
+`apply context-compaction` changes Claude Code and Codex only.
+
+Your Claude plan (Pro, Max, Team) and ChatGPT plan are detected. Your own app
+with one line, `optimaizr.wrap(new Anthropic())` or `new OpenAI()`, and CSV or
+JSON usage exports. Node 20.11 or later.
 
 ## Recent releases
 
@@ -160,7 +166,7 @@ exports. Node 20.11 or later.
   compacting at 200K: 26% less per prompt, for 7 minutes a day waiting on
   summaries. `live` says what each turn cost and how much of your 5-hour
   window it took, and `sessions` ranks your costliest conversations the same
-  way.
+  way. In 0.11.1: opencode support.
 - **0.10** (Oct 7, 2026): a cache countdown under Claude Code's prompt, no mod
   needed. In 0.10.3: spot conversations that start heavy, and see what each
   cache write was for in `optimaizr sessions`.

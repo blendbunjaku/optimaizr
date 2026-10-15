@@ -47,6 +47,7 @@ Claude's answers or file contents, and stores none of them. It reads
 | ------------------------------------------ | --------------------------------------------------------------- |
 | `~/.claude/projects`                       | Claude Code transcripts (usage per call)                        |
 | `~/.codex/sessions`                        | Codex rollouts (usage and plan meter)                           |
+| `~/.local/share/opencode/opencode.db`      | opencode history (usage per call), opened read-only             |
 | `~/.optimaizr/*.json`                      | Your config and custom model prices                             |
 | `~/.claude.json`                           | Only your plan fields, to detect the plan                       |
 | Claude Desktop's `plan-usage-history.json` | Its 5-hour meter readings, to learn what 1% of the window costs |
@@ -59,6 +60,12 @@ first 200 characters of their input. Those are read in memory, to spot repeated
 reads and retry loops, and are never written to `~/.optimaizr`; a finding, and
 a report you write, can name the file or command it is about. Of a tool's
 result only its size is kept. Your prompts and Claude's answers are not used.
+
+opencode's database is found under `$XDG_DATA_HOME` when that is set, and read
+with Node's built-in SQLite (Node 22.13 or later). optimAIzr queries only
+session titles and folders, each reply's record (model, token counts, cost) and
+the tool calls. A tool's output stays in the database except for its length,
+and your prompts and the text of the replies are never read from it.
 
 ## What is written
 

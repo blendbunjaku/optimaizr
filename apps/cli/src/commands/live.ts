@@ -25,6 +25,7 @@ import {
   modelLabel,
   monthDay,
   PLANS,
+  OPENCODE_SQLITE_WARNING,
   OPENCODE_V2_WARNING,
   opencodeDbPath,
   opencodeSchema,
@@ -515,11 +516,7 @@ export async function cmdLive(args: Args): Promise<void> {
         /* the tail retries a database it can't open yet */
       }
     }
-    const note = !sqlite
-      ? "opencode history needs Node 22.13+ (node:sqlite); skipped"
-      : v2
-        ? OPENCODE_V2_WARNING
-        : null;
+    const note = !sqlite ? OPENCODE_SQLITE_WARNING : v2 ? OPENCODE_V2_WARNING : null;
     if (note) (json ? console.error : console.log)(`  ${dim(note)}`);
   }
 

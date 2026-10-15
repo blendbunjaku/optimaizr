@@ -149,10 +149,11 @@ cheaper model, and `/optimaizr handoff` writes a note to start fresh from.
 
 ## Works with
 
-Claude Code, Codex and opencode with no setup. opencode history is read from
-`$XDG_DATA_HOME/opencode/opencode.db`, or `~/.local/share/opencode/opencode.db`
-by default, and needs Node 22.13+. opencode support covers reporting and `live`;
-`apply` and compaction settings stay Claude Code / Codex only.
+Claude Code, Codex and opencode 1.x with no setup. opencode history is read
+from `~/.local/share/opencode/opencode.db` (under `$XDG_DATA_HOME` when that is
+set) and needs Node 22.13 or later. History from opencode 2.0 isn't read yet.
+Reports, `live` and the steps in `apply` cover all three;
+`apply context-compaction` changes Claude Code and Codex only.
 
 Your Claude plan (Pro, Max, Team) and ChatGPT plan are detected. Your own app
 with one line, `optimaizr.wrap(new Anthropic())` or `new OpenAI()`, and CSV or
@@ -165,7 +166,7 @@ JSON usage exports. Node 20.11 or later.
   compacting at 200K: 26% less per prompt, for 7 minutes a day waiting on
   summaries. `live` says what each turn cost and how much of your 5-hour
   window it took, and `sessions` ranks your costliest conversations the same
-  way.
+  way. In 0.11.1: opencode support.
 - **0.10** (Oct 7, 2026): a cache countdown under Claude Code's prompt, no mod
   needed. In 0.10.3: spot conversations that start heavy, and see what each
   cache write was for in `optimaizr sessions`.
