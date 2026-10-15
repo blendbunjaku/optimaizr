@@ -1,6 +1,7 @@
 # optimAIzr
 
 [![npm](https://img.shields.io/npm/v/optimaizr)](https://www.npmjs.com/package/optimaizr)
+[![GitHub stars](https://img.shields.io/github/stars/blendbunjaku/optimaizr?style=flat)](https://github.com/blendbunjaku/optimaizr/stargazers)
 [![CI](https://github.com/blendbunjaku/optimaizr/actions/workflows/ci.yml/badge.svg)](https://github.com/blendbunjaku/optimaizr/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](https://github.com/blendbunjaku/optimaizr/blob/main/LICENSE)
 [![Node](https://img.shields.io/node/v/optimaizr)](https://nodejs.org)
