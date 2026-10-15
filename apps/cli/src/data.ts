@@ -7,6 +7,7 @@ import {
   type Dataset,
   dim,
   ingest,
+  opencodeDbPath,
   type OptimizationFinding,
   red,
   resolveTimeZone,
@@ -96,15 +97,23 @@ export function summaryOptions(args: Args): SummaryOptions {
   return { timeZone };
 }
 
-export function emptyNotice(): void {
+export function emptyNotice(data?: Dataset): void {
   console.log("");
   console.log(`  ${bold("optimAIzr")} ${dim("| nothing to analyse yet")}`);
   console.log("");
+  // An opencode database that's there but unread is why, not a lack of data.
+  const unread = fs.existsSync(opencodeDbPath())
+    ? (data?.warnings ?? []).filter((w) => w.startsWith("opencode"))
+    : [];
+  for (const w of unread) console.log(`  ${red(`warning: ${w}`)}`);
+  if (unread.length) console.log("");
   console.log(`  ${dim("Three ways to get data in:")}`);
   console.log("");
   console.log(`  ${bold("Your coding agents")} ${dim("- no changes required")}`);
   console.log(
-    `    ${dim("optimAIzr reads Claude Code (~/.claude/projects) and Codex (~/.codex/sessions).")}`,
+    `    ${dim(
+      "optimAIzr reads Claude Code (~/.claude/projects), Codex (~/.codex/sessions) and opencode (~/.local/share/opencode).",
+    )}`,
   );
   console.log("");
   console.log(`  ${bold("Your app")} ${dim("- one line, Anthropic or OpenAI")}`);

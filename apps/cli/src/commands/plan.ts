@@ -145,7 +145,7 @@ export async function cmdCard(args: Args): Promise<void> {
   // The headline is the profile's own, so the card never quotes a different
   // monthly figure. The tiles cover the last 30 days (or --days).
   const data = await load(args);
-  if (data.events.length === 0) return emptyNotice();
+  if (data.events.length === 0) return emptyNotice(data);
   const dayOpts = summaryOptions(args);
   const { findings } = analyze(data);
   const profile = buildProfile(
@@ -189,7 +189,7 @@ export async function cmdCard(args: Args): Promise<void> {
  */
 export async function cmdProfile(args: Args): Promise<void> {
   const data = await load(args);
-  if (data.events.length === 0) return emptyNotice();
+  if (data.events.length === 0) return emptyNotice(data);
 
   const dayOpts = summaryOptions(args);
   const summary = summarize(data, dayOpts);

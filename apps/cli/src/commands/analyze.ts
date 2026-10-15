@@ -13,6 +13,7 @@ import {
   green,
   likelyMonthly,
   measureResults,
+  OPENCODE_V2_WARNING,
   recoverableAnnual,
   recoverableMonthly,
   red,
@@ -41,7 +42,7 @@ import { planLimitUsd, shareRate } from "../share.js";
 
 export async function cmdScan(args: Args): Promise<void> {
   const data = await load(args);
-  if (data.events.length === 0) return emptyNotice();
+  if (data.events.length === 0) return emptyNotice(data);
 
   const summary = summarize(data, summaryOptions(args));
   const { findings, errors } = analyze(data);
@@ -80,13 +81,17 @@ export async function cmdScan(args: Args): Promise<void> {
   for (const e of errors) console.log(`  ${red(`warning: ${ruleErrorWarning(e)}`)}`);
   if (errors.length) console.log("");
 
-  for (const w of data.warnings.slice(0, 3)) console.log(`  ${dim(`note: ${w}`)}`);
+  // History optimAIzr can't read yet goes first, or the cap could hide why calls are missing.
+  const notes = [...data.warnings].sort(
+    (a, b) => Number(b === OPENCODE_V2_WARNING) - Number(a === OPENCODE_V2_WARNING),
+  );
+  for (const w of notes.slice(0, 3)) console.log(`  ${dim(`note: ${w}`)}`);
   if (data.warnings.length) console.log("");
 }
 
 export async function cmdWaste(args: Args): Promise<void> {
   const data = await load(args);
-  if (data.events.length === 0) return emptyNotice();
+  if (data.events.length === 0) return emptyNotice(data);
   const findings = findWaste(data);
   if (args.flags.json) {
     console.log(JSON.stringify(stripFns(findings), null, 2));
@@ -101,7 +106,7 @@ export async function cmdWaste(args: Args): Promise<void> {
 
 export async function cmdTokens(args: Args): Promise<void> {
   const data = await load(args);
-  if (data.events.length === 0) return emptyNotice();
+  if (data.events.length === 0) return emptyNotice(data);
   const summary = summarize(data, summaryOptions(args));
   if (args.flags.json) {
     console.log(
@@ -130,7 +135,7 @@ export async function cmdTokens(args: Args): Promise<void> {
 
 export async function cmdReport(args: Args): Promise<void> {
   const data = await load(args);
-  if (data.events.length === 0) return emptyNotice();
+  if (data.events.length === 0) return emptyNotice(data);
   const summary = summarize(data, summaryOptions(args));
   const findings = findWaste(data);
   const out =
@@ -154,7 +159,7 @@ export async function cmdReport(args: Args): Promise<void> {
  */
 export async function cmdWhy(args: Args): Promise<void> {
   const data = await load(args);
-  if (data.events.length === 0) return emptyNotice();
+  if (data.events.length === 0) return emptyNotice(data);
 
   const tree = buildDrillTree(data, { maxRequests: num(args.flags.requests, 3) });
   const keyPath = args.positional;
@@ -189,7 +194,7 @@ export async function cmdWhy(args: Args): Promise<void> {
 /** `optimaizr recommend`: ranked actions, each with its decision state. */
 export async function cmdRecommend(args: Args): Promise<void> {
   const data = await load(args);
-  if (data.events.length === 0) return emptyNotice();
+  if (data.events.length === 0) return emptyNotice(data);
 
   const summary = summarize(data, summaryOptions(args));
   const findings = findWaste(data);
@@ -210,7 +215,7 @@ export async function cmdRecommend(args: Args): Promise<void> {
 /** `optimaizr audit`: what you spend, what's recoverable, and the top reasons. */
 export async function cmdAudit(args: Args): Promise<void> {
   const data = await load(args);
-  if (data.events.length === 0) return emptyNotice();
+  if (data.events.length === 0) return emptyNotice(data);
 
   const summary = summarize(data, summaryOptions(args));
   const findings = findWaste(data);
@@ -291,7 +296,7 @@ export async function cmdAudit(args: Args): Promise<void> {
  */
 export async function cmdSessions(args: Args): Promise<void> {
   const data = await load(args);
-  if (data.events.length === 0) return emptyNotice();
+  if (data.events.length === 0) return emptyNotice(data);
 
   const c = sessionStats(data);
   const rows = conversations(data);
@@ -309,7 +314,7 @@ export async function cmdSessions(args: Args): Promise<void> {
 /** `optimaizr metrics`: how much was analysed and found, computed locally. */
 export async function cmdMetrics(args: Args): Promise<void> {
   const data = await load(args);
-  if (data.events.length === 0) return emptyNotice();
+  if (data.events.length === 0) return emptyNotice(data);
 
   const findings = findWaste(data);
   const recs = toRecommendations(findings, data.events.length);

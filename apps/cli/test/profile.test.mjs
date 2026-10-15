@@ -272,6 +272,7 @@ function fixtureHome(records) {
   if (records) writeProjects(path.join(home, ".claude", "projects"), records);
   return {
     HOME: home,
+    XDG_DATA_HOME: path.join(home, ".local", "share"),
     CLAUDE_CONFIG_DIR: path.join(home, ".claude"),
     OPTIMAIZR_DIR: path.join(home, ".optimaizr"),
   };

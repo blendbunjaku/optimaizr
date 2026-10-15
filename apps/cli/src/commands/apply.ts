@@ -78,9 +78,11 @@ export async function cmdApply(args: Args): Promise<void> {
     process.exitCode = 1;
     return;
   }
-  // Claude Code and Codex habits have no request to replay, so no gate: the steps.
+  // Coding agents' habits have no request to replay, so no gate: the steps.
   const hit = data.events.filter(finding.affects);
-  if (hit.length > 0 && hit.every((e) => e.source === "claude-code" || e.source === "codex")) {
+  const agent = (e: (typeof hit)[number]) =>
+    e.source === "claude-code" || e.source === "codex" || e.source === "opencode";
+  if (hit.length > 0 && hit.every(agent)) {
     return printSteps(finding);
   }
 

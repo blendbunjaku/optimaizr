@@ -6,6 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { loadSqlite } from "@optimaizr/core";
 
 const execFileAsync = promisify(execFile);
 
@@ -59,6 +60,7 @@ function home(withUsage = true) {
   }
   return {
     HOME: dir,
+    XDG_DATA_HOME: path.join(dir, ".local", "share"),
     CLAUDE_CONFIG_DIR: path.join(dir, ".claude"),
     CODEX_HOME: path.join(dir, ".codex"),
     OPTIMAIZR_DIR: path.join(dir, ".optimaizr"),
@@ -108,6 +110,72 @@ test("an agent finding gives the steps, no gate, and writes no file", { skip }, 
   assert.doesNotMatch(stdout, /unverified/);
   assert.equal(fs.existsSync(path.join(env.HOME, "optimaizr-change.md")), false);
 });
+
+const sqlite = await loadSqlite();
+
+/** One opencode conversation that reads the same large file over and over. */
+function opencodeHome() {
+  const env = home(false);
+  const dir = path.join(env.XDG_DATA_HOME, "opencode");
+  fs.mkdirSync(dir, { recursive: true });
+  const db = new sqlite.DatabaseSync(path.join(dir, "opencode.db"));
+  db.exec(`
+    CREATE TABLE session (id text PRIMARY KEY, parent_id text, directory text, title text,
+      model text, time_updated integer);
+    CREATE TABLE message (id text PRIMARY KEY, session_id text, time_created integer, data text);
+    CREATE TABLE part (id text PRIMARY KEY, message_id text, session_id text,
+      time_created integer, data text);
+  `);
+  const t0 = Date.now() - 3_600_000;
+  db.prepare(
+    "INSERT INTO session VALUES ('ses_a', NULL, '/home/someone/project', 'A', NULL, ?)",
+  ).run(t0 + 40_000);
+  for (let i = 0; i < 20; i++) {
+    const at = t0 + i * 1000;
+    const mid = `msg_${String(i).padStart(2, "0")}`;
+    const message = { role: "assistant", parentID: "msg_u", modelID: "claude-sonnet-5" };
+    db.prepare("INSERT INTO message VALUES (?, 'ses_a', ?, ?)").run(
+      mid,
+      at,
+      JSON.stringify(message),
+    );
+    const read = {
+      type: "tool",
+      tool: "read",
+      callID: `c${i}`,
+      state: { status: "completed", input: { filePath: "/a.ts" }, output: "x".repeat(40_000) },
+    };
+    const step = { type: "step-finish", reason: "tool-calls", tokens: { input: 1000, output: 50 } };
+    db.prepare("INSERT INTO part VALUES (?, ?, 'ses_a', ?, ?)").run(
+      `${mid}a`,
+      mid,
+      at,
+      JSON.stringify(read),
+    );
+    db.prepare("INSERT INTO part VALUES (?, ?, 'ses_a', ?, ?)").run(
+      `${mid}b`,
+      mid,
+      at + 1,
+      JSON.stringify(step),
+    );
+  }
+  db.close();
+  return env;
+}
+
+test(
+  "an opencode finding gives the steps too, and writes no file",
+  { skip: skip || (sqlite ? false : "node:sqlite needs Node 22.13+") },
+  async () => {
+    const env = opencodeHome();
+    const { code, stdout } = await run(["apply", "repeat-tool-calls"], env);
+    assert.equal(code, 0);
+    assert.match(stdout, /What to do/);
+    assert.match(stdout, /optimaizr apply repeat-tool-calls --done/);
+    assert.doesNotMatch(stdout, /unverified/);
+    assert.equal(fs.existsSync(path.join(env.HOME, "optimaizr-change.md")), false);
+  },
+);
 
 test("--done records the change with who it covers, once", { skip }, async () => {
   const env = home();

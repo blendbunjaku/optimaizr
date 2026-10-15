@@ -82,7 +82,10 @@ export function renderStatus(s: StatusState, now = Date.now(), width = 120): str
     { text: `${blue("◉")} optimAIzr live`, keep: 9 },
   ];
   if (s.calls === 0) {
-    parts.push({ text: dim("watching for Claude Code, Codex and API calls..."), keep: 8 });
+    parts.push({
+      text: dim("watching for Claude Code, Codex, opencode and API calls..."),
+      keep: 8,
+    });
   } else {
     parts.push({ text: dim(`${active} active session${active === 1 ? "" : "s"}`), keep: 3 });
     parts.push({

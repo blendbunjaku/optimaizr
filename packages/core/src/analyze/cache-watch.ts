@@ -77,7 +77,11 @@ export function createCacheWatch(
   return {
     /** Fold in a call. Returns the cold return it was, if it was one. */
     push(e: UsageEvent): ColdResume | null {
-      if ((e.source !== "claude-code" && e.source !== "codex") || e.isSubagent) return null;
+      if (
+        (e.source !== "claude-code" && e.source !== "codex" && e.source !== "opencode") ||
+        e.isSubagent
+      )
+        return null;
       const key = `${e.sessionId}|${e.contextEpoch ?? 0}`;
       const c = conversations.get(key);
       if (!c) {

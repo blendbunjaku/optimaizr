@@ -25,5 +25,6 @@ export * from "./verify/replay.js";
 // Registering an adapter is a side effect of importing it.
 export * from "./providers/anthropic.js";
 export * from "./providers/openai.js";
+export * from "./providers/opencode.js";
 export * from "./providers/exports.js";
 export * from "./providers/shapes.js";

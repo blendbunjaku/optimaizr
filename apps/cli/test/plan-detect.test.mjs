@@ -336,7 +336,12 @@ function home({ account, config } = {}) {
     fs.mkdirSync(optimaizr, { recursive: true });
     fs.writeFileSync(path.join(optimaizr, "config.json"), JSON.stringify(config));
   }
-  return { HOME: dir, CLAUDE_CONFIG_DIR: dir, OPTIMAIZR_DIR: optimaizr };
+  return {
+    HOME: dir,
+    XDG_DATA_HOME: path.join(dir, ".local", "share"),
+    CLAUDE_CONFIG_DIR: dir,
+    OPTIMAIZR_DIR: optimaizr,
+  };
 }
 
 async function profile(env, ...flags) {

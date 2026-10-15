@@ -1,4 +1,4 @@
-import { priceFor, ratesFor } from "../pricing.js";
+import { priceFor, PROVIDERS, ratesFor } from "../pricing.js";
 import type { UsageEvent } from "../domain/types.js";
 import { contextOf } from "./tasks.js";
 
@@ -50,9 +50,12 @@ export function see(s: CacheSeen, e: UsageEvent): void {
   s.read += e.cacheReadTokens;
 }
 
-/** Codex reports no cache writes: OpenAI caches on its own and bills a miss as input. */
+/** Automatic caches bill a miss as input, with no separate cache write. */
 export function cachesOnItsOwn(e: UsageEvent): boolean {
-  return e.source === "codex";
+  return (
+    e.source === "codex" ||
+    (e.source === "opencode" && Boolean(PROVIDERS[e.provider]?.inputIncludesCacheReads))
+  );
 }
 
 /** The cache lifetime a conversation was written with, from its writes so far. */

@@ -83,7 +83,7 @@ export function turnCalls(conversation: readonly UsageEvent[], last: UsageEvent)
 export function conversations(data: Pick<Dataset, "events" | "titles">): ConversationRow[] {
   const bySession = new Map<string, UsageEvent[]>();
   for (const e of data.events) {
-    if (e.source !== "claude-code" && e.source !== "codex") continue;
+    if (e.source !== "claude-code" && e.source !== "codex" && e.source !== "opencode") continue;
     const list = bySession.get(e.sessionId);
     if (list) list.push(e);
     else bySession.set(e.sessionId, [e]);

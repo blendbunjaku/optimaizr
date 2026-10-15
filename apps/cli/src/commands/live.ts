@@ -1,3 +1,5 @@
+import fs from "node:fs";
+
 import {
   accept,
   blue,
@@ -19,9 +21,13 @@ import {
   LIVE_DEFAULTS,
   type LiveRecommendation,
   localTime,
+  loadSqlite,
   modelLabel,
   monthDay,
   PLANS,
+  OPENCODE_V2_WARNING,
+  opencodeDbPath,
+  opencodeSchema,
   planView,
   red,
   renderBudgetCrossing,
@@ -68,6 +74,7 @@ import {
   statuslineApplied,
   tailCodex,
   tailLedger,
+  tailOpencode,
   tailTranscripts,
 } from "@optimaizr/local";
 import { Args, num } from "../args.js";
@@ -371,6 +378,11 @@ export async function cmdLive(args: Args): Promise<void> {
         );
         continue;
       }
+      // Compaction settings are written for Claude Code and Codex only.
+      if (event.source === "opencode") {
+        console.log(`\n${renderContextNotice(n)}`);
+        continue;
+      }
       const agent = event.source as CompactAgent;
       const set = compactionStatus()[agent];
       if (n.kind !== "long" || offered.has(agent) || set !== null) {
@@ -486,6 +498,31 @@ export async function cmdLive(args: Args): Promise<void> {
     else console.log(`\n${renderBudgetCrossing(crossed, daysLeft)}`);
   };
 
+  const opencodeFile = opencodeDbPath();
+  const watchesOpencode = watchesAgents && fs.existsSync(opencodeFile);
+  if (watchesOpencode) {
+    const sqlite = await loadSqlite();
+    let v2 = false;
+    if (sqlite) {
+      try {
+        const db = new sqlite.DatabaseSync(opencodeFile, { readOnly: true });
+        try {
+          v2 = opencodeSchema(db).v2;
+        } finally {
+          db.close();
+        }
+      } catch {
+        /* the tail retries a database it can't open yet */
+      }
+    }
+    const note = !sqlite
+      ? "opencode history needs Node 22.13+ (node:sqlite); skipped"
+      : v2
+        ? OPENCODE_V2_WARNING
+        : null;
+    if (note) (json ? console.error : console.log)(`  ${dim(note)}`);
+  }
+
   if (!json) {
     console.log("");
     console.log(`  ${bold("optimAIzr")} ${dim("| live")}`);
@@ -540,6 +577,7 @@ export async function cmdLive(args: Args): Promise<void> {
     if (watchesAgents) {
       watching.push(claudeProjectsRoot());
       watching.push(codexSessionsRoot());
+      if (watchesOpencode) watching.push(opencodeFile);
     }
     if (source === "all" || source === "sdk") watching.push(ledgerPath());
     for (const w of watching) console.log(`  ${dim(`watching ${w}`)}`);
@@ -602,6 +640,13 @@ export async function cmdLive(args: Args): Promise<void> {
       }),
     );
     tails.push(tailCodex(onEvent, { keepAlive: true, ...(backfill > 0 ? { backfill } : {}) }));
+    tails.push(
+      tailOpencode(onEvent, {
+        keepAlive: true,
+        ...(backfill > 0 ? { backfill } : {}),
+        onTitle: (id, title) => titles.set(id, title),
+      }),
+    );
   }
 
   const detach = statusLine.attach();

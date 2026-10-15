@@ -255,6 +255,8 @@ function signatureOf(name: string, input: unknown): string {
   }
 }
 
+export { signatureOf as toolSignatureOf, targetOf as toolTargetOf };
+
 function decodeProjectDir(dirName: string): string {
   // Claude Code encodes the cwd by replacing "/" with "-", which is lossy for
   // real hyphens. Only used as a fallback; `cwd` from the records wins.

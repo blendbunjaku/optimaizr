@@ -11,10 +11,15 @@ import {
   takeSettled,
   createCodexState,
   consumeCodexLine,
+  loadSqlite,
+  mapOpencodeRows,
+  opencodeDbPath,
+  readOpencodeRows,
   type LiveOptions,
   type LiveRecommendation,
   type TranscriptState,
   type CodexState,
+  type SqliteDb,
 } from "@optimaizr/core";
 import type { CallEvent } from "@optimaizr/core";
 import { ledgerPath } from "./ledger.js";
@@ -412,4 +417,146 @@ export function tailCodex(
     onLine: (state, line) => consumeCodexLine(state, line),
     onEvent,
   });
+}
+
+/**
+ * Follow opencode's billed parts through the same reader and mapper as batch.
+ * The part-id cursor overlaps the last 30s, so writers committing out of order
+ * are still picked up; seen ids in that window keep each call to one emission.
+ * A commit landing more than 30s behind newer parts is missed.
+ */
+export function tailOpencode(
+  onEvent: (event: CallEvent) => void,
+  opts: TranscriptTailOptions & { db?: string } = {},
+): { stop: () => void; flush: () => void; ready: Promise<void> } {
+  const file = opts.db ?? opencodeDbPath();
+  const startedAt = Date.now();
+  const seen = new Set<string>();
+  const overlapMs = 30_000;
+  let cursor = "";
+  let initialized = false;
+  let db: SqliteDb | null = null;
+  let sqlite: Awaited<ReturnType<typeof loadSqlite>> = null;
+  let stopping = false;
+  let finished = false;
+  let timer: ReturnType<typeof setInterval> | undefined;
+
+  function close(): void {
+    try {
+      db?.close();
+    } catch {
+      /* a failed handle can already be closed */
+    }
+    db = null;
+  }
+
+  function partId(id: string): string {
+    return id.slice(id.lastIndexOf("#") + 1);
+  }
+
+  function poll(): void {
+    if (!sqlite || finished) return;
+    try {
+      if (!db) {
+        if (!fs.existsSync(file)) return;
+        db = new sqlite.DatabaseSync(file, { readOnly: true });
+      }
+      let from = cursor;
+      if (!initialized && !opts.backfill) {
+        const [newest] = db
+          .prepare("SELECT id, time_created FROM part ORDER BY id DESC LIMIT 1")
+          .all() as {
+          id: string;
+          time_created: number;
+        }[];
+        if (newest) {
+          const [older] = db
+            .prepare(
+              "SELECT id FROM part WHERE id <= ? AND time_created < ? ORDER BY id DESC LIMIT 1",
+            )
+            .all(newest.id, newest.time_created - overlapMs) as { id: string }[];
+          from = older?.id ?? "";
+        }
+      }
+      const parts = db
+        .prepare(
+          `SELECT id, session_id, time_created,
+           CASE WHEN json_valid(data) THEN json_extract(data, '$.type') END AS type
+         FROM part WHERE id > ? ORDER BY id`,
+        )
+        .all(from) as {
+        id: string;
+        session_id: string;
+        time_created: number;
+        type: string | null;
+      }[];
+      const sessionIds = [
+        ...new Set(
+          parts
+            .filter((p) => p.type === "step-finish" && !seen.has(`${p.session_id}#${p.id}`))
+            .map((p) => p.session_id),
+        ),
+      ];
+      const mapped = sessionIds.length
+        ? mapOpencodeRows(readOpencodeRows(db, { sessionIds }))
+        : null;
+
+      if (mapped) {
+        for (const [id, title] of Object.entries(mapped.titles)) {
+          try {
+            opts.onTitle?.(id, title);
+          } catch {
+            /* a broken renderer must not stop the stream */
+          }
+        }
+        for (const event of mapped.events) {
+          // Mapping reads whole sessions, including calls below the cursor whose
+          // seen ids have already been pruned. Those must never be replayed.
+          if (partId(event.id) <= from || seen.has(event.id)) continue;
+          seen.add(event.id);
+          if (!opts.backfill && Date.parse(event.ts) < startedAt) continue;
+          try {
+            onEvent(event);
+          } catch {
+            /* a broken consumer must not stop the stream */
+          }
+        }
+        // A step that mapped to nothing (its message unreadable) is done with too,
+        // or its session would be re-read on every poll.
+        for (const p of parts) if (p.type === "step-finish") seen.add(`${p.session_id}#${p.id}`);
+      }
+
+      const newestTime = parts.reduce((latest, p) => Math.max(latest, p.time_created), 0);
+      cursor = from;
+      for (const p of parts) {
+        if (p.time_created < newestTime - overlapMs && p.id > cursor) cursor = p.id;
+      }
+      for (const id of seen) if (partId(id) < cursor) seen.delete(id);
+      initialized = true;
+    } catch {
+      // A locked, migrating or replaced database is retried with a fresh handle.
+      close();
+    }
+  }
+
+  const ready = loadSqlite().then((open) => {
+    sqlite = open;
+    if (!open || stopping || finished) return;
+    poll();
+    timer = setInterval(poll, opts.intervalMs ?? 1000);
+    if (!opts.keepAlive && typeof timer.unref === "function") timer.unref();
+  });
+
+  return {
+    ready,
+    flush(): void {
+      poll();
+      close();
+      if (stopping) finished = true;
+    },
+    stop(): void {
+      stopping = true;
+      if (timer) clearInterval(timer);
+    },
+  };
 }

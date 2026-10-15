@@ -14,7 +14,7 @@ code. It's Claude re-reading your conversation on every call, cheap per token
 but paid again and again, and writing it into the cache again after a break, at
 up to twice the input price. optimAIzr shows
 where your tokens go, warns you before the expensive moments, and fixes what it
-can in one command. For Claude Code and Codex.
+can in one command. For Claude Code, Codex and opencode.
 
 ```bash
 npx optimaizr
@@ -114,10 +114,14 @@ cheaper model, and `/optimaizr handoff` writes a note to start fresh from.
 
 ## Works with
 
-Claude Code and Codex with no setup. Your Claude plan (Pro, Max, Team) and
-ChatGPT plan are detected. Your own app with one line,
-`optimaizr.wrap(new Anthropic())` or `new OpenAI()`, and CSV or JSON usage
-exports. Node 20.11 or later.
+Claude Code, Codex and opencode with no setup. opencode history is read from
+`$XDG_DATA_HOME/opencode/opencode.db`, or `~/.local/share/opencode/opencode.db`
+by default, and needs Node 22.13+. opencode support covers reporting and `live`;
+`apply` and compaction settings stay Claude Code / Codex only.
+
+Your Claude plan (Pro, Max, Team) and ChatGPT plan are detected. Your own app
+with one line, `optimaizr.wrap(new Anthropic())` or `new OpenAI()`, and CSV or
+JSON usage exports. Node 20.11 or later.
 
 ## Recent releases
 

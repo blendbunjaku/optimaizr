@@ -126,7 +126,7 @@ export interface UsageEvent {
   /** Stable id. The provider's message/request id where one exists. */
   id: string;
   /** Which adapter produced this. */
-  source: "sdk" | "claude-code" | "codex" | "import";
+  source: "sdk" | "claude-code" | "codex" | "opencode" | "import";
   provider: string;
   /** ISO 8601. */
   ts: string;

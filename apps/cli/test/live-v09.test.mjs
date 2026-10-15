@@ -123,6 +123,7 @@ test("optimaizr apply and undo context-compaction", { skip }, async () => {
   const env = {
     ...process.env,
     HOME: home,
+    XDG_DATA_HOME: path.join(home, ".local", "share"),
     CLAUDE_CONFIG_DIR: path.join(home, ".claude"),
     CODEX_HOME: path.join(home, ".codex"),
     OPTIMAIZR_DIR: path.join(home, ".optimaizr"),
@@ -159,6 +160,7 @@ test("optimaizr apply context-compaction --at", { skip }, async () => {
   const env = {
     ...process.env,
     HOME: home,
+    XDG_DATA_HOME: path.join(home, ".local", "share"),
     CLAUDE_CONFIG_DIR: path.join(home, ".claude"),
     CODEX_HOME: path.join(home, ".codex"),
     OPTIMAIZR_DIR: path.join(home, ".optimaizr"),
@@ -198,6 +200,7 @@ test("a point at or past the model's window is not written", { skip }, async () 
   const env = {
     ...process.env,
     HOME: home,
+    XDG_DATA_HOME: path.join(home, ".local", "share"),
     CLAUDE_CONFIG_DIR: path.join(home, ".claude"),
     CODEX_HOME: path.join(home, ".codex"),
     OPTIMAIZR_DIR: path.join(home, ".optimaizr"),
@@ -307,7 +310,7 @@ test("the status line says it is watching, then what it has seen", () => {
   const s = emptyStatus(now);
   assert.match(
     strip(renderStatus(s, now)),
-    /optimAIzr live · watching for Claude Code, Codex and API calls/,
+    /optimAIzr live · watching for Claude Code, Codex, opencode and API calls/,
   );
 
   recordCall(s, call({ cacheReadTokens: 182_000, cost: { total: 0.04, cacheRead: 0.03 } }), now);

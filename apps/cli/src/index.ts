@@ -26,6 +26,7 @@ export {
   tailLedger,
   tailTranscripts,
   tailCodex,
+  tailOpencode,
   claudeProjectsRoot,
   codexSessionsRoot,
   claudeSettingsRewriter,

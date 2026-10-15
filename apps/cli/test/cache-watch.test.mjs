@@ -305,6 +305,7 @@ function cli(home, args, stdin = "") {
       env: {
         ...process.env,
         HOME: home,
+        XDG_DATA_HOME: path.join(home, ".local", "share"),
         CLAUDE_CONFIG_DIR: path.join(home, ".claude"),
         OPTIMAIZR_DIR: path.join(home, ".optimaizr"),
         NO_COLOR: "1",

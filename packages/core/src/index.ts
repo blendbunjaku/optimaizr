@@ -39,6 +39,7 @@ export * from "./recommend/actions.js";
 export * from "./ingest/images.js";
 export * from "./ingest/claudecode.js";
 export * from "./ingest/codex.js";
+export * from "./ingest/opencode.js";
 export * from "./ingest/import.js";
 
 // Provider registry (adapters register themselves from the host package).

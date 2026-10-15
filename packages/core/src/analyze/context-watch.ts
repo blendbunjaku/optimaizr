@@ -31,7 +31,11 @@ export function createContextWatch(opts: { jump?: number; long?: number } = {}) 
 
   return {
     push(e: UsageEvent): ContextNotice[] {
-      if ((e.source !== "claude-code" && e.source !== "codex") || e.isSubagent) return [];
+      if (
+        (e.source !== "claude-code" && e.source !== "codex" && e.source !== "opencode") ||
+        e.isSubagent
+      )
+        return [];
       const key = `${e.sessionId}|${e.contextEpoch ?? 0}`;
       const context = contextOf(e);
       const before = last.get(key);
