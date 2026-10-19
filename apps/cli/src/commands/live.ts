@@ -446,17 +446,22 @@ export async function cmdLive(args: Args): Promise<void> {
       }
       // Compaction settings are written for Claude Code and Codex only.
       if (event.source === "opencode") {
-        console.log(`\n${renderContextNotice(n)}`);
+        console.log(`\n${renderContextNotice(n, titles.get(event.sessionId))}`);
         continue;
       }
       const agent = event.source as CompactAgent;
       const set = compactionStatus()[agent];
       if (n.kind !== "long" || offered.has(agent) || set !== null) {
-        console.log(`\n${renderContextNotice(n)}`);
+        console.log(`\n${renderContextNotice(n, titles.get(event.sessionId))}`);
         continue;
       }
       offered.add(agent);
-      const card = ["", renderContextNotice(n), "", ...compactQuestion(agent)].join("\n");
+      const card = [
+        "",
+        renderContextNotice(n, titles.get(event.sessionId)),
+        "",
+        ...compactQuestion(agent),
+      ].join("\n");
       if (!prompt || !interactive) {
         console.log(card);
         console.log(`  ${dim("Apply with:")} ${blue("optimaizr apply context-compaction")}`);

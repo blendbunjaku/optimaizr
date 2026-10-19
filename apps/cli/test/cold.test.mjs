@@ -63,7 +63,7 @@ test("a return after the cache expired is counted from the rewrite it recorded",
   );
   // The multipliers come from the model's own rates, not a rule of thumb.
   assert.match(finding.why, /at 2x the input rate, where reading it would have cost 0\.05x/);
-  assert.match(finding.fix, /\/optimaizr handoff/);
+  assert.match(finding.fix, /optimaizr guard on does it for you/);
   assert.ok(finding.savings.monthlyUsd > 0);
 });
 

@@ -109,6 +109,44 @@ test("the rules row agrees with what the run already printed", () => {
   assert.match(strip(renderLiveChecks(c, { now: NOW })), /2 of \d need a look/);
 });
 
+test("the model and effort are said for what they cost, never as waste", () => {
+  // A long Opus conversation at xhigh: re-reads are most of each call.
+  const long = (o = {}) =>
+    Array.from({ length: 50 }, (_, i) =>
+      call({
+        ts: new Date(NOW - (50 - i) * MIN).toISOString(),
+        effort: "xhigh",
+        cacheReadTokens: 150_000,
+        cacheWrite1hTokens: 2600,
+        outputTokens: 760,
+        thinkingTokens: 400,
+        cost: { total: 0.066, cacheRead: 0.03, cacheWrite: 0.0208, output: 0.0152 },
+        ...o,
+      }),
+    );
+  const c = liveChecks(long(), { minUsd: 0.25, now: NOW });
+  const x = byName(c);
+  assert.equal(
+    x.Model.detail,
+    "Opus 5.5 at xhigh. The same calls on Sonnet 5.5: 27% less, not half (re-reads, 45% of it, cost the same)",
+  );
+  assert.equal(
+    x.Effort.detail,
+    "xhigh: thinking was 12% of the cost ($0.40); /effort high on routine steps keeps the cache",
+  );
+  assert.ok(x.Model.note && x.Model.ok && x.Effort.note);
+  const text = strip(renderLiveChecks(c, { now: NOW }));
+  assert.match(text, /No waste found/);
+  assert.match(text, /· Model\s+Opus 5\.5 at xhigh/);
+
+  // Already on Sonnet, or thinking at high: nothing worth a line.
+  const quietChoice = byName(
+    liveChecks(long({ model: "claude-sonnet-5-5", effort: "high" }), { minUsd: 0.25, now: NOW }),
+  );
+  assert.equal(quietChoice.Model, undefined);
+  assert.equal(quietChoice.Effort, undefined);
+});
+
 test("with no calls yet it says so, and what it will check", () => {
   const text = strip(renderLiveChecks(liveChecks([], { minUsd: 0.25, now: NOW }), { now: NOW }));
   assert.match(text, /Nothing to check yet/);

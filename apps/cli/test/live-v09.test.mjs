@@ -301,6 +301,8 @@ test("a long-conversation notice prices the re-read of one call", () => {
   const text = strip(renderContextNotice(n));
   assert.match(text, /Long conversation now 230\.0K of context/);
   assert.match(text, /Every call re-reads all of it: \$0\.046 on this call alone/);
+  // Named by its title when live knows it, like the cold-cache notices.
+  assert.match(strip(renderContextNotice(n, "Fix the login flow")), /Fix the login flow/);
 });
 
 /* ------------------------------------------------------------------ *
@@ -399,17 +401,24 @@ test("the rows at the bottom: a spinner while Claude works, idle time once it wa
   assert.match(rows[0], /── now/);
   assert.match(
     rows[1],
-    /^ {2}[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] Fix the login bug\s+Claude working · 1m 15s · \$0\.200 so far · 161\.0K$/,
+    /^ {2}[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] Fix the login bug\s+Claude working · 1m 15s · \$0\.200 so far · 161\.0K · Opus 5\.5$/,
   );
   // The spinner turns between redraws.
   assert.notEqual(strip(renderNow(s, t0 + 75_500)[1])[2], rows[1][2]);
-  // A subagent's call keeps the turn going.
-  step(80_000, { isSubagent: true, stopReason: "end_turn" });
-  assert.match(strip(renderNow(s, t0 + 81_000)[1]), /Claude working · 1m 21s · \$0\.300 so far/);
+  // A subagent's call keeps the turn going, and its model is not the conversation's.
+  step(80_000, { isSubagent: true, stopReason: "end_turn", model: "claude-haiku-4-5" });
+  assert.match(
+    strip(renderNow(s, t0 + 81_000)[1]),
+    /Claude working · 1m 21s · \$0\.300 so far · 161\.0K · Opus 5\.5$/,
+  );
 
-  step(90_000, { stopReason: "end_turn" });
+  // The effort shows with the model, so one left on xhigh is seen.
+  step(90_000, { stopReason: "end_turn", effort: "xhigh" });
   rows = renderNow(s, t0 + 102_000).map(strip);
-  assert.match(rows[1], /^ {2}○ Fix the login bug\s+idle 12s · 161\.0K$/);
+  assert.match(rows[1], /^ {2}○ Fix the login bug\s+idle 12s · 161\.0K · Opus 5\.5 xhigh$/);
+  // On a narrow terminal the model goes before anything else is cut.
+  const narrow = strip(renderNow(s, t0 + 102_000, 60)[1]);
+  assert.match(narrow, /idle 12s · 161\.0K$/);
   // The next prompt starts a new turn, from its own start.
   step(200_000, { turnId: "p2", turnStartedAt: at(190_000) });
   assert.match(strip(renderNow(s, t0 + 205_000)[1]), /working · 15s · \$0\.100 so far/);

@@ -57,6 +57,9 @@ export interface ConvoNow {
   /** What it spent during this run. */
   runUsd: number;
   context: number;
+  /** The model and effort of its latest main call, not a subagent's. */
+  model?: string;
+  effort?: string | null;
 }
 
 export interface StatusState {
@@ -157,6 +160,8 @@ export function recordCall(s: StatusState, e: UsageEvent, now = Date.now()): voi
   }
   c.turnId = e.turnId;
   c.context = contextOf(e);
+  c.model = e.model;
+  c.effort = e.effort ?? null;
   c.ended = e.stopReason ? endsTurn(e) : null;
 }
 
@@ -176,10 +181,18 @@ export function nameOf(s: StatusState, id: string, c: ConvoNow): string {
   return convoName(id, c.project, s.titleOf?.(id));
 }
 
+/** "Opus 5.5 xhigh": what the conversation runs on, so a forgotten effort shows. */
+export function choiceOf(c: ConvoNow): string {
+  if (!c.model) return "";
+  const effort = c.effort && /^[a-z]{1,8}$/i.test(c.effort) ? ` ${c.effort}` : "";
+  return `${cut(modelLabel(c.model), 20)}${effort}`;
+}
+
 /** One conversation: a spinner while its agent works, its cache once it waits. */
-function row(s: StatusState, id: string, c: ConvoNow, now: number): string {
+function row(s: StatusState, id: string, c: ConvoNow, now: number, withModel = true): string {
   const color = convoColor(id);
   const name = color(cut(nameOf(s, id, c), NAME_WIDTH).padEnd(NAME_WIDTH));
+  const choice = withModel ? choiceOf(c) : "";
   if (working(c, now)) {
     const frame = SPIN[Math.floor(now / TICK_MS) % SPIN.length]!;
     const parts = [
@@ -188,6 +201,7 @@ function row(s: StatusState, id: string, c: ConvoNow, now: number): string {
       `${usd(c.turnUsd)} so far`,
     ];
     if (c.context > 0) parts.push(dim(fmtTokens(c.context)));
+    if (choice) parts.push(dim(choice));
     return `  ${color(frame)} ${name}  ${parts.join(dim(" · "))}`;
   }
   const parts = [dim(`idle ${since(now - c.lastAt)}`)];
@@ -198,6 +212,7 @@ function row(s: StatusState, id: string, c: ConvoNow, now: number): string {
     const text = left <= 0 ? "cache expired" : `cache warm ${minutesLabel(left)} more`;
     parts.push(left > 0 && left <= COUNTDOWN_MS ? yellow(text) : dim(text));
   }
+  if (choice) parts.push(dim(choice));
   return `  ${dim("○")} ${name}  ${parts.join(dim(" · "))}`;
 }
 
@@ -209,7 +224,12 @@ export function renderNow(s: StatusState, now = Date.now(), width = 120): string
       ([, a], [, b]) => Number(working(b, now)) - Number(working(a, now)) || b.lastAt - a.lastAt,
     );
   if (open.length === 0) return [];
-  const rows = open.slice(0, MAX_ROWS).map(([id, c]) => clip(row(s, id, c, now), width - 2));
+  // The model goes first on a narrow terminal, before anything is cut.
+  const fit = (id: string, c: ConvoNow) => {
+    const full = row(s, id, c, now);
+    return clip(plain(full).length <= width - 2 ? full : row(s, id, c, now, false), width - 2);
+  };
+  const rows = open.slice(0, MAX_ROWS).map(([id, c]) => fit(id, c));
   if (open.length > MAX_ROWS) rows.push(dim(`    and ${open.length - MAX_ROWS} more open`));
   const line = "─".repeat(Math.max(0, Math.min(width - 12, 64)));
   return [dim(`  ── now ${line}`), ...rows];

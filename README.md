@@ -8,7 +8,7 @@
 
 **Spend fewer tokens on the same work.**
 
-[![optimaizr live catching a cold cache return while Claude Code works. Click to watch the 42-second demo.](https://raw.githubusercontent.com/blendbunjaku/optimaizr/main/docs/demo.jpg)](https://optimaizr.com/demo)
+[![optimaizr guard holding a message to an expired cache in Claude Code while optimaizr live shows the hold. Click to watch the 47-second demo.](https://raw.githubusercontent.com/blendbunjaku/optimaizr/main/docs/demo.jpg)](https://optimaizr.com/demo)
 
 In a long Claude Code session, most of what you pay for isn't Claude writing
 code. It's Claude re-reading your conversation on every call (56% of my bill),
@@ -195,7 +195,7 @@ JSON usage exports. Node 20.11 or later.
 
 ## Recent releases
 
-- **0.12** (Oct 19, 2026): guard. The message that would write an expired
+- **0.12** (Oct 20, 2026): guard. The message that would write an expired
   cache all over again is held once, with its price (62 of those cost me
   $114.95), and `/clear` starts fresh from a short note of where it stood. Its
   first day on my machine: two held messages, $2.17 not spent. `live` shows
