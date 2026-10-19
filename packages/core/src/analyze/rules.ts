@@ -414,7 +414,7 @@ const STEP_DOWN: Record<string, string[]> = {
  * below that when there is none. Crossing vendors is a migration (SDK, auth,
  * limits, data terms), not a config change, so it's never proposed.
  */
-function downgradeTargetFor(modelId: string): ModelPrice | null {
+export function downgradeTargetFor(modelId: string): ModelPrice | null {
   const from = priceFor(modelId);
   if (!from) return null;
   const ceiling = blendedRate(from);
@@ -443,7 +443,7 @@ function listOf(items: string[]): string {
 }
 
 /** A call's recorded tokens priced on another model, on the rate card of its day. */
-function repriced(e: UsageEvent, from: ModelPrice, to: ModelPrice) {
+export function repriced(e: UsageEvent, from: ModelPrice, to: ModelPrice) {
   const now = ratesFor(from, { at: e.ts, speed: e.speed, batch: e.batch });
   const then = ratesFor(to, { at: e.ts, batch: e.batch });
   const priceWith = (r: typeof now) =>
@@ -1740,7 +1740,7 @@ function coldResume(ctx: Ctx): OptimizationFinding | null {
   const writeX = rates ? times(hour ? rates.cacheWrite1hPerM : rates.cacheWrite5mPerM) : "";
   const readX = rates ? times(rates.cachedInputPerM) : "";
   const handoff = events.some((e) => e.source === "claude-code")
-    ? " With the optimAIzr mod, /optimaizr handoff writes the note, and the next conversation after /clear starts from it."
+    ? " In Claude Code, optimaizr guard on does it for you: it holds the next message to an expired cache once, and the /clear after it starts from a note."
     : "";
   const why = auto
     ? `OpenAI keeps a conversation cached only while it is in use, and after a few idle minutes it can be gone. Come back later and the next call sends all of it again at the full input rate${readX ? `, where reading it from cache would have cost ${readX}` : ""}.`

@@ -31,14 +31,21 @@
 - **`optimaizr live`, redesigned.** It opens with a legend instead of a
   manual. The bottom keeps a row for each open conversation, each in its own
   colour: a spinner and the cost so far while Claude works, how long the cache
-  stays warm once it stops (yellow in the last 15 minutes). Under them, the
-  run's status line: what it cost, the costliest conversation, and what was
-  found. `?` shows what was checked and passed, `n` the next step for the
-  biggest finding, and `a` applies it when it is a setting optimAIzr can undo.
+  stays warm once it stops (yellow in the last 15 minutes), and the model and
+  effort it runs on. Under them, the run's status line: what it cost, the
+  costliest conversation, and what was found. `?` shows what was checked and
+  passed, `n` the next step for the biggest finding, and `a` applies it when
+  it is a setting optimAIzr can undo.
   `--notify` sends a system notification for a cache about to expire, a cold
   return, and a long turn done. Each finished turn is one line, with a second
   over 100K saying what every message re-reads first, and a cold return says
   whether you were away or Claude was waiting on a tool.
+- **What the model and effort cost.** On Opus or another top model, `?` says
+  what the same calls would cost one model down, and why it is often not half:
+  re-reading a long conversation costs the same on Opus 5.5 and Sonnet 5.5. At
+  max or xhigh it says what share went to thinking, and that `/effort` keeps
+  the cache. Both are a choice, never counted as waste, and show only when
+  they would move the bill by a tenth or more.
 - **`optimaizr results` gives a range.** The headline is measured against the
   3, 5, 7 and 14 days before, and says the range, so a drop that was already
   under way shows. Every row that got worse is marked as a trade-off, a new
@@ -68,7 +75,9 @@
   as warm. The profile's next step for a coding agent is `apply`, not
   `simulate`. The docs and the mod said a switch to low effort may
   read the conversation again without the cache. `/effort` keeps it, low too;
-  the one uncached read came from how the mod switched.
+  the one uncached read came from how the mod switched. In Claude Code, the
+  advice for coming back to a cold cache points to `optimaizr guard on`, and
+  `live` names a long conversation by its title, like its other notices.
 
 ## 0.11.1
 

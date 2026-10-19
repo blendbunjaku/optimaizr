@@ -1716,17 +1716,20 @@ export function callActivity(e: UsageEvent, width = 48): string {
  * window of minutes can't be projected to a month.
  */
 /** A context notice from `live`: a big jump in one call, or a conversation past the compaction line. */
-export function renderContextNotice(n: {
-  kind: "jump" | "long";
-  event: UsageEvent;
-  contextTokens: number;
-  added?: number;
-  rereadUsd: number;
-}): string {
+export function renderContextNotice(
+  n: {
+    kind: "jump" | "long";
+    event: UsageEvent;
+    contextTokens: number;
+    added?: number;
+    rereadUsd: number;
+  },
+  title?: string,
+): string {
   const out: string[] = [];
   const e = n.event;
   const at = new Date(e.ts).toLocaleTimeString();
-  const where = `${callSession(e)} ${dim(projectName(e.project))}`;
+  const where = convoColor(e.sessionId)(clip(convoName(e.sessionId, e.project, title), 60));
   if (n.kind === "jump") {
     out.push(
       `  ${yellow("⚠")}  ${dim(at)}  ${bold("Context jump")} ${dim(`+${fmtTokens(n.added ?? 0)} tokens in one call, now ${fmtTokens(n.contextTokens)}`)}`,
@@ -1992,14 +1995,16 @@ export function renderLiveChecks(
     return out.join("\n");
   }
   const bad = c.checks.filter((x) => !x.ok).length;
-  const head =
-    bad === 0 ? green("No waste found") : yellow(`${bad} of ${c.checks.length} need a look`);
+  // A choice, like the model, is said but never counted as waste.
+  const graded = c.checks.filter((x) => !x.note).length;
+  const head = bad === 0 ? green("No waste found") : yellow(`${bad} of ${graded} need a look`);
   out.push(
     `  ${bad === 0 ? green("✓") : yellow("⚠")}  ${dim(new Date(now).toLocaleTimeString())}  ${bold(head)} ${dim(`· the last ${c.calls} calls, ${span(c.spanMs)}`)}`,
   );
   const width = Math.max(...c.checks.map((x) => x.name.length));
   for (const x of c.checks) {
-    out.push(`        ${x.ok ? green("✓") : yellow("!")} ${pad(x.name, width)}  ${dim(x.detail)}`);
+    const mark = x.note ? dim("·") : x.ok ? green("✓") : yellow("!");
+    out.push(`        ${mark} ${pad(x.name, width)}  ${dim(x.detail)}`);
   }
   for (const s of opts.steps ?? []) {
     out.push("");

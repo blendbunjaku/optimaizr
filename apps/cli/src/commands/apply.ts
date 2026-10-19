@@ -86,7 +86,10 @@ export async function cmdApply(args: Args): Promise<void> {
   const agent = (e: (typeof hit)[number]) =>
     e.source === "claude-code" || e.source === "codex" || e.source === "opencode";
   if (hit.length > 0 && hit.every(agent)) {
-    return printSteps(finding);
+    return printSteps(
+      finding,
+      hit.some((e) => e.source === "claude-code"),
+    );
   }
 
   // The gate, resolved by the same function `verify` uses so they can't disagree.
@@ -197,7 +200,7 @@ export async function cmdApply(args: Args): Promise<void> {
  * A change only you can make in Claude Code or Codex: the steps, and how to
  * tell optimAIzr once it is made.
  */
-function printSteps(finding: ReturnType<typeof findWaste>[number]): void {
+function printSteps(finding: ReturnType<typeof findWaste>[number], claude: boolean): void {
   const done = openChanges(finding.rule).find((c) => c.how === "by-hand");
   console.log("");
   console.log(`  ${bold(finding.title)}`);
@@ -211,6 +214,13 @@ function printSteps(finding: ReturnType<typeof findWaste>[number]): void {
   if (done) {
     console.log(
       `  ${dim(`You recorded this as done on ${localDay(done.at)}. How it is going:`)} ${blue("optimaizr results")}`,
+    );
+  } else if (finding.rule === "cold-resume" && claude && guardApplied()) {
+    console.log(`  ${dim("Guard is on: it holds the next one, and /clear starts from its note.")}`);
+  } else if (finding.rule === "cold-resume" && claude) {
+    console.log(`  ${dim("Guard holds the next one for you:")} ${blue("optimaizr guard on")}`);
+    console.log(
+      `  ${dim("Or when you take the habit up:")} ${blue(`optimaizr apply ${finding.rule} --done`)}${dim(", and optimaizr results measures it from then.")}`,
     );
   } else {
     console.log(

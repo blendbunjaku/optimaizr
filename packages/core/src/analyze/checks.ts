@@ -1,4 +1,4 @@
-import { analyze, COMPACT_AT } from "./rules.js";
+import { analyze, COMPACT_AT, downgradeTargetFor, repriced } from "./rules.js";
 import { contextOf } from "./tasks.js";
 import { priceFor, ratesFor } from "../pricing.js";
 import { ruleLabel } from "../report/terminal.js";
@@ -14,6 +14,8 @@ export interface LiveCheck {
   name: string;
   ok: boolean;
   detail: string;
+  /** A choice the user made, said for what it costs, never counted as waste. */
+  note?: boolean;
 }
 
 export interface LiveChecks {
@@ -182,7 +184,96 @@ export function liveChecks(events: readonly UsageEvent[], opts: ChecksOptions): 
           : "none of them found anything",
   });
 
+  checks.push(...modelChoice(events, opts.minUsd));
   return { calls: events.length, spanMs, checks, findings: over };
+}
+
+const AGENTS = new Set(["claude-code", "codex", "opencode"]);
+/** One step down, never to low: what guard's effort suggestion would say. */
+const EFFORT_DOWN: Record<string, string> = { max: "xhigh", xhigh: "high" };
+/** Under this share of the cost, a cheaper model or effort is not worth a line. */
+const CHOICE_SHARE = 0.1;
+
+const most = <T>(items: T[]): T | undefined => {
+  const counts = new Map<T, number>();
+  for (const x of items) counts.set(x, (counts.get(x) ?? 0) + 1);
+  return [...counts].sort((a, b) => b[1] - a[1])[0]?.[0];
+};
+
+/**
+ * The model and effort most of the agent spend went to, said only when a
+ * cheaper choice would have moved the bill: the same calls priced one model
+ * down, and what thinking cost at max or xhigh.
+ */
+function modelChoice(events: readonly UsageEvent[], minUsd: number): LiveCheck[] {
+  const spend = new Map<string, number>();
+  for (const e of events) {
+    if (AGENTS.has(e.source)) spend.set(e.model, (spend.get(e.model) ?? 0) + e.cost.total);
+  }
+  const top = [...spend].sort((a, b) => b[1] - a[1])[0];
+  const from = top ? priceFor(top[0]) : null;
+  if (!top || !from) return [];
+  const calls = events.filter((e) => AGENTS.has(e.source) && e.model === top[0]);
+  const total = top[1];
+  const effort = most(calls.map((e) => e.effort).filter((x): x is string => !!x));
+  const out: LiveCheck[] = [];
+
+  // Only from the top tier: a balanced model down to a fast one is not a like-for-like.
+  const to = from.tier === "frontier" ? downgradeTargetFor(top[0]) : null;
+  if (to && total > 0) {
+    let before = 0;
+    let after = 0;
+    let reads = 0;
+    for (const e of calls) {
+      const p = repriced(e, from, to);
+      before += p.before;
+      after += p.after;
+      reads += e.cost.cacheRead;
+    }
+    const saved = before - after;
+    if (before > 0 && saved >= minUsd && saved / before >= CHOICE_SHARE) {
+      const last = calls.at(-1)!.ts;
+      const a = ratesFor(from, { at: last });
+      const b = ratesFor(to, { at: last });
+      // On a long conversation most of the bill is re-reading it, which a
+      // cheaper model may not price any lower.
+      const readShare = reads / total;
+      const sameReads = Math.abs(a.cachedInputPerM - b.cachedInputPerM) < 1e-9;
+      const half = Math.abs(b.inputPerM / a.inputPerM - 0.5) < 0.05;
+      const why =
+        sameReads && readShare >= 0.2
+          ? `${half ? ", not half" : ""} (re-reads, ${Math.round(readShare * 100)}% of it, cost the same)`
+          : "";
+      out.push({
+        name: "Model",
+        ok: true,
+        note: true,
+        detail: `${from.label}${effort ? ` at ${effort}` : ""}. The same calls on ${to.label}: ${Math.round((saved / before) * 100)}% less${why}`,
+      });
+    }
+  }
+
+  const down = effort ? EFFORT_DOWN[effort] : undefined;
+  if (down && total > 0) {
+    let thinking = 0;
+    for (const e of calls) {
+      if (e.thinkingTokens > 0 && e.outputTokens > 0) {
+        thinking += e.cost.output * Math.min(1, e.thinkingTokens / e.outputTokens);
+      }
+    }
+    const share = thinking / total;
+    if (thinking >= minUsd && share >= CHOICE_SHARE) {
+      const claude = calls.some((e) => e.source === "claude-code");
+      const hint = claude ? `; /effort ${down} on routine steps keeps the cache` : "";
+      out.push({
+        name: "Effort",
+        ok: true,
+        note: true,
+        detail: `${effort}: thinking was ${Math.round(share * 100)}% of the cost (${money(thinking)})${hint}`,
+      });
+    }
+  }
+  return out;
 }
 
 /** What to do about a finding: now, in the session, and next time. */

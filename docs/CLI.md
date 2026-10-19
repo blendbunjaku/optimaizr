@@ -941,21 +941,33 @@ working ones first, and the status line under them:
 
 ```
   ── now ─────────────────────────────────────────────────────────
-  ⠹ Billing webhooks          Claude working · 1m 12s · $0.21 so far · 161K
-  ○ Release notes             idle 6m · 98K · cache warm 54m more
+  ⠹ Billing webhooks          Claude working · 1m 12s · $0.21 so far · 161K · Opus 5.5 xhigh
+  ○ Release notes             idle 6m · 98K · cache warm 54m more · Sonnet 5.5 high
   ◉ optimAIzr live · $4.80 this run · 37 calls · most: Billing webhooks $3.90 · nothing found yet (? why) · watching ⣾
 ```
 
 A working conversation has a spinner and what the turn has cost so far. An
 idle one says how long its cache stays warm (yellow in the last 15 minutes) or
-that it expired. Each conversation keeps its colour everywhere it is named.
+that it expired. Each row ends with the model and effort of its last call, the
+first thing left out on a narrow terminal. Each conversation keeps its colour
+everywhere it is named.
 The status line says what the run has found: nothing yet (under 50 calls), no
 waste found, or how much the findings have already cost and what they still
 cost a call.
 
+Waste means money lost to a mistake: an expired cache, a whole big file, a
+retry loop, a quick job on a big model. Choosing Opus for hard work is not
+one, so `?` says it apart, marked `·`, and only when it would move the bill by
+a tenth or more:
+
+```
+        · Model    Opus 5.5 at xhigh. The same calls on Sonnet 5.5: 31% less, not half (re-reads, 39% of it, cost the same)
+        · Effort   xhigh: thinking was 13% of the cost ($1.79); /effort high on routine steps keeps the cache
+```
+
 | Key | What it does                                                                                                                                                                                                                                                                        |
 | --- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `?` | What was checked and passed: the cache hit rate, context against the compaction point, how long caches stay warm, cold returns, tool errors, models. It also prints once at 50 calls and when you stop.                                                                             |
+| `?` | What was checked and passed: the cache hit rate, context against the compaction point, how long caches stay warm, cold returns, tool errors, and on a top model what the model and effort cost. It also prints once at 50 calls and when you stop.                                  |
 | `n` | The next step for the biggest finding: what it has already cost, what it still costs a call, and what to do now and next time. With nothing found, the costliest conversation this run, what each message re-reads, and `/compact` against `/clear` (`/new` in Codex and opencode). |
 | `a` | Applies that step when it is a setting optimAIzr can undo (guard, compacting earlier), after a Y/N. With `--dry-run` it says what it would change.                                                                                                                                  |
 
