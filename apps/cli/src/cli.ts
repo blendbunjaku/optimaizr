@@ -15,6 +15,7 @@ import {
 } from "./commands/analyze.js";
 import { cmdApply, cmdShow, cmdSimulate } from "./commands/apply.js";
 import { cmdChangelog } from "./commands/changelog.js";
+import { cmdGuard, cmdGuardHook } from "./commands/guard.js";
 import { cmdImport } from "./commands/import.js";
 import {
   cmdFeedback,
@@ -41,12 +42,14 @@ async function main(): Promise<void> {
   // (which would fall back to `profile`) and before loading config, so a broken
   // config file can't break --help.
   const first = args.command;
-  if (args.flags.help || first === "help" || first === "-h") return cmdHelp();
+  if (args.flags.help || first === "help" || first === "-h") return cmdHelp(helpTopic(args));
   if (args.flags.version || first === "version" || first === "-v") return cmdVersion();
   // The detached background half of the update check: no output, ever.
   if (first === "__update-check") return runUpdateCheck();
   // Claude Code runs this every few seconds: no config, no update check.
   if (first === "statusline" && args.positional.length === 0) return cmdStatusline();
+  // And this before each message and tool call, while guard is on.
+  if (first === "guard" && args.positional[0] === "hook") return cmdGuardHook();
 
   initConfig();
   await run(args);
@@ -57,6 +60,14 @@ async function main(): Promise<void> {
     configured: activeConfig().updateCheck,
   });
   if (enabled && process.argv[1]) afterCommand(process.argv[1]);
+}
+
+/** `help live`, `live --help`, `--help all`: which page of help to print. */
+function helpTopic(args: ReturnType<typeof parseArgs>): string | undefined {
+  if (args.command === "help" || args.command === "-h") return args.positional[0];
+  if (typeof args.flags.help === "string") return args.flags.help;
+  // A bare `optimaizr --help` parses as the default command, profile.
+  return args.command === "profile" ? undefined : args.command;
 }
 
 async function run(args: ReturnType<typeof parseArgs>): Promise<void> {
@@ -85,6 +96,8 @@ async function run(args: ReturnType<typeof parseArgs>): Promise<void> {
       return cmdSessions(args);
     case "statusline":
       return cmdStatuslineSwitch(args);
+    case "guard":
+      return cmdGuard(args);
     case "limit":
       return cmdLimit(args);
     case "card":

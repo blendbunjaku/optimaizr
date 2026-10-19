@@ -163,6 +163,11 @@ export interface Summary {
 
   /** Latency percentiles in ms, for calls that recorded them. */
   latency: { p50: number; p95: number; count: number } | null;
+
+  /** Calls on models with no price card here, counted at $0, busiest model first. */
+  unpriced: { calls: number; models: string[] };
+  /** Calls with no card here priced from the agent's own figure (opencode's). */
+  stated: { calls: number; usd: number };
 }
 
 function newBucket(key: string): Bucket {
@@ -237,6 +242,8 @@ export function summarize(data: Dataset, opts: SummaryOptions = {}): Summary {
   let webSearches = 0;
   let thinkingCost = 0;
   const latencies: number[] = [];
+  const unpricedBy = new Map<string, number>();
+  const stated = { calls: 0, usd: 0 };
 
   for (const e of data.events) {
     cost = addCost(cost, e.cost);
@@ -253,6 +260,11 @@ export function summarize(data: Dataset, opts: SummaryOptions = {}): Summary {
       thinkingCost += e.cost.output * (e.thinkingTokens / e.outputTokens);
     }
     if (typeof e.latencyMs === "number") latencies.push(e.latencyMs);
+    if (e.cost.unpriced) unpricedBy.set(e.model, (unpricedBy.get(e.model) ?? 0) + 1);
+    if (e.cost.stated) {
+      stated.calls++;
+      stated.usd += e.cost.total;
+    }
 
     push(byModel, e.model, e);
     push(byProvider, e.provider ?? "unknown", e);
@@ -340,5 +352,10 @@ export function summarize(data: Dataset, opts: SummaryOptions = {}): Summary {
           count: latencies.length,
         }
       : null,
+    unpriced: {
+      calls: [...unpricedBy.values()].reduce((a, b) => a + b, 0),
+      models: [...unpricedBy].sort((a, b) => b[1] - a[1]).map(([m]) => m),
+    },
+    stated,
   };
 }

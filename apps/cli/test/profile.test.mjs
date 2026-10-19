@@ -139,8 +139,9 @@ test("profile figures are the engine's figures, not new ones", async () => {
   );
   assert.equal(profile.bottleneck?.id, recs[0].id);
   // The screen leads with the biggest win of any tier, and the next step follows it.
+  // These are Claude Code calls, so the step is apply's, not an SDK simulation.
   const lead = profile.biggestWin?.recommendation ?? recs[0];
-  assert.equal(profile.nextCommand, `optimaizr simulate ${lead.id}`);
+  assert.equal(profile.nextCommand, `optimaizr apply ${lead.id}`);
 });
 
 test("flagged calls are the union of what clear-waste findings counted", async () => {
@@ -297,7 +298,7 @@ test("profile prints the snapshot and writes nothing", { skip }, async () => {
   assert.equal(code, 0);
   assert.match(stdout, /optimAIzr \| profile/);
   assert.match(stdout, /Biggest win/);
-  assert.match(stdout, /optimaizr simulate [a-z-]+/);
+  assert.match(stdout, /optimaizr apply [a-z-]+/);
   assert.equal(fs.existsSync(env.OPTIMAIZR_DIR), false, "profile must not create state");
 });
 
@@ -311,7 +312,7 @@ test("profile --json is machine-readable and matches the text", { skip }, async 
   assert.ok(p.savingsMonthlyUsd > 0);
   assert.equal(
     p.nextCommand,
-    `optimaizr simulate ${(p.biggestWin?.recommendation ?? p.bottleneck).id}`,
+    `optimaizr apply ${(p.biggestWin?.recommendation ?? p.bottleneck).id}`,
   );
   assert.deepEqual(p.errors, []);
 });
@@ -325,7 +326,25 @@ test("profile with no usage data explains how to get some", { skip }, async () =
   assert.match(stdout, /optimaizr import/);
 });
 
-test("help lists profile", { skip }, async () => {
-  const { stdout } = await runCli(["--help"], fixtureHome(null));
-  assert.match(stdout, /optimaizr profile/);
+test("help keeps the older views under help all", { skip }, async () => {
+  const short = (await runCli(["--help"], fixtureHome(null))).stdout;
+  assert.match(short, /optimaizr live/);
+  assert.doesNotMatch(short, /optimaizr scan/);
+  assert.match(short, /optimaizr help all/);
+
+  const all = (await runCli(["help", "all"], fixtureHome(null))).stdout;
+  assert.match(all, /optimaizr profile/);
+  assert.match(all, /optimaizr scan/);
+  assert.match(all, /optimaizr verify/);
+});
+
+test("a command's --help shows its own flags", { skip }, async () => {
+  const { code, stdout } = await runCli(["live", "--help"], fixtureHome(null));
+  assert.equal(code, 0);
+  assert.match(stdout, /--backfill N/);
+  assert.match(stdout, /--days N/);
+
+  // An alias finds the same page; a command that reads no usage skips --days.
+  assert.match((await runCli(["help", "watch"], fixtureHome(null))).stdout, /--backfill N/);
+  assert.doesNotMatch((await runCli(["privacy", "--help"], fixtureHome(null))).stdout, /--days/);
 });

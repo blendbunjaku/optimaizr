@@ -2,14 +2,17 @@ import fs from "node:fs";
 
 import {
   accept,
+  BIG_CONVERSATION,
   blue,
   bold,
+  type BiggestNow,
   type BudgetStatus,
   budgetStatus,
   callActivity,
   type CallEvent,
   codexPlanView,
   COMPACT_AT,
+  contextOf,
   createBudgetTracker,
   createCacheWatch,
   createContextWatch,
@@ -19,7 +22,10 @@ import {
   endsTurn,
   green,
   LIVE_DEFAULTS,
+  liveChecks,
+  type LiveNextStep,
   type LiveRecommendation,
+  liveStep,
   localTime,
   loadSqlite,
   modelLabel,
@@ -35,14 +41,19 @@ import {
   renderCacheExpiring,
   renderCodexCrossing,
   renderColdReturn,
+  renderGuardCatch,
   renderContextNotice,
+  renderLiveChecks,
   renderLiveRecommendation,
+  renderNextStep,
   renderSessionCrossing,
   renderTurnDone,
+  rereadFloor,
   resetTime,
   turnCalls,
   usd,
   windowLabel,
+  workLabel,
   workMs,
   wrap as wrapText,
   yellow,
@@ -50,29 +61,32 @@ import {
 import {
   activeModSessions,
   applyCompaction,
+  applyGuard,
   autoEligible,
+  canNotify,
   type CompactAgent,
   compactionApplied,
   compactionStatus,
   undoCompaction,
   claudeModRewriter,
-  claudeProjectsRoot,
   claudeSettingsRewriter,
-  codexSessionsRoot,
   createLiveSession,
   describeClaudeOverride,
   latestClaudeWindows,
-  ledgerPath,
   type ModelOverride,
+  guardApplied,
+  notify,
   openChanges,
   overrideEntry,
   overridesPath,
+  ownCommand,
   readOverrides,
   recordChange,
   recordUndo,
   removeOverrides,
   sdkOverrideRewriter,
   statuslineApplied,
+  tailReceipts,
   tailCodex,
   tailLedger,
   tailOpencode,
@@ -82,8 +96,18 @@ import { Args, num } from "../args.js";
 import { budgetOf, planNote, resolvePlan } from "../config.js";
 import { load, readLimitHits, summaryOptions } from "../data.js";
 import { createLivePrompt } from "../live-prompt.js";
-import { createStatusLine, emptyStatus, recordCall, renderRunSummary } from "../live-status.js";
+import {
+  createStatusLine,
+  andList,
+  emptyStatus,
+  mostSpent,
+  nameOf,
+  QUORUM,
+  recordCall,
+  renderRunSummary,
+} from "../live-status.js";
 import { shareRate } from "../share.js";
+import { guardOff } from "./guard.js";
 import { statuslineOff } from "./statusline.js";
 
 /**
@@ -129,11 +153,16 @@ export async function cmdLive(args: Args): Promise<void> {
 
   // The line at the bottom that says it is working, and what it has seen.
   const status = emptyStatus();
+  status.keys = interactive;
   const statusLine = createStatusLine(status, { enabled: !json });
+  // The findings shown this run, by rule, for the next step under `?`.
+  const shown = new Map<string, LiveRecommendation>();
 
   // --auto: a confident model or effort finding about Claude Code is applied
   // through the mod with no question. Everything else still asks.
   const auto = Boolean(args.flags.auto);
+  // --notify: a system notification for what matters when nobody is watching.
+  const notifyOn = Boolean(args.flags.notify) && canNotify();
   const autoRewriter = claudeModRewriter({ auto: true });
   const autoTried = new Set<string>();
   const autoApply = (rec: LiveRecommendation): boolean => {
@@ -180,8 +209,14 @@ export async function cmdLive(args: Args): Promise<void> {
         ],
         render: (rec) => `\n${renderLiveRecommendation(rec, { replayed: backfill > 0 })}`,
         onExit: () => requestExit(),
-        onAsk: () => statusLine.hold(),
-        onAnswered: () => statusLine.release(),
+        onAsk: () => {
+          keys.off();
+          statusLine.hold();
+        },
+        onAnswered: () => {
+          statusLine.release();
+          keys.on();
+        },
       });
 
   const session = createLiveSession({
@@ -220,10 +255,12 @@ export async function cmdLive(args: Args): Promise<void> {
         }
       : {}),
     onRecommendation: (rec) => {
-      status.found.set(
-        rec.finding.rule,
-        Math.max(status.found.get(rec.finding.rule) ?? 0, rec.observedUsd),
-      );
+      const rule = rec.finding.rule;
+      if (rec.observedUsd >= (status.found.get(rule) ?? 0)) {
+        status.found.set(rule, rec.observedUsd);
+        status.perCall.set(rule, rec.observedUsd / Math.max(1, rec.windowEvents));
+      }
+      shown.set(rule, rec);
       if (autoApply(rec)) return;
       if (json) {
         console.log(
@@ -320,7 +357,22 @@ export async function cmdLive(args: Args): Promise<void> {
   const showTurns = watchesAgents && !args.flags["no-turns"];
   const rate = showTurns ? shareRate(seed, { limitUsd: planNow?.limit?.usd }) : null;
   const titles = new Map(Object.entries(seedData?.titles ?? {}));
+  status.titleOf = (id) => titles.get(id);
   const convos = new Map<string, CallEvent[]>();
+  // The size line comes when a conversation is first seen big, then again
+  // each 50K it grows, so it says something new each time it shows.
+  const sizeSaid = new Map<string, number>();
+  const sayNext = (id: string, next: TurnNext | undefined): TurnNext | undefined => {
+    // Compacted below the line: the next time it is big counts as the first.
+    if (!next) {
+      sizeSaid.delete(id);
+      return undefined;
+    }
+    const step = Math.floor(next.context / SIZE_STEP);
+    const said = sizeSaid.get(id);
+    sizeSaid.set(id, step);
+    return said === undefined || step > said ? next : undefined;
+  };
   const onTurn = (event: CallEvent): void => {
     if (!showTurns || event.source !== "claude-code") return;
     let list = convos.get(event.sessionId);
@@ -340,7 +392,14 @@ export async function cmdLive(args: Args): Promise<void> {
       costUsd,
       conversation: { costUsd: list.reduce((s, e) => s + e.cost.total, 0), workMs: workMs(list) },
       usdPerPercent: rate?.usdPerPercent ?? null,
+      next: nextMessage(list, event),
     };
+    if (notifyOn && done.workMs >= DONE_ALERT_MS) {
+      notify(
+        `Claude is done: worked ${workLabel(done.workMs)}, ${usd(costUsd)}`,
+        done.title ?? `Claude Code in ${projectOf(event)}`,
+      );
+    }
     if (json) {
       const of5h = (usd: number) => (rate ? usd / rate.usdPerPercent : null);
       console.log(
@@ -352,11 +411,12 @@ export async function cmdLive(args: Args): Promise<void> {
             costUsd,
             windowPercent: of5h(costUsd),
             conversation: { ...done.conversation, windowPercent: of5h(done.conversation.costUsd) },
+            next: done.next ?? null,
           },
         }),
       );
     } else {
-      console.log(`\n${renderTurnDone(done)}`);
+      console.log(`\n${renderTurnDone({ ...done, next: sayNext(event.sessionId, done.next) })}`);
     }
   };
 
@@ -391,19 +451,7 @@ export async function cmdLive(args: Args): Promise<void> {
         continue;
       }
       offered.add(agent);
-      const name = agent === "claude-code" ? "Claude Code" : "Codex";
-      const card = [
-        "",
-        renderContextNotice(n),
-        "",
-        `  ${bold(`Compact ${name} conversations at ${Math.round(COMPACT_AT / 1000)}K from now on?`)}`,
-        `  ${dim(
-          agent === "claude-code"
-            ? `Sets CLAUDE_CODE_AUTO_COMPACT_WINDOW in ~/.claude/settings.json, from the next session.`
-            : `Sets model_auto_compact_token_limit in ~/.codex/config.toml, from the next session.`,
-        )}`,
-        `  ${dim("A summary can drop early details. Undo any time: optimaizr undo context-compaction")}`,
-      ].join("\n");
+      const card = ["", renderContextNotice(n), "", ...compactQuestion(agent)].join("\n");
       if (!prompt || !interactive) {
         console.log(card);
         console.log(`  ${dim("Apply with:")} ${blue("optimaizr apply context-compaction")}`);
@@ -429,6 +477,14 @@ export async function cmdLive(args: Args): Promise<void> {
   const onCache = (event: CallEvent): void => {
     const cold = cache.push(event);
     if (!cold) return;
+    status.cold.count++;
+    status.cold.usd += cold.rewriteUsd;
+    if (notifyOn) {
+      notify(
+        `Cold cache: ${usd(cold.rewriteUsd)}`,
+        `${titles.get(event.sessionId) ?? projectOf(event)} came back after the cache expired and wrote it again.`,
+      );
+    }
     if (json) {
       console.log(
         JSON.stringify({
@@ -444,7 +500,7 @@ export async function cmdLive(args: Args): Promise<void> {
         }),
       );
     } else {
-      console.log(`\n${renderColdReturn(cold)}`);
+      console.log(`\n${renderColdReturn(cold, titles.get(event.sessionId))}`);
     }
   };
   const expiryTimer = setInterval(() => {
@@ -464,17 +520,168 @@ export async function cmdLive(args: Args): Promise<void> {
           }),
         );
       } else {
-        console.log(`\n${renderCacheExpiring(s, now)}`);
+        console.log(`\n${renderCacheExpiring(s, now, titles.get(s.event.sessionId))}`);
+      }
+      if (notifyOn) {
+        const left = Math.max(1, Math.round(((s.expiresAt ?? now) - now) / 60_000));
+        notify(
+          `Cache expires in ${left} min`,
+          `${titles.get(s.event.sessionId) ?? projectOf(s.event)}: coming back after that costs ${usd(s.rewriteUsd)}.`,
+        );
       }
     }
   }, 15_000);
   expiryTimer.unref();
+
+  // What guard holds in Claude Code, from its log, as it happens.
+  const guardLog = watchesAgents ? tailReceipts() : null;
+  const guardTimer = setInterval(() => {
+    for (const r of guardLog?.poll() ?? []) {
+      if (json) console.log(JSON.stringify({ guard: r }));
+      else console.log(`\n${renderGuardCatch(r, { title: (id) => titles.get(id) })}`);
+    }
+  }, 3_000);
+  guardTimer.unref();
+
+  // What every check saw over the rules' window, and a step for each finding.
+  // The last hour from before the run counts too, so `?` has an answer at once.
+  const checksNow = (): string => {
+    const set = compactionStatus();
+    const at = (v: string | null) => (v && Number(v) > 0 ? Number(v) : null);
+    const window = session.window();
+    const inWindow = new Set(window.map((e) => e.id));
+    const hourAgo = new Date(Date.now() - 3_600_000).toISOString();
+    const before = seed.filter((e) => e.ts >= hourAgo && !inWindow.has(e.id));
+    const checks = liveChecks([...before, ...window], {
+      minUsd: num(args.flags["min-usd"], LIVE_DEFAULTS.minUsd),
+      compactAt: { "claude-code": at(set["claude-code"]), codex: at(set.codex) },
+      warm: cache.warm(Date.now()),
+      cold: status.cold,
+      shown: {
+        count: status.found.size,
+        usd: [...status.found.values()].reduce((t, v) => t + v, 0),
+      },
+    });
+    return renderLiveChecks(checks, { steps: stepsNow().slice(0, 2), keys: interactive });
+  };
+
+  // The findings shown this run, biggest first, each with its step. What is
+  // set already is read each time, so a step `a` just made is not offered again.
+  const stepsNow = (): LiveNextStep[] => {
+    const set = compactionStatus();
+    const ctx = {
+      guard: guardApplied(),
+      compacts: { "claude-code": set["claude-code"] !== null, codex: set.codex !== null },
+    };
+    return [...shown.values()]
+      .sort((a, b) => b.observedUsd - a.observedUsd)
+      .map((rec) => ({
+        rule: rec.finding.rule,
+        paidUsd: rec.observedUsd,
+        calls: rec.windowEvents,
+        spanMs: rec.windowMs,
+        step: liveStep(rec.finding, rec.traffic, ctx),
+      }));
+  };
+
+  // The conversation that cost this run the most, for `n` when nothing was found.
+  const biggestNow = (): BiggestNow | null => {
+    const top = mostSpent(status);
+    if (!top) return null;
+    const { id, convo } = top;
+    const list = convos.get(id);
+    const last = list?.filter((e) => !e.isSubagent).at(-1);
+    const next = list && last ? nextMessage(list, last) : undefined;
+    return {
+      sessionId: id,
+      name: nameOf(status, id, convo),
+      source: convo.source,
+      usd: convo.runUsd,
+      runUsd: status.spendUsd,
+      context: convo.context,
+      perMessageUsd: next ? next.floorUsd * (next.callsPerMessage ?? 1) : null,
+    };
+  };
+
+  // `a`: make the setting the top step names, after a yes. Anything else is
+  // something to do, not to set, and `a` says so.
+  const applyStep = (): void => {
+    const s = stepsNow().find((x) => x.step.apply);
+    if (!s) {
+      console.log(
+        `\n  ${dim(shown.size > 0 ? "No setting to make for these; n shows what to do instead." : "Nothing to apply yet; n shows a step once a finding comes up.")}`,
+      );
+      return;
+    }
+    if (!prompt) {
+      const cmd =
+        s.step.apply === "guard" ? "optimaizr guard on" : "optimaizr apply context-compaction";
+      console.log(`\n  ${dim("Apply with:")} ${blue(cmd)}`);
+      return;
+    }
+    if (s.step.apply === "guard") {
+      prompt.confirm(guardQuestion(), () => {
+        if (dryRun) return `  ${dim("Dry run: nothing was changed.")}`;
+        const r = applyGuard(ownCommand("guard hook"));
+        const tag = !r.ok ? red("Not applied") : r.changed ? green("Applied") : green("Already on");
+        return `  ${tag} ${dim(r.detail)}`;
+      });
+      return;
+    }
+    const agent = s.step.agent === "codex" ? "codex" : "claude-code";
+    prompt.confirm(["", ...compactQuestion(agent)].join("\n"), () => {
+      if (dryRun) return `  ${dim("Dry run: nothing was changed.")}`;
+      return applyCompaction([agent])
+        .map((r) => `  ${r.ok ? green("Applied") : red("Could not apply")} ${dim(r.detail)}`)
+        .join("\n");
+    });
+  };
+
+  // Between questions `?` prints the checks, `n` the next step and `a` makes
+  // its setting. Raw mode, so Ctrl-C arrives here as a key and is passed on.
+  const onKey = (buf: Buffer): void => {
+    const key = buf.toString("utf8");
+    if (key === "\u0003" || key === "\u0004") return requestExit();
+    if (key === "?" || key === "/") console.log(`\n${checksNow()}`);
+    if (key === "n" || key === "N") {
+      const top = stepsNow()[0] ?? null;
+      console.log(`\n${renderNextStep(top, { keys: true, biggest: top ? null : biggestNow() })}`);
+    }
+    if (key === "a" || key === "A") applyStep();
+  };
+  let listening = false;
+  const keys = {
+    on(): void {
+      if (!interactive || listening) return;
+      listening = true;
+      try {
+        process.stdin.setRawMode?.(true);
+      } catch {
+        /* not a tty after all */
+      }
+      process.stdin.on("data", onKey);
+      process.stdin.resume();
+    },
+    off(): void {
+      if (!listening) return;
+      listening = false;
+      process.stdin.off("data", onKey);
+      try {
+        process.stdin.setRawMode?.(false);
+      } catch {
+        /* ignore */
+      }
+      process.stdin.pause();
+    },
+  };
 
   const onEvent = (event: CallEvent): void => {
     session.onEvent(event);
     if (counted.has(event.id)) return;
     counted.add(event.id);
     recordCall(status, event);
+    // Once there is enough to judge, say once what was checked, found or not.
+    if (status.calls === QUORUM && !json) console.log(`\n${checksNow()}`);
     onTurn(event);
     onContext(event);
     onCache(event);
@@ -499,10 +706,12 @@ export async function cmdLive(args: Args): Promise<void> {
     else console.log(`\n${renderBudgetCrossing(crossed, daysLeft)}`);
   };
 
+  // The opencode tail opens its database once it appears, so opencode is
+  // watched wherever SQLite can read it, history here or not.
   const opencodeFile = opencodeDbPath();
-  const watchesOpencode = watchesAgents && fs.existsSync(opencodeFile);
-  if (watchesOpencode) {
-    const sqlite = await loadSqlite();
+  const sqlite = watchesAgents ? await loadSqlite() : null;
+  const watchesOpencode = sqlite !== null;
+  if (watchesAgents && fs.existsSync(opencodeFile)) {
     let v2 = false;
     if (sqlite) {
       try {
@@ -519,6 +728,12 @@ export async function cmdLive(args: Args): Promise<void> {
     const note = !sqlite ? OPENCODE_SQLITE_WARNING : v2 ? OPENCODE_V2_WARNING : null;
     if (note) (json ? console.error : console.log)(`  ${dim(note)}`);
   }
+
+  const watched = [
+    ...(watchesAgents ? ["Claude Code", "Codex", ...(watchesOpencode ? ["opencode"] : [])] : []),
+    ...(source === "all" || source === "sdk" ? ["API calls made through optimAIzr"] : []),
+  ];
+  status.watched = watched;
 
   if (!json) {
     console.log("");
@@ -548,7 +763,13 @@ export async function cmdLive(args: Args): Promise<void> {
           )
         : planNow.limit
           ? dim(`warns at 80% and 95% of ~${usd(planNow.limit.usd)}`)
-          : dim("limit unknown: run `optimaizr limit` when you hit it");
+          : rate?.basis === "meter"
+            ? dim(
+                `~${Math.round((c?.usd ?? 0) / rate.usdPerPercent)}% of a full window (~${usd(rate.usdPerPercent * 100)}, learned from the meter)`,
+              )
+            : statuslineApplied()
+              ? dim("limit unknown until the status line sees Claude Code's meter")
+              : dim("limit unknown: optimaizr statusline on reads it from Claude Code");
       const detected = planNow.source === "detected" ? dim(" (detected)") : "";
       console.log(
         `  ${bold(PLANS[planNow.plan].label.toLowerCase())}${detected} ${dim(where)} ${dim("·")} ${limit}`,
@@ -570,55 +791,67 @@ export async function cmdLive(args: Args): Promise<void> {
         `  ${bold(codexNow.label.toLowerCase())} ${dim(windows)} ${dim("· warns at 80% and 95%")}`,
       );
     }
-    const watching: string[] = [];
-    if (watchesAgents) {
-      watching.push(claudeProjectsRoot());
-      watching.push(codexSessionsRoot());
-      if (watchesOpencode) watching.push(opencodeFile);
-    }
-    if (source === "all" || source === "sdk") watching.push(ledgerPath());
-    for (const w of watching) console.log(`  ${dim(`watching ${w}`)}`);
+    // What is watched, and how to read what comes: a legend, not a manual.
+    const privacy = useJev
+      ? "Jev gets route metadata only, never prompts or replies."
+      : "Nothing leaves it.";
+    console.log(`  Watching ${andList(watched)} on this machine. ${dim(privacy)}`);
     if (showTurns) {
-      const basis =
-        rate?.basis === "meter"
-          ? `, share of 5h at ${usd(rate.usdPerPercent)} per 1% (learned from ${rate.windows} windows)`
-          : rate
-            ? `, share of 5h at ${usd(rate.usdPerPercent)} per 1% (your plan's estimated limit)`
-            : "";
+      const share = !rate
+        ? ""
+        : `, and its share of your 5h limit (${usd(rate.usdPerPercent)} per 1%, ${
+            rate.basis === "meter"
+              ? `learned from ${rate.windows} windows`
+              : "from your plan's estimated limit"
+          })`;
       console.log(
-        `  ${dim(`after each Claude Code turn: time and cost${basis} · --no-turns hides it`)}`,
+        `  ${dim(`Each finished turn shows below: how long Claude worked, what it cost${share}.`)}`,
       );
     }
+    const asks = interactive ? " (the clear ones ask Y/N)" : "";
+    console.log(
+      `  ${yellow("⚠")} ${dim(`worth a look${asks} ·`)} ${yellow("⏸")} ${dim("guard stepped in ·")} ${yellow("⏳")} ${dim("a cache about to expire")}`,
+    );
+    if (process.stdout.isTTY) {
+      console.log(
+        `  ${dim("At the bottom: each open conversation, working or idle, and how long its cache stays warm.")}`,
+      );
+    }
+    if (watchesAgents) {
+      console.log(
+        `  ${dim(
+          guardApplied()
+            ? "Guard is on: what it holds in Claude Code shows here."
+            : "Guard is off: optimaizr guard on holds a message to an expired cache before it is paid.",
+        )}`,
+      );
+    }
+    if (notifyOn) {
+      console.log(
+        `  ${dim("Notifications: a cache about to expire, a cold return, and a turn done after 45s or more.")}`,
+      );
+    } else if (args.flags.notify) {
+      console.log(
+        `  ${dim("Notifications are not available here; they need macOS, or notify-send on Linux.")}`,
+      );
+    }
+    const mods = watchesAgents ? activeModSessions().length : 0;
     if (watchesAgents && auto) {
       console.log(
         `  ${dim("auto: confident model and effort switches apply to Claude Code sessions running the mod, no question; p or /optimaizr off undoes")}`,
       );
-    } else if (watchesAgents && interactive) {
-      const mods = activeModSessions().length;
+    } else if (interactive && mods > 0) {
       console.log(
-        `  ${dim(
-          mods > 0
-            ? `optimAIzr mod in ${mods} Claude Code session${mods === 1 ? "" : "s"}: Y switches them from the next request`
-            : "Y reaches a running Claude Code session with the optimAIzr mod: optimaizr mod",
-        )}`,
+        `  ${dim(`optimAIzr mod in ${mods} Claude Code session${mods === 1 ? "" : "s"}: Y switches them from the next request`)}`,
       );
     }
     // Overrides from earlier runs are still active, so list them up front.
     for (const o of readOverrides()) {
       console.log(`  ${dim(`override ${describeOverride(o)} · optimaizr undo ${o.rule}`)}`);
     }
-    console.log(`  ${dim("Ctrl-C to stop")}`);
     console.log(
-      `  ${dim(
-        useJev
-          ? "jev: on - route metadata only, no prompts or completions leave this machine"
-          : "fully local - your usage never leaves this machine",
-      )}`,
+      `  ${dim(interactive ? "Keys: ? what was checked · n next step · a apply it · Ctrl-C stop" : "Ctrl-C to stop")}`,
     );
-    console.log(`  ${dim("amounts are observed over the live window, not projected to a month")}`);
-    if (interactive) {
-      console.log(`  ${dim("high-confidence findings will ask; the rest are just printed")}`);
-    }
     console.log("");
   }
 
@@ -647,12 +880,15 @@ export async function cmdLive(args: Args): Promise<void> {
   }
 
   const detach = statusLine.attach();
+  keys.on();
   await new Promise<void>((resolve) => {
     let stopping = false;
     const stop = () => {
       if (stopping) return;
       stopping = true;
+      keys.off();
       clearInterval(expiryTimer);
+      clearInterval(guardTimer);
       for (const t of tails) t.stop();
       // Emit the response still in flight, so the settle delay doesn't lose it.
       for (const t of tails) t.flush?.();
@@ -666,6 +902,7 @@ export async function cmdLive(args: Args): Promise<void> {
         if (!json) {
           console.log("");
           console.log(renderRunSummary(status));
+          if (status.calls > 0) console.log(checksNow());
           console.log("");
         }
         resolve();
@@ -675,6 +912,51 @@ export async function cmdLive(args: Args): Promise<void> {
     process.on("SIGINT", stop);
     process.on("SIGTERM", stop);
   });
+}
+
+/** A turn this long gets a notification with --notify: long enough to have looked away. */
+const DONE_ALERT_MS = 45_000;
+
+/** The size line under a turn comes back each time a conversation grows this much. */
+const SIZE_STEP = 50_000;
+
+const projectOf = (e: CallEvent) => e.project.split(/[\\/]/).pop() || e.project;
+
+/**
+ * In a big conversation, what the next message pays before any work: one call
+ * re-reading it, and the usual number of calls a message takes here.
+ */
+function nextMessage(conversation: readonly CallEvent[], last: CallEvent): TurnNext | undefined {
+  const floor = rereadFloor(last);
+  const context = contextOf(last);
+  if (floor === null || context < BIG_CONVERSATION) return undefined;
+  const main = conversation.filter((e) => !e.isSubagent);
+  const turns = main.filter(endsTurn).length;
+  return { context, floorUsd: floor, callsPerMessage: turns >= 2 ? main.length / turns : null };
+}
+type TurnNext = { context: number; floorUsd: number; callsPerMessage: number | null };
+
+function compactQuestion(agent: CompactAgent): string[] {
+  const name = agent === "claude-code" ? "Claude Code" : "Codex";
+  return [
+    `  ${bold(`Compact ${name} conversations at ${Math.round(COMPACT_AT / 1000)}K from now on?`)}`,
+    `  ${dim(
+      agent === "claude-code"
+        ? `Sets CLAUDE_CODE_AUTO_COMPACT_WINDOW in ~/.claude/settings.json, from the next session.`
+        : `Sets model_auto_compact_token_limit in ~/.codex/config.toml, from the next session.`,
+    )}`,
+    `  ${dim("A summary can drop early details. Undo any time: optimaizr undo context-compaction")}`,
+  ];
+}
+
+function guardQuestion(): string {
+  return [
+    "",
+    `  ${bold("Turn guard on?")}`,
+    `  ${dim("Sets optimAIzr's hooks in ~/.claude/settings.json, next to your own; new Claude Code")}`,
+    `  ${dim("conversations pick them up. It holds a message to an expired cache, a whole big file")}`,
+    `  ${dim("read and a retry of a failing command, once each. Undo any time: optimaizr guard off")}`,
+  ].join("\n");
 }
 
 export function describeOverride(o: ModelOverride): string {
@@ -719,12 +1001,16 @@ export function cmdUndo(args: Args): void {
   }
 
   if (rule === "statusline") return statuslineOff();
+  if (rule === "guard") return guardOff();
 
   if (!rule) {
     if (statuslineApplied()) {
       console.log(
         `  Claude Code shows the optimAIzr status line ${dim("· optimaizr statusline off")}`,
       );
+    }
+    if (guardApplied()) {
+      console.log(`  Guard's hooks are set in Claude Code ${dim("· optimaizr guard off")}`);
     }
     const set = compactionStatus();
     for (const agent of compactionApplied()) {

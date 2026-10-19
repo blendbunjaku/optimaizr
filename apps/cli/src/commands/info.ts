@@ -35,7 +35,7 @@ export function cmdGuide(): void {
   ];
 
   for (const [tier, blurb] of tiers) {
-    const models = MODELS.filter((m) => m.tier === tier);
+    const models = MODELS.filter((m) => m.tier === tier && m.listed !== false);
     if (models.length === 0) continue;
     console.log(`  ${bold(tier.toUpperCase())} ${dim(`- ${blurb}`)}`);
     for (const m of models) {
@@ -59,6 +59,17 @@ export function cmdGuide(): void {
       }
       for (const line of wrapText(m.bestFor, 62)) console.log(`      ${dim(line)}`);
     }
+    console.log("");
+  }
+  const unlisted = MODELS.filter((m) => m.listed === false);
+  if (unlisted.length > 0) {
+    const names = [...new Set(unlisted.map((m) => m.label.split(/[\s-]/)[0]))];
+    console.log(
+      `  ${dim(`Also priced, so their calls count, but not compared here: ${names.join(", ")}`)}`,
+    );
+    console.log(
+      `  ${dim(`(${unlisted.length} models, list prices from each vendor's own page).`)}`,
+    );
     console.log("");
   }
 
@@ -127,7 +138,7 @@ export function cmdPrivacy(): void {
     ["Telemetry", "None. No analytics, no usage reporting, no crash reporting."],
     [
       "Agent logs",
-      "Claude Code and Codex logs, and opencode's database (read-only), are read for usage. What each tool call was given (a path, a command, the first 200 characters of anything else) is read in memory only, never stored. Prompts and answers aren't used.",
+      "Claude Code and Codex logs, and opencode's database (read-only), are read for usage. What each tool call was given (a path, a command, the first 200 characters of anything else) is read in memory only, never stored. Prompts and answers aren't used, except for guard's handoff note.",
     ],
     ["Usage records", `${optimaizrDir()}/events.jsonl - tokens, cost, latency, model.`],
     [
@@ -142,7 +153,14 @@ export function cmdPrivacy(): void {
       "5-hour meter",
       `${optimaizrDir()}/meter.jsonl - the time and the percent each time Claude Code's 5-hour meter moves, logged by the status line. Claude Desktop's plan-usage-history.json is read too. From both, ${optimaizrDir()}/window-rate.json keeps what 1% of the window costs, for 'live' and the mod.`,
     ],
-    ["Prompt contents", "Not stored unless you explicitly enable capture."],
+    [
+      "Guard (guard on)",
+      `Reads the end of the conversation's transcript at each message and tool call, in memory. When it holds a message to an expired cache it saves a short note (the last ask, files changed, open todos, a clip of the last reply) in ${optimaizrDir()}/guard/handoffs/, read once when you /clear that conversation, then deleted; notes nobody reads go after 30 minutes. What it held goes to guard/receipts.jsonl: when, what kind, the cost, and the file or command.`,
+    ],
+    [
+      "Prompt contents",
+      "Not stored unless you explicitly enable capture, apart from guard's short-lived handoff note.",
+    ],
     ["Capture", "Off by default. Sampled, redacted and local-only when on."],
     ["Redaction", "Emails, API keys, bearer tokens and long digit runs are masked before write."],
     ["API keys", "Never read, stored or logged. verify uses your environment variable directly."],
@@ -234,97 +252,258 @@ export function cmdFeedback(): void {
   console.log("");
 }
 
-/** Every command, grouped as `--help` lists them: the everyday ones first. */
-export const HELP_GROUPS: Array<{ title: string; commands: Array<[string, string]> }> = [
+/** A command as `--help` lists it; `flags` show under `optimaizr <command> --help`. */
+export interface HelpEntry {
+  cmd: string;
+  what: string;
+  aliases?: string[];
+  flags?: Array<[string, string]>;
+  /** False for commands that read no usage, so --days and the rest mean nothing. */
+  common?: false;
+}
+
+/**
+ * Every command, grouped as `--help` lists them: the everyday ones first.
+ * Groups marked `more` show only under `optimaizr help all`; they all still run.
+ */
+export const HELP_GROUPS: Array<{ title: string; more?: boolean; commands: HelpEntry[] }> = [
   {
     title: "Start here",
     commands: [
-      ["optimaizr", "your profile: usage, waste and the biggest win"],
-      ["optimaizr live", "watch calls as they happen: cache countdown, fixes"],
-      ["optimaizr statusline on", "cache countdown and re-read cost under Claude Code's prompt"],
-      ["optimaizr sessions", "your costliest conversations and where the cost climbs"],
+      { cmd: "optimaizr", what: "your usage, waste and the biggest win" },
+      {
+        cmd: "optimaizr live",
+        what: "watch calls as they happen: cache countdown, fixes",
+        aliases: ["watch"],
+        flags: [
+          ["--backfill N", "replay the last N recorded calls first"],
+          ["--window N", "calls held in the rolling window"],
+          ["--min-usd N", "don't announce below this observed amount"],
+          ["--no-prompt", "print recommendations, never ask"],
+          ["--no-turns", "no line after each Claude Code turn"],
+          ["--notify", "system notifications: cache expiring, cold returns, long turns done"],
+          ["--auto", "apply confident switches through the Claude Code mod"],
+        ],
+      },
+      {
+        cmd: "optimaizr statusline on",
+        what: "cache countdown and re-read cost under Claude Code's prompt",
+        flags: [["off", "take it out again"]],
+        common: false,
+      },
+      {
+        cmd: "optimaizr sessions",
+        what: "your costliest conversations and where the cost climbs",
+        flags: [["--top N", "how many conversations to list (default 10)"]],
+      },
     ],
   },
   {
     title: "Change things",
     commands: [
-      ["optimaizr apply <rule>", "make the change (alone, lists what you can change)"],
-      ["optimaizr results", "did it work: the days after each change against before"],
-      ["optimaizr undo <rule>", "revert a change optimAIzr made (alone, lists them)"],
-      ["optimaizr verify <rule>", "prove a fix against your quality bar first"],
-      ["optimaizr show <rule>", "the requests a recommendation touches"],
-      ["optimaizr simulate <rule>", "what the change would cost"],
-      ["optimaizr mod", "optional Claude Code mod: mid-session switches, handoff"],
+      {
+        cmd: "optimaizr apply <rule>",
+        what: "make the change (alone, lists what you can change)",
+        flags: [
+          ["--done", "record a change you made by hand, so results can measure it"],
+          ["--at 400K", "context-compaction: where to compact, 100K to 1M"],
+          ["--agent claude|codex", "context-compaction: set it for one agent only"],
+          ["--dry-run", "context-compaction: say what would change, write nothing"],
+          ["--accept-risk", "apply a fix no replay can settle, on your own judgement"],
+        ],
+      },
+      {
+        cmd: "optimaizr guard on",
+        what: "hold a costly step once in Claude Code: expired cache, big reads, retries",
+        flags: [
+          ["off", "take its hooks out again"],
+          ["(alone)", "whether it is on, and what it held this week"],
+        ],
+      },
+      { cmd: "optimaizr results", what: "did it work: the days after each change against before" },
+      {
+        cmd: "optimaizr undo <rule>",
+        what: "revert a change optimAIzr made (alone, lists them)",
+        common: false,
+      },
+      { cmd: "optimaizr mod", what: "optional Claude Code mod: mid-session switches, handoff" },
     ],
   },
   {
-    title: "Go deeper",
+    title: "Look closer",
     commands: [
-      ["optimaizr profile", "usage, waste and your biggest bottleneck"],
-      ["optimaizr audit", "what you spend, what is recoverable"],
-      ["optimaizr scan", "spend, savings and what to do about it"],
-      ["optimaizr why", "drill into where the money actually goes"],
-      ["optimaizr recommend", "ranked actions with impact and confidence"],
-      ["optimaizr waste", "just the opportunities"],
-      ["optimaizr tokens", "token analytics and the priciest calls"],
-      ["optimaizr limit", "record a Claude session-limit hit"],
-      ["optimaizr report", "write a shareable dashboard"],
-      ["optimaizr card", "your last 30 days as an image to post"],
-      ["optimaizr import <file>", "load a CSV or JSON usage export"],
-      ["optimaizr guide", "which model for which job"],
+      {
+        cmd: "optimaizr recommend",
+        what: "ranked actions with impact and confidence",
+        aliases: ["recommendations"],
+      },
+      {
+        cmd: "optimaizr why",
+        what: "where the money goes: model, project, kind of work",
+        flags: [
+          ["<key> <key>", "open one branch, like: optimaizr why anthropic claude-opus-5-5"],
+          ["--depth N", "how many levels to print"],
+          ["--requests N", "example requests under each leaf (default 3)"],
+        ],
+      },
+      { cmd: "optimaizr show <rule>", what: "the requests a recommendation touches" },
+      {
+        cmd: "optimaizr card",
+        what: "your last 30 days as an image to post",
+        flags: [["--out FILE", "where to write it"]],
+      },
     ],
   },
   {
     title: "About",
     commands: [
-      ["optimaizr providers", "what can be read, and from where"],
-      ["optimaizr privacy", "what is collected, stored and sent"],
-      ["optimaizr metrics", "how much analysed, how much found"],
-      ["optimaizr feedback", "report a bug or a wrong number"],
-      ["optimaizr changelog", "what changed in this version (--all for every one)"],
+      {
+        cmd: "optimaizr privacy",
+        what: "what is collected, stored and sent",
+        aliases: ["security"],
+        common: false,
+      },
+      { cmd: "optimaizr feedback", what: "report a bug or a wrong number", common: false },
+      {
+        cmd: "optimaizr changelog",
+        what: "what changed in this version",
+        aliases: ["whatsnew"],
+        flags: [["--all", "every version"]],
+        common: false,
+      },
+    ],
+  },
+  {
+    title: "Other views of the same numbers",
+    more: true,
+    commands: [
+      { cmd: "optimaizr profile", what: "same as optimaizr on its own" },
+      { cmd: "optimaizr audit", what: "spend and what is recoverable, as a short summary" },
+      { cmd: "optimaizr scan", what: "spend by model and project, then the savings" },
+      { cmd: "optimaizr tokens", what: "the same as scan", aliases: ["analytics"] },
+      { cmd: "optimaizr waste", what: "only the savings, each with its fix" },
+      {
+        cmd: "optimaizr report",
+        what: "write the profile as an HTML page",
+        flags: [
+          ["--out FILE", "where to write it"],
+          ["--org NAME", "a name for the header"],
+        ],
+      },
+      { cmd: "optimaizr metrics", what: "how much was analysed and how much was found" },
+      {
+        cmd: "optimaizr limit",
+        what: "record a session-limit hit (not needed while the status line or mod runs)",
+        flags: [
+          ["--at 15:10", "record one after the fact"],
+          ["undo", "remove the last one"],
+        ],
+      },
+    ],
+  },
+  {
+    title: "For SDK and API users",
+    more: true,
+    commands: [
+      {
+        cmd: "optimaizr verify <rule>",
+        what: "replay your own requests on the cheaper option (API key)",
+      },
+      { cmd: "optimaizr simulate <rule>", what: "what the change would cost" },
+      {
+        cmd: "optimaizr import <file>",
+        what: "load a CSV or JSON usage export",
+        flags: [["--service NAME", "label for the imported rows"]],
+      },
+      {
+        cmd: "optimaizr guide",
+        what: "which model for which job, with prices",
+        aliases: ["models"],
+        common: false,
+      },
+      { cmd: "optimaizr providers", what: "what can be read, and from where", common: false },
     ],
   },
 ];
 
-/** Every command in one list, for the unknown-command guess. */
-export const HELP_COMMANDS: Array<[string, string]> = HELP_GROUPS.flatMap((g) => g.commands);
+/** Flags most commands take. The `more` ones show only under `help all`. */
+const COMMON_FLAGS: Array<[string, string, boolean?]> = [
+  ["--days N", "only the last N days"],
+  ["--project STR", "filter by project path"],
+  ["--plan NAME", "read usage as a plan: pro, max5, max20, team, team-premium"],
+  ["--budget N", "monthly cap in USD: when it runs out, what buys days"],
+  ["--why", "show every calculation and assumption"],
+  ["--json", "machine-readable output"],
+  ["--source all|agents|sdk", "which traffic to read", true],
+  ["--tz utc|local|<IANA>", "which midnight day buckets use (default utc)", true],
+];
 
-export function cmdHelp(): void {
+/** Every command in one list, for the unknown-command guess. */
+export const HELP_COMMANDS: Array<[string, string]> = HELP_GROUPS.flatMap((g) =>
+  g.commands.map((c): [string, string] => [c.cmd, c.what]),
+);
+
+/** The entry a command name or alias belongs to, like "watch" -> live. */
+export function helpEntry(name: string): HelpEntry | undefined {
+  for (const group of HELP_GROUPS) {
+    for (const entry of group.commands) {
+      const word = entry.cmd.split(" ")[1];
+      if (word === name || entry.aliases?.includes(name)) return entry;
+    }
+  }
+  return undefined;
+}
+
+function printFlags(flags: Array<[string, string]>): void {
+  const width = Math.max(...flags.map(([f]) => f.length)) + 3;
+  for (const [flag, what] of flags) console.log(`    ${flag.padEnd(width)}${dim(what)}`);
+}
+
+/**
+ * `optimaizr --help`, `help all` for every command, and `help <command>` (or
+ * `<command> --help`) for one command's own flags.
+ */
+export function cmdHelp(topic?: string): void {
+  const all = topic === "all";
+  const entry = topic && !all ? helpEntry(topic) : undefined;
   console.log("");
+  if (entry) {
+    console.log(`  ${blue(entry.cmd)} ${dim(`- ${entry.what}`)}`);
+    if (entry.aliases?.length) {
+      console.log(`  ${dim(`also: ${entry.aliases.map((a) => `optimaizr ${a}`).join(", ")}`)}`);
+    }
+    console.log("");
+    if (entry.flags?.length) {
+      printFlags(entry.flags);
+      console.log("");
+    }
+    if (entry.common !== false) {
+      console.log(`  ${dim("It also takes")}`);
+      printFlags(COMMON_FLAGS.map(([f, w]) => [f, w]));
+      console.log("");
+    }
+    return;
+  }
+
   console.log(`  ${bold("optimAIzr")} ${dim("- spend fewer tokens on the same work")}`);
   console.log("");
+  const groups = HELP_GROUPS.filter((g) => all || !g.more);
   // Pad to the longest command so a new entry can't break the column.
-  const width = Math.max(...HELP_COMMANDS.map(([c]) => c.length)) + 2;
-  for (const group of HELP_GROUPS) {
+  const width = Math.max(...groups.flatMap((g) => g.commands.map((c) => c.cmd.length))) + 2;
+  for (const group of groups) {
     console.log(`  ${bold(group.title)}`);
-    for (const [cmd, what] of group.commands) {
+    for (const { cmd, what } of group.commands) {
       console.log(`    ${blue(cmd.padEnd(width))}${dim(what)}`);
     }
     console.log("");
   }
-  console.log(`  ${dim("--why           show every calculation and assumption")}`);
-  console.log(
-    `  ${dim("--accept-risk   apply a fix no replay can settle, on your own judgement")}`,
-  );
-  console.log(
-    `  ${dim("--done          apply: record a change you made, so results can measure it")}`,
-  );
-  console.log(`  ${dim("--backfill N    live: replay the last N recorded calls first")}`);
-  console.log(`  ${dim("--window N      live: calls held in the rolling window")}`);
-  console.log(`  ${dim("--min-usd N     live: don't announce below this observed amount")}`);
-  console.log(`  ${dim("--no-prompt     live: print recommendations, never ask")}`);
-  console.log(`  ${dim("--no-turns      live: no line after each Claude Code turn")}`);
-  console.log(`  ${dim("--top N         sessions: how many conversations to list (default 10)")}`);
-  console.log(
-    `  ${dim("--auto          live: apply confident switches through the Claude Code mod")}`,
-  );
-  console.log(`  ${dim("--budget N      monthly cap in USD: when it runs out, what buys days")}`);
-  console.log(`  ${dim("--plan pro|max5|max20|team|team-premium")}`);
-  console.log(`  ${dim("                read usage as a Claude subscription: sessions, limit")}`);
-  console.log(`  ${dim("--days N        only the last N days")}`);
-  console.log(`  ${dim("--project STR   filter by project path")}`);
-  console.log(`  ${dim("--source all|agents|sdk")}`);
-  console.log(`  ${dim("--tz utc|local|<IANA>   which midnight day buckets use (default utc)")}`);
-  console.log(`  ${dim("--json          machine-readable output")}`);
+  console.log(`  ${bold("Most commands take")}`);
+  printFlags(COMMON_FLAGS.filter(([, , more]) => all || !more).map(([f, w]) => [f, w]));
+  console.log("");
+  console.log(`  ${dim("optimaizr <command> --help   that command's own flags")}`);
+  if (!all)
+    console.log(
+      `  ${dim("optimaizr help all           every command, the older views and the SDK tools")}`,
+    );
   console.log("");
 }

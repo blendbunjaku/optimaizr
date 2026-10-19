@@ -49,6 +49,8 @@ export interface LiveSession {
   onEvent: (event: CallEvent) => void;
   /** Analyse whatever is buffered, regardless of the interval. */
   flush: () => LiveRecommendation[];
+  /** The calls the rules currently look at. */
+  window: () => readonly CallEvent[];
   /** Present only when Jev was opted into, for egress inspection. */
   jev?: JevJudge;
 }
@@ -90,6 +92,7 @@ export function createLiveSession(opts: LiveSessionOptions): LiveSession {
       emit(recs);
       return recs;
     },
+    window: () => analyzer.window(),
     ...(jev ? { jev } : {}),
   };
 }

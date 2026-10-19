@@ -26,6 +26,12 @@ const REFRESH_SECONDS = 30;
 
 /** The cache state of the conversation in this transcript, from its last calls. */
 export function transcriptCacheState(file: string, maxBytes = TAIL_BYTES): CacheState | null {
+  const lines = transcriptTail(file, maxBytes);
+  return lines ? cacheStateOf(lines, file) : null;
+}
+
+/** The last lines of a transcript, whole ones only. Null when it can't be read. */
+export function transcriptTail(file: string, maxBytes = TAIL_BYTES): string[] | null {
   let fd: number | null = null;
   try {
     fd = fs.openSync(file, "r");
@@ -36,6 +42,17 @@ export function transcriptCacheState(file: string, maxBytes = TAIL_BYTES): Cache
     const lines = buf.toString("utf8").split("\n");
     // Reading from the middle starts inside a line.
     if (start > 0) lines.shift();
+    return lines;
+  } catch {
+    return null;
+  } finally {
+    if (fd !== null) fs.closeSync(fd);
+  }
+}
+
+/** The latest conversation's cache state in these transcript lines. */
+export function cacheStateOf(lines: readonly string[], file: string): CacheState | null {
+  try {
     const state = createTranscriptState();
     for (const line of lines) consumeTranscriptLine(state, line, file, 0);
     const watch = createCacheWatch();
@@ -44,8 +61,6 @@ export function transcriptCacheState(file: string, maxBytes = TAIL_BYTES): Cache
     return watch.latest();
   } catch {
     return null;
-  } finally {
-    if (fd !== null) fs.closeSync(fd);
   }
 }
 
@@ -89,7 +104,8 @@ function paths(opts: StatuslinePaths) {
   };
 }
 
-function readSettings(file: string): Record<string, unknown> | string {
+/** Claude Code's settings as an object, or why they can't be changed safely. */
+export function readSettings(file: string): Record<string, unknown> | string {
   if (!fs.existsSync(file)) return {};
   try {
     const parsed = JSON.parse(fs.readFileSync(file, "utf8"));
@@ -101,7 +117,7 @@ function readSettings(file: string): Record<string, unknown> | string {
   }
 }
 
-function writeSettings(file: string, settings: Record<string, unknown>): void {
+export function writeSettings(file: string, settings: Record<string, unknown>): void {
   fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, JSON.stringify(settings, null, 2) + "\n");
 }
@@ -125,6 +141,15 @@ export function statuslineCommand(
   script: string = process.argv[1] ?? "",
   node: string = process.execPath,
 ): string | null {
+  return ownCommand("statusline", script, node);
+}
+
+/** `"node" "cli.js" <rest>` by full path, as for the status line. Null under npx. */
+export function ownCommand(
+  rest: string,
+  script: string = process.argv[1] ?? "",
+  node: string = process.execPath,
+): string | null {
   if (!script) return null;
   let real = script;
   try {
@@ -134,7 +159,7 @@ export function statuslineCommand(
   }
   const slash = (p: string) => p.replaceAll("\\", "/");
   if (slash(real).includes("/_npx/")) return null;
-  return `"${slash(node)}" "${slash(real)}" statusline`;
+  return `"${slash(node)}" "${slash(real)}" ${rest}`;
 }
 
 export function statuslineApplied(opts: StatuslinePaths = {}): boolean {

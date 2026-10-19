@@ -17,6 +17,8 @@ export * from "./claude-account.js";
 export * from "./compaction.js";
 export * from "./changes.js";
 export * from "./statusline.js";
+export * from "./guard.js";
+export * from "./notify.js";
 export * from "./meter.js";
 // Optional, opt-in, and the only outbound path in this package.
 export * from "./jev.js";

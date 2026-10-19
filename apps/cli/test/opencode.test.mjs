@@ -120,7 +120,10 @@ test("the empty-history notice says why an opencode database wasn't read", (t) =
   );
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /nothing to analyse yet/);
-  assert.match(result.stdout, /warning: opencode(?: history needs Node 22\.13\+|\.db: )/);
+  assert.match(
+    result.stdout,
+    /warning: opencode(?: history skipped: it needs Node 22\.13 or later|\.db: )/,
+  );
 });
 
 test("a step-finish becomes one call with opencode's counts", () => {
@@ -215,7 +218,7 @@ test("model and effort fall back to the session's selection", () => {
   assert.deepEqual(out.warnings, []);
 });
 
-test("no model anywhere is priced as unknown, with a warning", () => {
+test("no model anywhere is named unknown, with a warning, and keeps opencode's cost", () => {
   const out = mapOpencodeRows(
     rows({
       sessions: [session({ model: null })],
@@ -225,7 +228,9 @@ test("no model anywhere is priced as unknown, with a warning", () => {
   );
   assert.equal(out.events[0].model, "unknown");
   assert.equal(out.events[0].effort, null);
-  assert.equal(out.events[0].cost.unpriced, true);
+  assert.equal(out.events[0].cost.unpriced, false);
+  assert.equal(out.events[0].cost.stated, true);
+  assert.equal(out.events[0].cost.total, 999);
   assert.ok(out.warnings.some((w) => w.includes("no model")));
 });
 
@@ -502,18 +507,51 @@ test("invalid message and part timestamps are skipped without losing valid calls
   assert.deepEqual(out.warnings, ["opencode: skipped 4 unparseable row(s)"]);
 });
 
-test("provider falls back for an uncatalogued model without inventing a price", () => {
+test("an uncatalogued model takes opencode's own cost, and $0 stays unpriced", () => {
+  const free = {
+    ...step("prt_2", "msg_2", TOKENS, T0 + 3000),
+    data: JSON.stringify({ type: "step-finish", reason: "stop", tokens: TOKENS, cost: 0 }),
+  };
   const out = mapOpencodeRows(
     rows({
       sessions: [session({ model: null })],
-      messages: [message("msg_1", { modelID: "gpt-6.1-sol", providerID: "openai" })],
+      messages: [
+        message("msg_1", { modelID: "gpt-6.1-sol", providerID: "openai" }),
+        message("msg_2", { modelID: "qwen3-coder-plus", providerID: "alibaba" }, T0 + 2000),
+      ],
+      parts: [step("prt_1", "msg_1", TOKENS), free],
+    }),
+  );
+  const [stated, unpriced] = out.events;
+  assert.equal(stated.provider, "openai");
+  assert.equal(stated.cost.unpriced, false);
+  assert.equal(stated.cost.stated, true);
+  assert.equal(stated.cost.total, 999);
+  // The split follows the token mix and adds back up to the stated figure.
+  const parts =
+    stated.cost.input + stated.cost.output + stated.cost.cacheRead + stated.cost.cacheWrite;
+  assert.ok(Math.abs(parts - 999) < 1e-9);
+  assert.ok(stated.cost.cacheRead > stated.cost.input);
+  // A subscription records 0: that is no price, not a free call.
+  assert.equal(unpriced.cost.unpriced, true);
+  assert.equal(unpriced.cost.total, 0);
+  assert.deepEqual(out.warnings, []);
+});
+
+test("a model with a card here ignores opencode's cost and uses the card", () => {
+  const out = mapOpencodeRows(
+    rows({
+      sessions: [session({ model: null })],
+      messages: [message("msg_1", { modelID: "glm-4.6", providerID: "zai" })],
       parts: [step("prt_1", "msg_1", TOKENS)],
     }),
   );
-  assert.equal(out.events[0].provider, "openai");
-  assert.equal(out.events[0].cost.unpriced, true);
-  assert.equal(out.events[0].cost.total, 0);
-  assert.deepEqual(out.warnings, []);
+  const e = out.events[0];
+  assert.equal(e.provider, "zai");
+  assert.equal(e.cost.stated, undefined);
+  // 1000 in at $0.60, 250 out at $2.20, 40K reads at $0.11, 3K writes billed as input.
+  const want = (1000 * 0.6 + 250 * 2.2 + 40_000 * 0.11 + 3000 * 0.6) / 1e6;
+  assert.equal(e.cost.total.toFixed(8), want.toFixed(8));
 });
 
 test("the catalogue provider wins and unrecognised provider ids stay unknown", () => {
@@ -944,7 +982,10 @@ test("an existing non-database file warns, including when SQLite is unavailable"
   assert.equal(data.events.length, 0);
   assert.equal(data.warnings.length, 1);
   if (!sqlite)
-    assert.equal(data.warnings[0], "opencode history needs Node 22.13+ (node:sqlite); skipped");
+    assert.equal(
+      data.warnings[0],
+      `opencode history skipped: it needs Node 22.13 or later, and this is Node ${process.versions.node} (nvm install 22, or update Node)`,
+    );
 });
 
 test("a database with an incompatible schema warns", { skip: noSqlite }, async (t) => {

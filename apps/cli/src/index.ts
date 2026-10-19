@@ -67,9 +67,14 @@ export { createLivePrompt, type LivePrompt, type PromptOptions } from "./live-pr
 export {
   createStatusLine,
   emptyStatus,
+  QUORUM,
+  mostSpent,
+  nameOf,
   recordCall,
+  renderNow,
   renderRunSummary,
   renderStatus,
+  type ConvoNow,
   type StatusState,
 } from "./live-status.js";
 export { newer, updateLines, updatesEnabled, type UpdateState } from "./update.js";

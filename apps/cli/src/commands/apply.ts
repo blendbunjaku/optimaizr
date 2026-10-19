@@ -43,12 +43,14 @@ import {
   logVerification,
   openChanges,
   readOverrides,
+  guardApplied,
   recordChange,
   statuslineApplied,
 } from "@optimaizr/local";
 import type { Args } from "../args.js";
 import { load } from "../data.js";
 import { describeOverride } from "./live.js";
+import { guardOn } from "./guard.js";
 import { statuslineOn } from "./statusline.js";
 
 /**
@@ -61,6 +63,7 @@ export async function cmdApply(args: Args): Promise<void> {
   const ruleName =
     args.positional[0] ?? (typeof args.flags.done === "string" ? args.flags.done : undefined);
   if (ruleName === "statusline") return statuslineOn();
+  if (ruleName === "guard") return guardOn();
   const data = await load(args);
   if (!ruleName) return listLevers(data);
   if (args.flags.done) return recordDone(args, ruleName, data);
@@ -315,6 +318,7 @@ function listLevers(data: Dataset): void {
       : off("optimaizr apply context-compaction"),
   );
   row("statusline", statuslineApplied() ? on("in Claude Code") : off("optimaizr apply statusline"));
+  row("guard", guardApplied() ? on("Claude Code hooks") : off("optimaizr guard on"));
   for (const o of readOverrides()) {
     row(o.rule, on(`${describeOverride(o)}, since ${localDay(o.at)}`));
   }

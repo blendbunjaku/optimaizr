@@ -290,7 +290,8 @@ test("the profile leads with the biggest win and says where the money goes", asy
   const win = plain.biggestWin;
   assert.equal(win.recommendation.rule, "context-compaction");
   assert.ok(Math.abs(win.moreWork - 1 / (1 - win.share)) < 1e-9);
-  assert.equal(plain.nextCommand, "optimaizr simulate context-compaction");
+  // A setting the agents' files hold: the step shows the change, writes nothing.
+  assert.equal(plain.nextCommand, "optimaizr apply context-compaction --dry-run");
 
   // Headroom is a plan's idea: only shown when there is a window to stretch.
   const text = renderProfile(plain);

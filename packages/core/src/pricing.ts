@@ -40,6 +40,11 @@ export interface RateCard {
     cachedInputPerM?: number;
     cacheWritePerM?: number;
   };
+  /**
+   * A discount outside peak hours, on weekdays by UTC clock; weekends count as
+   * off-peak. The rates above are the peak ones. DeepSeek halves off-peak.
+   */
+  offPeak?: { factor: number; peakUtc: Array<[number, number]> };
   /** Why this card exists, e.g. "introductory pricing". */
   label?: string;
 }
@@ -60,6 +65,8 @@ export interface ModelPrice {
   bestFor: string;
   /** False prices a model without proposing switches to it, e.g. one too new to vouch for. */
   switchTarget?: false;
+  /** False leaves it out of `optimaizr guide`: priced so its calls count, not recommended. */
+  listed?: false;
 }
 
 /**
@@ -103,6 +110,12 @@ export const PROVIDERS: Record<string, ProviderCachePolicy> = {
   // caching also bills storage per token-hour, which isn't tied to a request
   // and isn't counted; implicit caching (what agents hit) is modelled exactly.
   google: { read: 0.25, write5m: 1.0, write1h: 1.0, batch: 0.5, inputIncludesCacheReads: true },
+  // The providers below set an explicit cached rate on every card. DeepSeek and
+  // Z.ai bill nothing extra to write, Kimi bills a 1h write at twice input.
+  deepseek: { read: 0.02, write5m: 1.0, write1h: 1.0, batch: 1 },
+  zai: { read: 0.2, write5m: 1.0, write1h: 1.0, batch: 1 },
+  moonshot: { read: 0.1, write5m: 1.0, write1h: 2.0, batch: 1 },
+  minimax: { read: 0.2, write5m: 1.25, write1h: 1.25, batch: 1 },
 };
 
 /** Anthropic's cache multipliers, kept as a named export for readability. */
@@ -112,6 +125,7 @@ export const BATCH_MULTIPLIER = PROVIDERS.anthropic!.batch;
 const anthropicCaps: Capability[] = ["tools", "vision", "batch", "caching", "structured-output"];
 const openaiCaps: Capability[] = ["tools", "vision", "batch", "caching", "structured-output"];
 const googleCaps: Capability[] = ["tools", "vision", "batch", "caching", "structured-output"];
+const openCaps: Capability[] = ["tools", "caching", "reasoning"];
 
 /** A card whose rate changes above a prompt-size threshold. */
 function tiered(
@@ -171,6 +185,210 @@ function gpt(
   }
   return [card];
 }
+
+/**
+ * A card for a model optimAIzr prices but doesn't recommend: it costs the calls
+ * people make on it (mostly through opencode) and stays out of guide and switches.
+ */
+function openModel(
+  id: string,
+  label: string,
+  provider: string,
+  tier: Tier,
+  card: Omit<RateCard, "from">,
+  contextTokens: number,
+  maxOutputTokens: number,
+): ModelPrice {
+  return {
+    id,
+    label,
+    provider,
+    tier,
+    rates: [{ from: "2026-01-01", ...card }],
+    contextTokens,
+    maxOutputTokens,
+    capabilities: openCaps,
+    bestFor: "Priced so its calls count. Not compared or recommended here.",
+    switchTarget: false,
+    listed: false,
+  };
+}
+
+// The models' own price lists, read 2026-10-19: api-docs.deepseek.com,
+// docs.z.ai, platform.kimi.ai and platform.minimax.io. All in USD per million.
+const DEEPSEEK_PEAK: Array<[number, number]> = [
+  [1, 4],
+  [6, 10],
+];
+const deepseek = (inputPerM: number, cachedInputPerM: number, outputPerM: number) => ({
+  inputPerM,
+  outputPerM,
+  cachedInputPerM,
+  offPeak: { factor: 0.5, peakUtc: DEEPSEEK_PEAK },
+});
+const glm = (inputPerM: number, cachedInputPerM: number, outputPerM: number) => ({
+  inputPerM,
+  outputPerM,
+  cachedInputPerM,
+});
+const M1 = 1_048_576;
+const K200 = 202_752;
+
+export const OPEN_MODELS: ModelPrice[] = [
+  // DeepSeek bills half from 10:00 to 01:00 UTC and on weekends.
+  openModel(
+    "deepseek-v4-pro",
+    "DeepSeek V4 Pro",
+    "deepseek",
+    "frontier",
+    deepseek(1.32, 0.044, 3.96),
+    M1,
+    384_000,
+  ),
+  openModel(
+    "deepseek-flash",
+    "DeepSeek Flash",
+    "deepseek",
+    "fast",
+    deepseek(0.3, 0.006, 1.2),
+    M1,
+    384_000,
+  ),
+  // The old Flash ids bill at the new Flash price.
+  openModel(
+    "deepseek-v4-flash",
+    "DeepSeek V4 Flash",
+    "deepseek",
+    "fast",
+    deepseek(0.3, 0.006, 1.2),
+    M1,
+    384_000,
+  ),
+
+  openModel("glm-5.3-flashx", "GLM-5.3 FlashX", "zai", "fast", glm(0.37, 0.075, 1.25), M1, 131_072),
+  openModel("glm-5.3-flash", "GLM-5.3 Flash", "zai", "fast", glm(0.15, 0.03, 0.5), M1, 131_072),
+  openModel("glm-5.3", "GLM-5.3", "zai", "frontier", glm(1.4, 0.26, 4.4), M1, 131_072),
+  openModel("glm-5.2", "GLM-5.2", "zai", "frontier", glm(1.4, 0.26, 4.4), M1, 32_768),
+  openModel("glm-5.1", "GLM-5.1", "zai", "frontier", glm(1.4, 0.26, 4.4), K200, 16_384),
+  openModel("glm-5", "GLM-5", "zai", "frontier", glm(1, 0.2, 3.2), K200, 16_384),
+  // Z.ai's free models get a $0 card, so they don't prefix-match a paid one.
+  openModel("glm-4.7-flashx", "GLM-4.7 FlashX", "zai", "fast", glm(0.07, 0.01, 0.4), K200, 16_384),
+  openModel("glm-4.7-flash", "GLM-4.7 Flash", "zai", "fast", glm(0, 0, 0), K200, 16_384),
+  openModel("glm-4.7", "GLM-4.7", "zai", "balanced", glm(0.6, 0.11, 2.2), K200, 16_384),
+  openModel("glm-4.6", "GLM-4.6", "zai", "balanced", glm(0.6, 0.11, 2.2), K200, 131_072),
+  openModel("glm-4.5-airx", "GLM-4.5 AirX", "zai", "fast", glm(1.1, 0.22, 4.5), 131_072, 98_304),
+  openModel("glm-4.5-air", "GLM-4.5 Air", "zai", "fast", glm(0.2, 0.03, 1.1), 131_072, 98_304),
+  openModel("glm-4.5-flash", "GLM-4.5 Flash", "zai", "fast", glm(0, 0, 0), 131_072, 98_304),
+  openModel("glm-4.5-x", "GLM-4.5 X", "zai", "balanced", glm(2.2, 0.45, 8.9), 131_072, 98_304),
+  openModel("glm-4.5", "GLM-4.5", "zai", "balanced", glm(0.6, 0.11, 2.2), 131_072, 98_304),
+
+  // Kimi lists a cache hit and a cache miss; a miss is the input rate.
+  openModel("kimi-k3", "Kimi K3", "moonshot", "frontier", glm(3, 0.3, 15), M1, 131_072),
+  openModel(
+    "kimi-k2.7-code-highspeed",
+    "Kimi K2.7 Code Highspeed",
+    "moonshot",
+    "balanced",
+    glm(1.9, 0.38, 8),
+    262_144,
+    131_072,
+  ),
+  openModel(
+    "kimi-k2.7-code",
+    "Kimi K2.7 Code",
+    "moonshot",
+    "balanced",
+    glm(0.95, 0.19, 4),
+    262_144,
+    131_072,
+  ),
+  openModel("kimi-k2.6", "Kimi K2.6", "moonshot", "balanced", glm(0.95, 0.16, 4), 262_144, 131_072),
+
+  // MiniMax-M3 doubles past 512K input. Its write rate isn't listed, so M2.7's
+  // is used, doubled past 512K like the rest.
+  openModel(
+    "minimax-m3",
+    "MiniMax-M3",
+    "minimax",
+    "balanced",
+    {
+      ...glm(0.3, 0.06, 1.2),
+      cacheWritePerM: 0.375,
+      longContext: {
+        aboveTokens: 524_288,
+        inputPerM: 0.6,
+        outputPerM: 2.4,
+        cachedInputPerM: 0.12,
+        cacheWritePerM: 0.75,
+      },
+    },
+    M1,
+    131_072,
+  ),
+  openModel(
+    "minimax-m2.7-highspeed",
+    "MiniMax-M2.7 Highspeed",
+    "minimax",
+    "balanced",
+    { ...glm(0.6, 0.06, 2.4), cacheWritePerM: 0.375 },
+    196_608,
+    131_072,
+  ),
+  openModel(
+    "minimax-m2.7",
+    "MiniMax-M2.7",
+    "minimax",
+    "balanced",
+    { ...glm(0.3, 0.06, 1.2), cacheWritePerM: 0.375 },
+    196_608,
+    131_072,
+  ),
+  openModel(
+    "minimax-m2.5-highspeed",
+    "MiniMax-M2.5 Highspeed",
+    "minimax",
+    "balanced",
+    { ...glm(0.6, 0.03, 2.4), cacheWritePerM: 0.375 },
+    196_608,
+    131_072,
+  ),
+  openModel(
+    "minimax-m2.5",
+    "MiniMax-M2.5",
+    "minimax",
+    "balanced",
+    { ...glm(0.3, 0.03, 1.2), cacheWritePerM: 0.375 },
+    196_608,
+    131_072,
+  ),
+  openModel(
+    "minimax-m2.1-highspeed",
+    "MiniMax-M2.1 Highspeed",
+    "minimax",
+    "balanced",
+    { ...glm(0.6, 0.03, 2.4), cacheWritePerM: 0.375 },
+    196_608,
+    131_072,
+  ),
+  openModel(
+    "minimax-m2.1",
+    "MiniMax-M2.1",
+    "minimax",
+    "balanced",
+    { ...glm(0.3, 0.03, 1.2), cacheWritePerM: 0.375 },
+    196_608,
+    131_072,
+  ),
+  openModel(
+    "minimax-m2",
+    "MiniMax-M2",
+    "minimax",
+    "balanced",
+    { ...glm(0.3, 0.03, 1.2), cacheWritePerM: 0.375 },
+    196_608,
+    131_072,
+  ),
+];
 
 export const BUILTIN_MODELS: ModelPrice[] = [
   {
@@ -632,6 +850,7 @@ export const BUILTIN_MODELS: ModelPrice[] = [
     capabilities: openaiCaps,
     bestFor: "Previous-generation cheap tier, superseded by GPT-5 nano.",
   },
+  ...OPEN_MODELS,
 ];
 
 /**
@@ -726,6 +945,11 @@ export function resetModels(): void {
   reindex();
 }
 
+// The vendor's own name in front of its model, as gateways pass it through
+// (openai/gpt-5, z-ai/glm-4.6). A host's spelling (deepseek-ai/DeepSeek-V4-Pro)
+// is not stripped: a host sets its own price, so it stays unpriced.
+const VENDOR_PREFIX = /^(anthropic|openai|azure|deepseek|z-ai|zai|moonshotai|minimax)[./]/i;
+
 /**
  * Resolve a model id to its price card. Handles the date-suffixed ids every
  * provider emits, the platform prefixes used on Bedrock and Vertex, and the
@@ -736,12 +960,14 @@ export function priceFor(modelId: string | undefined | null): ModelPrice | null 
   const id = modelId
     .trim()
     .replace(/^(us|eu|apac)\./, "")
-    .replace(/^(anthropic|openai|azure)[./]/, "");
-  const exact = byId.get(id);
+    .replace(VENDOR_PREFIX, "");
+  const exact = byId.get(id) ?? byId.get(id.toLowerCase());
   if (exact) return exact;
+  // Vendors spell their own ids in mixed case (MiniMax-M3, GLM-4.6).
+  const lower = id.toLowerCase();
   let best: ModelPrice | null = null;
   for (const m of catalogue) {
-    if (id.startsWith(m.id) && (!best || m.id.length > best.id.length)) best = m;
+    if (lower.startsWith(m.id.toLowerCase()) && (!best || m.id.length > best.id.length)) best = m;
   }
   return best;
 }
@@ -773,6 +999,9 @@ export interface UsageLike {
   completion_tokens?: number;
   prompt_tokens_details?: { cached_tokens?: number };
   completion_tokens_details?: { reasoning_tokens?: number };
+  /** DeepSeek's spelling of a cache read, and Kimi's. */
+  prompt_cache_hit_tokens?: number;
+  cached_tokens?: number;
   /* --- OpenAI Responses --- */
   input_tokens_details?: { cached_tokens?: number; cache_write_tokens?: number };
   output_tokens_details?: { reasoning_tokens?: number; thinking_tokens?: number };
@@ -822,6 +1051,8 @@ export function normalizeUsage(
     u.cache_read_input_tokens ??
       u.prompt_tokens_details?.cached_tokens ??
       u.input_tokens_details?.cached_tokens ??
+      u.prompt_cache_hit_tokens ??
+      u.cached_tokens ??
       u.cachedContentTokenCount,
   );
 
@@ -832,7 +1063,12 @@ export function normalizeUsage(
 
   let input = num(u.input_tokens ?? u.prompt_tokens ?? u.promptTokenCount);
   const policy = PROVIDERS[providerOf(modelId)];
-  if (policy?.inputIncludesCacheReads) input = Math.max(0, input - cacheRead - includedWrites);
+  // Chat Completions' `prompt_tokens` counts cache reads for every vendor that
+  // speaks it (DeepSeek, Z.ai, Kimi), whatever the provider does natively.
+  const chat = u.input_tokens === undefined && u.prompt_tokens !== undefined;
+  if (policy?.inputIncludesCacheReads || chat) {
+    input = Math.max(0, input - cacheRead - includedWrites);
+  }
 
   const thinking = num(
     u.output_tokens_details?.thinking_tokens ??
@@ -877,6 +1113,8 @@ export interface CostBreakdown {
   total: number;
   /** True when the model id was not in the catalogue and cost is 0. */
   unpriced: boolean;
+  /** The agent's own figure for a model with no card here, split by token mix. */
+  stated?: true;
 }
 
 export const ZERO_COST: CostBreakdown = {
@@ -928,10 +1166,21 @@ export interface EffectiveRates {
   card: RateCard;
 }
 
+/** Whether a moment falls in peak hours: a weekday, inside one of the UTC hour ranges. */
+export function isPeak(peakUtc: Array<[number, number]>, at?: Date | string): boolean {
+  const when = at ? new Date(at) : new Date();
+  if (Number.isNaN(when.getTime())) return true;
+  const day = when.getUTCDay();
+  if (day === 0 || day === 6) return false;
+  const hour = when.getUTCHours() + when.getUTCMinutes() / 60;
+  return peakUtc.some(([from, to]) => hour >= from && hour < to);
+}
+
 /** Fully resolved per-million rates for a model at a point in time. */
 export function ratesFor(price: ModelPrice, opts: CostOptions = {}): EffectiveRates {
   const card = cardFor(price, opts.at);
   const policy = PROVIDERS[price.provider] ?? PROVIDERS.anthropic!;
+  const scale = card.offPeak && !isPeak(card.offPeak.peakUtc, opts.at) ? card.offPeak.factor : 1;
 
   let inputPerM = card.inputPerM;
   let outputPerM = card.outputPerM;
@@ -962,8 +1211,8 @@ export function ratesFor(price: ModelPrice, opts: CostOptions = {}): EffectiveRa
   let cacheWrite5mPerM = cardWritePerM ?? inputPerM * policy.write5m;
   let cacheWrite1hPerM = cardWritePerM ?? inputPerM * policy.write1h;
 
-  if (opts.batch) {
-    const d = policy.batch;
+  if (opts.batch || scale !== 1) {
+    const d = (opts.batch ? policy.batch : 1) * scale;
     inputPerM *= d;
     outputPerM *= d;
     cachedInputPerM *= d;
@@ -1013,6 +1262,40 @@ export function costOf(
     serverTools,
     total: input + output + cacheRead + cacheWrite + serverTools,
     unpriced: false,
+  };
+}
+
+// Rough weights of each kind of token against input, to split a stated total.
+const MIX = { input: 1, output: 4, cacheRead: 0.1, cacheWrite: 1.25 };
+
+/**
+ * A cost the agent stated itself (opencode records one per step), for a model
+ * with no card here. The total is kept; the split follows the token mix, so
+ * per-kind numbers are estimates.
+ */
+export function statedCost(
+  total: number,
+  usage: UsageLike | null | undefined,
+  modelId?: string | null,
+): CostBreakdown {
+  const n = normalizeUsage(usage, modelId);
+  const parts = {
+    input: n.inputTokens * MIX.input,
+    output: n.outputTokens * MIX.output,
+    cacheRead: n.cacheReadTokens * MIX.cacheRead,
+    cacheWrite: (n.cacheWrite5mTokens + n.cacheWrite1hTokens) * MIX.cacheWrite,
+  };
+  const weight = parts.input + parts.output + parts.cacheRead + parts.cacheWrite;
+  const share = (x: number) => (weight > 0 ? (total * x) / weight : 0);
+  return {
+    input: weight > 0 ? share(parts.input) : total,
+    output: share(parts.output),
+    cacheRead: share(parts.cacheRead),
+    cacheWrite: share(parts.cacheWrite),
+    serverTools: 0,
+    total,
+    unpriced: false,
+    stated: true,
   };
 }
 
