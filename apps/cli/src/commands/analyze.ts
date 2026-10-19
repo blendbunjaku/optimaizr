@@ -29,13 +29,14 @@ import {
   rule,
   ruleErrorWarning,
   savingsOverlap,
+  noteVsCompaction,
   sessionStats,
   summarize,
   tokens as fmtTokens,
   toRecommendations,
   usd,
 } from "@optimaizr/core";
-import { appliedChanges } from "@optimaizr/local";
+import { appliedChanges, readReceipts } from "@optimaizr/local";
 import { Args, num } from "../args.js";
 import { emptyNotice, load, stripFns, summaryOptions } from "../data.js";
 import { planLimitUsd, shareRate } from "../share.js";
@@ -302,14 +303,27 @@ export async function cmdSessions(args: Args): Promise<void> {
   const c = sessionStats(data);
   const rows = conversations(data);
   const rate = shareRate(data.events, { limitUsd: planLimitUsd(args, data.events) });
+  // Conversations guard started from a note, from its receipts.
+  const notes = readReceipts(0)
+    .filter((r) => r.kind === "handoff-used" && r.detail)
+    .map((r) => ({ session: r.session, from: r.detail! }));
+  const fresh = noteVsCompaction(data, notes);
   if (args.flags.json) {
     const of5h = (usd: number) => (rate ? usd / rate.usdPerPercent : null);
     const list = rows.map((r) => ({ ...r, windowPercent: of5h(r.costUsd) }));
-    console.log(JSON.stringify({ ...c, conversations: list, windowRate: rate }, null, 2));
+    console.log(
+      JSON.stringify(
+        { ...c, conversations: list, windowRate: rate, noteVsCompaction: fresh },
+        null,
+        2,
+      ),
+    );
     return;
   }
   const top = num(args.flags.top, 10);
-  console.log(renderSessions(c, summarize(data, summaryOptions(args)), { rows, rate, top }));
+  console.log(
+    renderSessions(c, summarize(data, summaryOptions(args)), { rows, rate, top }, { fresh }),
+  );
 }
 
 /** `optimaizr metrics`: how much was analysed and found, computed locally. */

@@ -8,6 +8,7 @@ import {
   claudeConfigDir,
   dim,
   green,
+  guardSaved,
   localTime,
   measureResults,
   parsePlan,
@@ -18,12 +19,15 @@ import {
   renderProfile,
   resultsDays,
   ruleErrorWarning,
+  savedText,
   sessionBlocks,
   summarize,
   usd,
+  weekCompare,
+  weekText,
   wrap as wrapText,
 } from "@optimaizr/core";
-import { appliedChanges, latestClaudeWindows, optimaizrDir } from "@optimaizr/local";
+import { appliedChanges, latestClaudeWindows, optimaizrDir, readReceipts } from "@optimaizr/local";
 import type { Args } from "../args.js";
 import { budgetOf, planNote, resolvePlan } from "../config.js";
 import {
@@ -229,7 +233,14 @@ export async function cmdProfile(args: Args): Promise<void> {
     return;
   }
 
-  console.log(renderProfile(profile));
+  // Fewer days loaded than two weeks leaves nothing to compare the week with.
+  const week = Number(args.flags.days ?? 30) < 14 ? null : weekCompare(data.events);
+  console.log(
+    renderProfile(profile, {
+      week: week ? weekText(week) : null,
+      kept: savedText(guardSaved(readReceipts(Date.now() - 7 * 86_400_000))),
+    }),
+  );
   const note = planNote(plan.choice, data.events);
   if (note) {
     for (const line of note) console.log(`  ${line}`);

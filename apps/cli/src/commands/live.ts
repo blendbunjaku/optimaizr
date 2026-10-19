@@ -21,6 +21,7 @@ import {
   dim,
   endsTurn,
   green,
+  guardSaved,
   LIVE_DEFAULTS,
   liveChecks,
   type LiveNextStep,
@@ -50,8 +51,11 @@ import {
   renderTurnDone,
   rereadFloor,
   resetTime,
+  savedText,
   turnCalls,
   usd,
+  weekCompare,
+  weekText,
   windowLabel,
   workLabel,
   workMs,
@@ -81,6 +85,7 @@ import {
   overridesPath,
   ownCommand,
   readOverrides,
+  readReceipts,
   recordChange,
   recordUndo,
   removeOverrides,
@@ -818,12 +823,13 @@ export async function cmdLive(args: Args): Promise<void> {
       );
     }
     if (watchesAgents) {
+      const week = weekCompare(seed);
+      if (week) console.log(`  ${dim(`Last 7 days: ${weekText(week)}.`)}`);
+      const kept = savedText(guardSaved(readReceipts(Date.now() - 7 * 86_400_000)));
       console.log(
-        `  ${dim(
-          guardApplied()
-            ? "Guard is on: what it holds in Claude Code shows here."
-            : "Guard is off: optimaizr guard on holds a message to an expired cache before it is paid.",
-        )}`,
+        guardApplied()
+          ? `  ${dim("Guard is on")}${kept ? `${dim(":")} ${green(kept)} ${dim("in the last 7 days.")}` : dim(".")} ${dim("What it holds in Claude Code shows here.")}`
+          : `  ${dim(`Guard is off${kept ? ` (${kept} while it was on)` : ""}: optimaizr guard on holds a message to an expired cache before it is paid.`)}`,
       );
     }
     if (notifyOn) {

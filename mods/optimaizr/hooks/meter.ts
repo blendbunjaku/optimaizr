@@ -413,7 +413,8 @@ export const HANDOFF_TTL_MS = 12 * HOUR;
 /** What Claude is asked for: a note a fresh conversation can start from. */
 export const HANDOFF_PROMPT =
   "Write a handoff note so a fresh conversation can carry on this work without this one. " +
-  "Plain text, three lines, under 80 words in all: 'Done:' what changed and what was decided, " +
+  "Plain text, four lines, under 100 words in all: 'Done:' what changed and what was decided, " +
+  "'Dropped:' what was tried and did not work, so it is not tried again (or 'nothing'), " +
   "'Next:' the first thing to do, 'File:' the file to open first, with the command or error " +
   "if there is one. Exact paths. No preamble, and no tool calls.";
 

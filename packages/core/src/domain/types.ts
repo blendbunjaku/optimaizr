@@ -178,6 +178,8 @@ export interface UsageEvent {
   serviceTier?: string | null;
   batch?: boolean;
   isSubagent?: boolean;
+  /** Started by `claude -p`, the SDK or `codex exec`: nobody was there to read it. */
+  headless?: boolean;
 
   tools: ToolCall[];
 

@@ -42,7 +42,17 @@ export interface TranscriptFacts {
   lastChange: string | null;
   /** How the session was started: cli, claude-vscode, sdk-cli and so on. */
   entrypoint: string | null;
+  /** What was tried and did not work, oldest first. */
+  dropped: Dropped[];
 }
+
+export type Dropped =
+  | { kind: "failed"; command: string; times: number }
+  | { kind: "declined" | "undone"; file: string };
+
+// A search that finds nothing exits 1 too; that is not something tried and dropped.
+const LOOKS =
+  /^(cd\s[^&;]*&&\s*)?(grep|rg|find|ls|cat|head|tail|sed\s+-n|awk|wc|which|test|\[|git\s+(status|log|diff|show))\b/;
 
 interface Block {
   type?: string;
@@ -90,8 +100,16 @@ export function transcriptFacts(lines: Iterable<string>): TranscriptFacts {
     failing: new Map(),
     lastChange: null,
     entrypoint: null,
+    dropped: [],
   };
   const calls = new Map<string, { name: string; input: Record<string, unknown> }>();
+  // Keyed so a later outcome replaces an earlier one; insertion order is the order tried.
+  const tried = new Map<string, Dropped>();
+  const drop = (key: string, d: Dropped) => {
+    tried.delete(key);
+    tried.set(key, d);
+  };
+  const changes = new Map<string, Array<{ from: unknown; to: unknown }>>();
 
   for (const line of lines) {
     if (!line.trim()) continue;
@@ -140,25 +158,43 @@ export function transcriptFacts(lines: Iterable<string>): TranscriptFacts {
       if (b.type !== "tool_result" || typeof b.tool_use_id !== "string") continue;
       const call = calls.get(b.tool_use_id);
       if (!call) continue;
+      const file = call.input.file_path ?? call.input.notebook_path;
+      const cmd = typeof call.input.command === "string" ? call.input.command.trim() : null;
       if (b.is_error === true) {
         const text = resultText(b.content);
-        // A hold or a refusal is not the command failing.
-        if (/optimAIzr held|doesn't want to proceed|was rejected/.test(text)) continue;
-        if (call.name === "Bash" && typeof call.input.command === "string") {
-          const cmd = call.input.command.trim();
+        if (/optimAIzr held/.test(text)) continue;
+        // A refusal is not the command failing, but an edit turned down was dropped.
+        if (/doesn't want to proceed|was rejected/.test(text)) {
+          if (EDITS.has(call.name) && typeof file === "string") {
+            drop(`file:${file}`, { kind: "declined", file });
+          }
+          continue;
+        }
+        if (call.name === "Bash" && cmd) {
           f.failing.set(cmd, (f.failing.get(cmd) ?? 0) + 1);
+          const prev = tried.get(`run:${cmd}`);
+          const times = prev?.kind === "failed" ? prev.times + 1 : 1;
+          if (!LOOKS.test(cmd)) drop(`run:${cmd}`, { kind: "failed", command: cmd, times });
         }
         continue;
       }
+      if (call.name === "Bash" && cmd) tried.delete(`run:${cmd}`);
       if (!MUTATING.has(call.name)) continue;
       f.failing.clear();
       f.lastChange = b.tool_use_id;
-      const file = call.input.file_path ?? call.input.notebook_path;
       if (EDITS.has(call.name) && typeof file === "string") {
         f.edited = [...f.edited.filter((x) => x !== file), file];
+        // An edit that puts back what an earlier one took out undoes it.
+        const { old_string: from, new_string: to } = call.input;
+        const before = changes.get(file) ?? [];
+        if (typeof from === "string" && before.some((c) => c.from === to && c.to === from)) {
+          drop(`file:${file}`, { kind: "undone", file });
+        }
+        changes.set(file, [...before, { from, to }]);
       }
     }
   }
+  f.dropped = [...tried.values()];
   return f;
 }
 
@@ -178,7 +214,8 @@ function relative(file: string, cwd?: string): string {
 
 /**
  * Where the work stands, from the transcript alone: the last ask, the files
- * changed, open todos and the last reply. Null when there is nothing to say.
+ * changed, what was dropped, open todos and the last reply. Null when there is
+ * nothing to say.
  */
 export function handoffNote(f: TranscriptFacts, cwd?: string): string | null {
   const out: string[] = [];
@@ -187,6 +224,16 @@ export function handoffNote(f: TranscriptFacts, cwd?: string): string | null {
     const files = f.edited.slice(-8).map((x) => relative(x, cwd));
     const more = f.edited.length > 8 ? ` and ${f.edited.length - 8} more` : "";
     out.push(`Changed: ${files.join(", ")}${more}`);
+  }
+  if (f.dropped.length > 0) {
+    const items = f.dropped.slice(-4).map((d) => {
+      if (d.kind === "failed") {
+        return `${clip(d.command, 60)} (failed${d.times > 1 ? ` ${d.times} times` : ""})`;
+      }
+      const at = relative(d.file, cwd);
+      return d.kind === "declined" ? `an edit to ${at}, turned down` : `a change to ${at}, undone`;
+    });
+    out.push(`Dropped: ${items.join("; ")}`);
   }
   const open = (f.todos ?? []).filter((t) => t.status !== "completed");
   if (open.length > 0) {
@@ -243,9 +290,23 @@ export function cheaperRewrite(s: CacheState): { label: string; usd: number } | 
   const balanced = allModels().find((m) => m.provider === "anthropic" && m.tier === "balanced");
   if (!balanced) return null;
   const r = ratesFor(balanced, { at: new Date().toISOString(), promptTokens: s.context });
-  const hour = s.expiresAt !== null && s.expiresAt - Date.parse(s.event.ts) > 10 * 60_000;
-  const usd = (s.context * (hour ? r.cacheWrite1hPerM : r.cacheWrite5mPerM)) / 1_000_000;
+  const usd = (s.context * (hourCache(s) ? r.cacheWrite1hPerM : r.cacheWrite5mPerM)) / 1_000_000;
   return usd < s.rewriteUsd * 0.8 ? { label: balanced.label, usd } : null;
+}
+
+function hourCache(s: CacheState): boolean {
+  return s.expiresAt !== null && s.expiresAt - Date.parse(s.event.ts) > 10 * 60_000;
+}
+
+/**
+ * What writing `tokens` into this conversation's cache costs. For a whole
+ * read that is only its first cost: every later call re-reads it too.
+ */
+export function writeUsd(tokens: number, s: CacheState): number | null {
+  const price = priceFor(s.event.model);
+  if (!price) return null;
+  const r = ratesFor(price, { at: s.event.ts, promptTokens: s.context + tokens });
+  return (tokens * (hourCache(s) ? r.cacheWrite1hPerM : r.cacheWrite5mPerM)) / 1_000_000;
 }
 
 /** Shown to the person when a message to an expired cache is held. */
@@ -301,10 +362,69 @@ export function compactNudge(context: number, compactAt: number): string {
 export interface GuardReceipt {
   at: string;
   session: string;
-  kind: "cold-hold" | "cold-sent" | "handoff-used" | "big-read" | "retry" | "compact";
-  /** What was at stake: the rewrite, for a cold cache. */
+  kind:
+    | "cold-hold"
+    | "cold-sent"
+    | "handoff-used"
+    | "big-read"
+    | "big-read-sent"
+    | "retry"
+    | "retry-sent"
+    | "compact";
+  /** What was at stake: the rewrite for a cold cache, the first write for a big read. */
   usd?: number;
   tokens?: number;
   /** The file, the command, or the model. */
   detail?: string;
+}
+
+/** What guard's holds kept from being paid. */
+export interface GuardSaved {
+  /** Holds whose cheaper path was taken: the held step never came again. */
+  catches: number;
+  /** Rewrites that were never sent, and whole reads at their first write. */
+  usd: number;
+}
+
+// A hold, and the receipt that says it went through after all.
+const SENT: Record<string, string> = {
+  "cold-hold": "cold-sent",
+  "big-read": "big-read-sent",
+  retry: "retry-sent",
+};
+
+/**
+ * Only holds that stuck count: a message sent again, or a whole read or retry
+ * that went through the second time, cancels its hold.
+ */
+export function guardSaved(receipts: readonly GuardReceipt[]): GuardSaved {
+  const sorted = [...receipts].sort((a, b) => a.at.localeCompare(b.at));
+  // A cold send has no detail: it goes with the last hold in its conversation.
+  const keyOf = (r: GuardReceipt, hold: string) =>
+    `${hold}|${r.session}|${hold === "cold-hold" ? "" : (r.detail ?? "")}`;
+  const open = new Map<string, GuardReceipt>();
+  const held: GuardReceipt[] = [];
+  const cancelled = new Set<GuardReceipt>();
+  for (const r of sorted) {
+    if (SENT[r.kind]) {
+      held.push(r);
+      open.set(keyOf(r, r.kind), r);
+      continue;
+    }
+    const hold = Object.keys(SENT).find((k) => SENT[k] === r.kind);
+    const h = hold ? open.get(keyOf(r, hold)) : undefined;
+    if (hold && h) {
+      cancelled.add(h);
+      open.delete(keyOf(r, hold));
+    }
+  }
+  const kept = held.filter((r) => !cancelled.has(r));
+  return { catches: kept.length, usd: kept.reduce((t, r) => t + (r.usd ?? 0), 0) };
+}
+
+/** "9 catches, $14.20 not spent", or null before guard has kept anything. */
+export function savedText(s: GuardSaved): string | null {
+  if (s.catches === 0) return null;
+  const n = `${s.catches} ${s.catches === 1 ? "catch" : "catches"}`;
+  return s.usd >= 0.01 ? `${n}, ${money(s.usd)} not spent` : n;
 }
