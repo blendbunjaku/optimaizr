@@ -22,7 +22,7 @@ import {
   transcriptCacheState,
   undoStatusline,
 } from "@optimaizr/local";
-import { emptyStatus, recordCall, renderStatus } from "optimaizr";
+import { emptyStatus, recordCall, renderNow } from "optimaizr";
 import { codexRollout, load, loadCodex, read, transcript } from "./fixtures/transcripts.mjs";
 
 /**
@@ -150,7 +150,28 @@ test("warm lists long conversations soonest to expire first, and skips short and
   );
 });
 
-test("the live status line shows the warm cache", async () => {
+test("after a compaction only the new conversation is warm", async () => {
+  const a = await load({ a: transcript("a", comeback()) });
+  const watch = createCacheWatch();
+  for (const e of a.events) watch.push(e);
+  const last = a.events.at(-1);
+  const at = Date.parse(last.ts);
+  const after = { ...last, id: "after", contextEpoch: 1, ts: new Date(at + MIN).toISOString() };
+  watch.push(after);
+  // A call from before the compaction, read late, brings nothing back.
+  watch.push({ ...last, id: "late", ts: new Date(at + 2 * MIN).toISOString() });
+
+  const warm = watch.warm(at + 3 * MIN);
+  assert.equal(warm.length, 1);
+  assert.equal(warm[0].event.id, "after");
+  assert.deepEqual(
+    watch.expiring(at + 54 * MIN).map((x) => x.event.id),
+    ["after"],
+    "no warning for the cache left behind",
+  );
+});
+
+test("live's rows at the bottom show how long each cache stays warm", async () => {
   const data = await load({ s1: transcript("s1", comeback()) });
   const watch = createCacheWatch();
   const status = emptyStatus();
@@ -160,8 +181,11 @@ test("the live status line shows the warm cache", async () => {
     recordCall(status, e);
   }
   const last = Date.parse(data.events.at(-1).ts);
-  assert.match(strip(renderStatus(status, last + 10 * MIN, 200)), /cache 161\.0K warm 45m/);
-  assert.match(strip(renderStatus(status, last + 50 * MIN, 200)), /cache 161\.0K warm 5m/);
+  const rows = (at) => strip(renderNow(status, at, 200).join("\n"));
+  assert.match(rows(last + 10 * MIN), /○ .+ idle 10m · 161\.0K · cache warm 45m more/);
+  assert.match(rows(last + 50 * MIN), /idle 50m · 161\.0K · cache warm 5m more/);
+  // An hour after its last call the conversation is no longer open.
+  assert.deepEqual(renderNow(status, last + 61 * MIN, 200), []);
 });
 
 /* ------------------------------------------------------------------ *

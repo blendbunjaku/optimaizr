@@ -82,11 +82,12 @@ export async function cmdScan(args: Args): Promise<void> {
   if (errors.length) console.log("");
 
   // History optimAIzr can't read yet goes first, or the cap could hide why calls are missing.
-  const notes = [...data.warnings].sort(
-    (a, b) => Number(b === OPENCODE_V2_WARNING) - Number(a === OPENCODE_V2_WARNING),
-  );
+  // The summary already counts calls with no price, for every source.
+  const notes = data.warnings
+    .filter((w) => !w.startsWith("Unknown model "))
+    .sort((a, b) => Number(b === OPENCODE_V2_WARNING) - Number(a === OPENCODE_V2_WARNING));
   for (const w of notes.slice(0, 3)) console.log(`  ${dim(`note: ${w}`)}`);
-  if (data.warnings.length) console.log("");
+  if (notes.length) console.log("");
 }
 
 export async function cmdWaste(args: Args): Promise<void> {

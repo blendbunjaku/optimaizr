@@ -417,21 +417,34 @@ test(
     const stdout = await liveCli(t, home, ["--source", "agents"], (out) =>
       out.includes("Ctrl-C to stop"),
     );
-    assert.ok(stdout.includes(`watching ${file}`));
+    assert.ok(
+      stdout.includes(
+        sqlite
+          ? "Watching Claude Code, Codex and opencode on this machine"
+          : "Watching Claude Code and Codex on this machine",
+      ),
+    );
     assert.equal(
-      stdout.split("opencode history needs Node 22.13+ (node:sqlite); skipped").length - 1,
+      stdout.split("opencode history skipped: it needs Node 22.13 or later").length - 1,
       sqlite ? 0 : 1,
     );
     const sdk = await liveCli(t, home, ["--source", "sdk"], (out) =>
       out.includes("Ctrl-C to stop"),
     );
-    assert.ok(!sdk.includes(`watching ${file}`));
+    assert.ok(sdk.includes("Watching API calls made through optimAIzr on this machine"));
     fs.rmSync(file);
     const missing = await liveCli(t, home, ["--source", "agents"], (out) =>
       out.includes("Ctrl-C to stop"),
     );
-    assert.ok(!missing.includes(`watching ${file}`));
-    assert.ok(!missing.includes("opencode history needs Node"));
+    // No history yet is still watched: the tail opens the database once it appears.
+    assert.ok(
+      missing.includes(
+        sqlite
+          ? "Watching Claude Code, Codex and opencode on this machine"
+          : "Watching Claude Code and Codex on this machine",
+      ),
+    );
+    assert.ok(!missing.includes("opencode history skipped"));
   },
 );
 

@@ -12,7 +12,9 @@ import { applyCompaction, compactionStatus, undoCompaction } from "@optimaizr/lo
 import {
   createLivePrompt,
   emptyStatus,
+  QUORUM,
   recordCall,
+  renderNow,
   renderRunSummary,
   renderStatus,
 } from "optimaizr";
@@ -310,20 +312,54 @@ test("the status line says it is watching, then what it has seen", () => {
   const s = emptyStatus(now);
   assert.match(
     strip(renderStatus(s, now)),
-    /optimAIzr live · watching for Claude Code, Codex, opencode and API calls/,
+    /optimAIzr live · watching for Claude Code, Codex, opencode and API calls ⣾$/,
   );
+  // The square turns, a step every 300ms, so it reads as alive while nothing comes in.
+  assert.match(strip(renderStatus(s, now + 300)), /API calls ⣽$/);
+  assert.match(strip(renderStatus(s, now + 2_100)), /API calls ⣷$/);
+  assert.match(strip(renderStatus(s, now + 2_400)), /API calls ⣾$/);
+  // It names what this run reads, as the header does.
+  const agents = emptyStatus(now);
+  agents.watched = ["Claude Code", "Codex"];
+  assert.match(strip(renderStatus(agents, now)), /watching for Claude Code and Codex ⣾$/);
 
   recordCall(s, call({ cacheReadTokens: 182_000, cost: { total: 0.04, cacheRead: 0.03 } }), now);
   let line = strip(renderStatus(s, now + 3_000, 200));
-  assert.match(line, /1 active session/);
-  assert.match(line, /1 call · \$0\.040 this run/);
-  assert.match(line, /last Opus 5\.5 \$0\.040, 182\.0K context/);
-  assert.match(line, /no issues/);
-  assert.match(line, /checked 3s ago/);
+  assert.match(line, /\$0\.040 this run · 1 call/);
+  assert.match(line, /nothing found yet · watching [⣾⣽⣻⢿⡿⣟⣯⣷]$/);
+  // The rows above say what each conversation does, so the last call is not repeated.
+  assert.doesNotMatch(line, /last Opus/);
+  const api = emptyStatus(now);
+  recordCall(api, call({ source: "sdk", cacheReadTokens: 182_000, cost: { total: 0.04 } }), now);
+  assert.match(strip(renderStatus(api, now, 200)), /last Opus 5\.5 \$0\.040, 182\.0K context/);
+  assert.deepEqual(renderNow(api, now), [], "API calls get no row");
+
+  // Quiet over enough calls reads as no waste, and says where the reasons are.
+  for (let i = 1; i < QUORUM; i++) recordCall(s, call({ id: `q${i}` }), now);
+  s.keys = true;
+  line = strip(renderStatus(s, now + 3_000, 200));
+  assert.match(line, /no waste found \(\? why\)/);
+  s.keys = false;
+
+  // With two conversations it names the one that cost the most.
+  recordCall(s, call({ sessionId: "s2", cost: { total: 9 } }), now);
+  s.titleOf = (id) => (id === "s2" ? "Rewrite the importer" : undefined);
+  assert.match(strip(renderStatus(s, now, 200)), /most: Rewrite the importer \$9\.00/);
 
   s.found.set("model-fit", 0.24);
   line = strip(renderStatus(s, now + 3_000, 200));
-  assert.match(line, /1 found, \$0\.240 avoidable/);
+  assert.match(line, /1 found: \$0\.240 already paid/);
+  assert.doesNotMatch(line, /still avoidable/);
+  // What each call still pays shows once it is known, and n is the way in.
+  s.perCall.set("model-fit", 0.04);
+  s.keys = true;
+  line = strip(renderStatus(s, now + 3_000, 300));
+  assert.match(
+    line,
+    /1 found: \$0\.240 already paid, ~\$0\.040 a call still avoidable \(n next step\)/,
+  );
+  s.keys = false;
+  s.perCall.clear();
 
   // On a narrow terminal the detail goes, the name and the verdict stay.
   const narrow = strip(renderStatus(s, now + 3_000, 60));
@@ -336,25 +372,79 @@ test("the status line says it is watching, then what it has seen", () => {
     assert.ok(strip(cut).length <= width - 2, `${width}: ${strip(cut)}`);
     assert.ok(cut.endsWith(`${String.fromCharCode(27)}[0m`), "colour reset after the cut");
   }
+});
+
+test("the rows at the bottom: a spinner while Claude works, idle time once it waits", () => {
+  const t0 = Date.parse("2026-10-06T10:00:00Z");
+  const at = (ms) => new Date(t0 + ms).toISOString();
+  const s = emptyStatus(t0);
+  s.titleOf = (id) => (id === "s1" ? "Fix the login bug" : undefined);
+  const step = (ms, o = {}) =>
+    recordCall(
+      s,
+      call({
+        ts: at(ms),
+        turnId: "p1",
+        turnStartedAt: at(0),
+        stopReason: "tool_use",
+        cacheReadTokens: 161_000,
+        cost: { total: 0.1 },
+        ...o,
+      }),
+      t0 + ms,
+    );
+  step(40_000);
+  step(72_000);
+  let rows = renderNow(s, t0 + 75_000).map(strip);
+  assert.match(rows[0], /── now/);
   assert.match(
-    strip(renderStatus(s, now + 3_000, 120)),
-    /last Opus 5\.5/,
-    "the last call outlasts the session count",
+    rows[1],
+    /^ {2}[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] Fix the login bug\s+Claude working · 1m 15s · \$0\.200 so far · 161\.0K$/,
   );
+  // The spinner turns between redraws.
+  assert.notEqual(strip(renderNow(s, t0 + 75_500)[1])[2], rows[1][2]);
+  // A subagent's call keeps the turn going.
+  step(80_000, { isSubagent: true, stopReason: "end_turn" });
+  assert.match(strip(renderNow(s, t0 + 81_000)[1]), /Claude working · 1m 21s · \$0\.300 so far/);
+
+  step(90_000, { stopReason: "end_turn" });
+  rows = renderNow(s, t0 + 102_000).map(strip);
+  assert.match(rows[1], /^ {2}○ Fix the login bug\s+idle 12s · 161\.0K$/);
+  // The next prompt starts a new turn, from its own start.
+  step(200_000, { turnId: "p2", turnStartedAt: at(190_000) });
+  assert.match(strip(renderNow(s, t0 + 205_000)[1]), /working · 15s · \$0\.100 so far/);
+  // A turn with no call for ten minutes was most likely stopped.
+  assert.match(strip(renderNow(s, t0 + 200_000 + 11 * 60_000)[1]), /○ .+idle 11m/);
+
+  // Codex says nothing about how a turn ends, so a recent call counts as working.
+  const c = emptyStatus(t0);
+  recordCall(c, call({ source: "codex", sessionId: "x", project: "/w/api", ts: at(0) }), t0);
+  assert.match(strip(renderNow(c, t0 + 10_000)[1]), /x api\s+Codex working/);
+  assert.match(strip(renderNow(c, t0 + 40_000)[1]), /○ x api\s+idle 40s/);
+
+  // Working first, then the latest; past four the rest are counted.
+  for (const id of ["a", "b", "c", "d", "e"]) {
+    recordCall(c, call({ source: "codex", sessionId: id, ts: at(-60_000) }), t0);
+  }
+  rows = renderNow(c, t0 + 10_000).map(strip);
+  assert.match(rows[1], /Codex working/);
+  assert.equal(rows.length, 6);
+  assert.match(rows[5], /and 2 more open/);
+  for (const r of renderNow(c, t0 + 10_000, 40)) assert.ok(strip(r).length <= 38, strip(r));
 });
 
 test("stopping prints what the run saw and found", () => {
   const now = Date.parse("2026-10-06T10:00:00Z");
   const s = emptyStatus(now);
+  assert.match(strip(renderRunSummary(s, now)), /0 calls · \$0\.00 spent · nothing worth changing/);
   recordCall(s, call(), now);
-  assert.match(
-    strip(renderRunSummary(s, now + 10 * 60_000)),
-    /10 min · 1 call · \$0\.050 spent · nothing worth changing/,
-  );
+  // With calls seen, the checks follow the line and say what was fine.
+  const quiet = strip(renderRunSummary(s, now + 10 * 60_000));
+  assert.match(quiet, /10 min · 1 call · \$0\.050 spent$/);
   s.found.set("model-fit", 0.3);
   assert.match(
     strip(renderRunSummary(s, now + 10 * 60_000)),
-    /1 opportunity, \$0\.300 avoidable in this run/,
+    /1 opportunity: \$0\.300 already paid$/,
   );
 });
 

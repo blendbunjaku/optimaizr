@@ -73,6 +73,7 @@ export function createCacheWatch(
   const warnUsd = opts.warnUsd ?? EXPIRY_WARN_USD;
   const minContext = opts.minContext ?? COLD_MIN_CONTEXT;
   const conversations = new Map<string, { seen: CacheSeen; state: CacheState; warned: boolean }>();
+  const epochs = new Map<string, number>();
 
   return {
     /** Fold in a call. Returns the cold return it was, if it was one. */
@@ -82,9 +83,16 @@ export function createCacheWatch(
         e.isSubagent
       )
         return null;
-      const key = `${e.sessionId}|${e.contextEpoch ?? 0}`;
+      const epoch = e.contextEpoch ?? 0;
+      const key = `${e.sessionId}|${epoch}`;
       const c = conversations.get(key);
       if (!c) {
+        // After a compaction nothing reads the old conversation again, so its
+        // cache is no longer worth a countdown or a warning.
+        const last = epochs.get(e.sessionId);
+        if (last !== undefined && last > epoch) return null;
+        if (last !== undefined) conversations.delete(`${e.sessionId}|${last}`);
+        epochs.set(e.sessionId, epoch);
         const seen = emptySeen();
         see(seen, e);
         conversations.set(key, { seen, state: stateOf(e, seen), warned: false });
@@ -129,6 +137,14 @@ export function createCacheWatch(
             (s.expiresAt === null ? now - Date.parse(s.event.ts) < 60 * 60_000 : s.expiresAt > now),
         )
         .sort((a, b) => (a.expiresAt ?? Infinity) - (b.expiresAt ?? Infinity));
+    },
+
+    /** One conversation's cache now, whatever its size. */
+    of(sessionId: string): CacheState | null {
+      const epoch = epochs.get(sessionId);
+      return epoch === undefined
+        ? null
+        : (conversations.get(`${sessionId}|${epoch}`)?.state ?? null);
     },
 
     /** The most recent conversation, whatever its size: what a status line shows. */

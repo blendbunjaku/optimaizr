@@ -216,8 +216,12 @@ test("sessions opens with the costliest conversations, and live says each turn",
     conversation: { costUsd: 7.8, workMs: 41 * MIN },
     usdPerPercent: 0.48,
   });
-  assert.match(line, /2m 10s · \$0\.620 · ~1\.3% of 5h {2}Fix the login bug/);
-  assert.match(line, /this conversation \$7\.80 · ~16% of 5h · 41m 00s/);
+  // One line: the conversation first, then the turn, then the conversation's total.
+  assert.match(
+    line,
+    /Fix the login bug\s+2m 10s · \$0\.620 · ~1\.3% of 5h · conversation \$7\.80$/,
+  );
+  assert.equal(line.split("\n").length, 1);
 });
 
 test("the status line logs the meter only when it moves", () => {

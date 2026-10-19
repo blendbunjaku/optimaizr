@@ -101,7 +101,8 @@ function meter(m: { used_percentage?: number; resets_at?: number } | undefined) 
   return { usedPercent: m.used_percentage, resetsAt: m.resets_at ?? null } as StatuslineMeter;
 }
 
-function readStdin(timeoutMs: number): Promise<string> {
+/** Claude Code's JSON on stdin, or whatever arrived before the timeout. */
+export function readStdin(timeoutMs: number): Promise<string> {
   return new Promise((resolve) => {
     let data = "";
     // Stop listening either way, so a stdin left open can't keep the process up.

@@ -29,6 +29,8 @@ export * from "./analyze/codex-plan.js";
 export * from "./analyze/live.js";
 export * from "./analyze/context-watch.js";
 export * from "./analyze/cache-watch.js";
+export * from "./analyze/checks.js";
+export * from "./analyze/guard.js";
 
 // Findings -> recommendations (decision persistence is injected).
 export * from "./recommend/recommendations.js";

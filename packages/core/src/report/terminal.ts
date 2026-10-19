@@ -20,6 +20,8 @@ import type { PlanView, SessionCrossing } from "../analyze/plan.js";
 import type { CodexLimitCrossing, CodexPlanView } from "../analyze/codex-plan.js";
 import type { CacheState } from "../analyze/cache-watch.js";
 import type { ColdResume } from "../analyze/cold.js";
+import type { LiveChecks, LiveStep } from "../analyze/checks.js";
+import type { GuardReceipt } from "../analyze/guard.js";
 import { compactPointOf } from "../analyze/results.js";
 import type { AppliedChange, ChangeResult, ResultRow, ResultsReport } from "../analyze/results.js";
 
@@ -39,6 +41,24 @@ export const green = c("32");
 export const yellow = c("33");
 export const blue = c("36");
 export const magenta = c("35");
+
+// Colours that mean nothing else here, so a name's colour only says which conversation.
+const NAME_COLORS = ["36", "35", "34", "96", "95", "94"].map(c);
+
+/** One colour per conversation, the same each time it shows. */
+export function convoColor(sessionId: string): (s: string | number) => string {
+  let h = 0;
+  for (const ch of sessionId) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  return NAME_COLORS[h % NAME_COLORS.length]!;
+}
+
+/** How wide a conversation's name is in live, so the numbers after it line up. */
+export const NAME_WIDTH = 32;
+
+/** A conversation's title, or its short id and folder until it has one. */
+export function convoName(sessionId: string, project: string, title?: string): string {
+  return title ?? `${sessionId.slice(0, 8)} ${projectName(project)}`;
+}
 
 const ANSI_RE = new RegExp(`${ESC}\\[[0-9;]*m`, "g");
 
@@ -157,6 +177,27 @@ function tierLines(totals: { fix: number; try: number }, levers: OptimizationFin
   return out;
 }
 
+const plural = (n: number, word: string) => `${n.toLocaleString()} ${word}${n === 1 ? "" : "s"}`;
+
+/** What the total leaves out or took from elsewhere: models with no price here. */
+export function pricingGaps(s: Pick<Summary, "unpriced" | "stated">): string[] {
+  const out: string[] = [];
+  if (s.unpriced.calls > 0) {
+    const shown = s.unpriced.models.slice(0, 2).join(", ");
+    const more = s.unpriced.models.length > 2 ? ` and ${s.unpriced.models.length - 2} more` : "";
+    out.push(
+      `  ${yellow(`${plural(s.unpriced.calls, "call")} counted as $0`)} ${dim(`on ${shown}${more}: no price here.`)}`,
+    );
+    out.push(`  ${dim("Add one in ~/.optimaizr/models.json and they count.")}`);
+  }
+  if (s.stated.calls > 0) {
+    out.push(
+      `  ${dim(`${plural(s.stated.calls, "call")} on models with no price here ${s.stated.calls === 1 ? "uses" : "use"} opencode's own cost: ${usd(s.stated.usd)}.`)}`,
+    );
+  }
+  return out;
+}
+
 export function renderSummary(s: Summary, opts: { title?: string } = {}): string {
   const out: string[] = [];
   const days = Math.max(1, s.window.days || 1);
@@ -174,6 +215,7 @@ export function renderSummary(s: Summary, opts: { title?: string } = {}): string
   );
   out.push(`  ${dim("Published list rates applied to recorded tokens. Not a bill, and not your")}`);
   out.push(`  ${dim("Claude subscription or plan meter; those count usage differently.")}`);
+  out.push(...pricingGaps(s));
   out.push("");
 
   const inputSide = s.inputTokens + s.cacheReadTokens + s.cacheWriteTokens;
@@ -1369,7 +1411,11 @@ export function renderPlan(v: PlanView): string[] {
     );
   } else if (!v.windows?.fiveHour) {
     // Claude Code's own meter makes a learned limit unnecessary.
-    row("Your session limit", dim("unknown"), dim("run `optimaizr limit` when you hit it"));
+    row(
+      "Your session limit",
+      dim("unknown"),
+      dim("optimaizr statusline on reads it from Claude Code's meter"),
+    );
   }
   if (v.current) {
     const share =
@@ -1473,7 +1519,8 @@ function span(ms: number): string {
   if (s < 90) return `${s}s`;
   const m = Math.round(s / 60);
   if (m < 90) return `${m}m`;
-  return `${Math.round(m / 60)}h`;
+  const h = Math.round(m / 60);
+  return h < 48 ? `${h}h` : `${Math.round(h / 24)} days`;
 }
 
 function clip(s: string, n: number): string {
@@ -1574,44 +1621,54 @@ export interface TurnDone {
   costUsd: number;
   conversation: { costUsd: number; workMs: number };
   usdPerPercent: number | null;
+  /** In a big conversation: what the next message pays first, to re-read it. */
+  next?: { context: number; floorUsd: number; callsPerMessage: number | null };
 }
 
 /**
- * How long the turn took, what it cost, and its own share of the 5h window,
- * then the same for the whole conversation so far. Several conversations can
- * run at once, so each turn says which one it was.
+ * One line per finished turn, its conversation first and in its own colour:
+ * how long Claude worked, what it cost, its share of the 5h window, and the
+ * conversation so far once there is more in it than this turn.
  */
 export function renderTurnDone(t: TurnDone): string {
   const e = t.event;
-  const share = (n: number) =>
-    t.usdPerPercent ? [`${windowShareLabel(n, t.usdPerPercent)} of 5h`] : [];
-  const name = t.title ? clip(t.title, 48) : `${callSession(e)} ${projectName(e.project)}`;
-  const turn = [workLabel(t.workMs), usd(t.costUsd), ...share(t.costUsd)].join(dim(" · "));
-  const convo = [
-    usd(t.conversation.costUsd),
-    ...share(t.conversation.costUsd),
-    workLabel(t.conversation.workMs),
-  ].join(dim(" · "));
-  return [
-    `  ${green("✓")}  ${dim(new Date(e.endTs ?? e.ts).toLocaleTimeString())}  ${bold(turn)}  ${dim(name)}`,
-    `        ${dim("this conversation")} ${convo}`,
-  ].join("\n");
+  const color = convoColor(e.sessionId);
+  const name = clip(convoName(e.sessionId, e.project, t.title), NAME_WIDTH);
+  const parts = [workLabel(t.workMs), usd(t.costUsd)];
+  if (t.usdPerPercent) parts.push(`${windowShareLabel(t.costUsd, t.usdPerPercent)} of 5h`);
+  if (t.conversation.costUsd - t.costUsd >= 0.005) {
+    parts.push(dim(`conversation ${usd(t.conversation.costUsd)}`));
+  }
+  const out = [
+    `  ${color("●")}  ${dim(new Date(e.endTs ?? e.ts).toLocaleTimeString())}  ${pad(color(name), NAME_WIDTH)}  ${parts.join(dim(" · "))}`,
+  ];
+  if (t.next) {
+    const n = t.next.callsPerMessage;
+    const cost =
+      n !== null && n >= 2
+        ? `about ${usd(t.next.floorUsd * n)} a message here`
+        : `at least ${usd(t.next.floorUsd)} a step`;
+    out.push(
+      `        ${dim(`now ${fmtTokens(t.next.context)} long: Claude re-reads all of it on every step,`)} ${cost}`,
+    );
+  }
+  return out.join("\n");
 }
 
 /** `live`: a long conversation's cache is about to expire. */
-export function renderCacheExpiring(s: CacheState, now: number): string {
+export function renderCacheExpiring(s: CacheState, now: number, title?: string): string {
   const e = s.event;
   const left = minutesLabel((s.expiresAt ?? now) - now);
   return [
     `  ${yellow("⏳")}  ${dim(new Date(now).toLocaleTimeString())}  ${bold(`Cache expires in ${left}`)} ${dim(`${fmtTokens(s.context)} of conversation`)}`,
-    `        ${callSession(e)} ${dim(projectName(e.project))}`,
+    `        ${convoColor(e.sessionId)(clip(convoName(e.sessionId, e.project, title), 60))}`,
     `        ${dim("Coming back after that writes it all again:")} ${bold(usd(s.rewriteUsd))}${dim(`. While warm, a call reads it for ${usd(s.readUsd)}.`)}`,
     `        ${dim("Leaving for longer? Ask for a handoff note (done, next, file), /clear, and start from it.")}`,
   ].join("\n");
 }
 
 /** `live`: the call that just came back to an expired cache, and what it cost. */
-export function renderColdReturn(c: ColdResume): string {
+export function renderColdReturn(c: ColdResume, title?: string): string {
   const e = c.event;
   const what =
     c.ttlMinutes === null
@@ -1619,9 +1676,192 @@ export function renderColdReturn(c: ColdResume): string {
       : `wrote ${fmtTokens(c.rewriteTokens)} into the cache again`;
   return [
     `  ${yellow("⚠")}  ${dim(new Date(e.ts).toLocaleTimeString())}  ${bold("Cold cache")} ${dim(`back after ${minutesLabel(c.gapMinutes * 60_000)}, the first call ${what}`)}`,
-    `        ${callSession(e)} ${dim(projectName(e.project))}`,
+    `        ${convoColor(e.sessionId)(clip(convoName(e.sessionId, e.project, title), 60))}`,
     `        ${dim("That call paid")} ${bold(usd(c.rewriteUsd))} ${dim(`for it; a warm cache would have read it for ${usd(c.warmUsd)}.`)}`,
   ].join("\n");
+}
+
+/**
+ * `live`: something guard held or said in Claude Code, as it happens, with the
+ * conversation it was in. For a note used, that is the conversation it came from.
+ */
+export function renderGuardCatch(
+  r: GuardReceipt,
+  opts: { title?: (sessionId: string) => string | undefined } = {},
+): string {
+  const at = dim(new Date(r.at).toLocaleTimeString());
+  const tok = r.tokens ? fmtTokens(r.tokens) : "";
+  const file = (f?: string) => (f ? (f.split(/[\\/]/).pop() ?? f) : "a file");
+  const named = (id?: string) => {
+    const t = id ? opts.title?.(id) : undefined;
+    return id && t ? `  ${convoColor(id)(clip(t, NAME_WIDTH))}` : "";
+  };
+  const head = (icon: string, label: string, id?: string) =>
+    `  ${icon}  ${at}  ${bold(label)}${named(id)}`;
+  const line = (text: string) => `        ${dim(text)}`;
+  switch (r.kind) {
+    case "cold-hold":
+      return [
+        head(yellow("⏸"), "Guard held a message", r.session),
+        line(
+          `Its cache had expired, so sending it writes ${tok} again: ${usd(r.usd ?? 0)} at stake.`,
+        ),
+        line("Sent again it goes through; /clear starts from a note instead."),
+      ].join("\n");
+    case "cold-sent":
+      return [
+        head(dim("·"), "Guard: sent anyway", r.session),
+        line(`${tok} was written to the cache again.`),
+      ].join("\n");
+    case "handoff-used":
+      return [
+        head(green("✓"), "Guard: started from the note", r.detail),
+        line(
+          `After /clear the new conversation started from guard's note: ${usd(r.usd ?? 0)} of rewrite not spent.`,
+        ),
+      ].join("\n");
+    case "big-read":
+      return [
+        head(yellow("⏸"), "Guard held a read", r.session),
+        line(
+          `${file(r.detail)} whole is about ${tok} tokens; Claude was asked to read the part it needs.`,
+        ),
+      ].join("\n");
+    case "retry":
+      return [
+        head(yellow("⏸"), "Guard held a retry", r.session),
+        line(
+          `${r.detail ?? "a command"} failed twice with nothing changed, so it was not run a third time.`,
+        ),
+      ].join("\n");
+    case "compact":
+      return [
+        head(dim("·"), "Guard: a good moment to /compact", r.session),
+        line(`It is at ${tok}, near where it compacts; guard suggested /compact between tasks.`),
+      ].join("\n");
+    default:
+      return head(dim("·"), `Guard: ${String(r.kind)}`, r.session);
+  }
+}
+
+/** The conversation that cost this live run the most, for `n` when nothing was found. */
+export interface BiggestNow {
+  sessionId: string;
+  name: string;
+  source: string;
+  usd: number;
+  runUsd: number;
+  context: number;
+  /** Re-reading it on the usual number of steps a message takes; null below 100K. */
+  perMessageUsd: number | null;
+}
+
+/** A finding with its step, for `n` in live and under the checks. */
+export interface LiveNextStep {
+  rule: string;
+  /** What the finding saw over its window. It is spent. */
+  paidUsd: number;
+  calls: number;
+  spanMs: number;
+  step: LiveStep;
+}
+
+/** The now and then lines of a step; `a` is named when it can make the setting. */
+function stepLines(s: LiveStep, indent: string, keys?: boolean): string[] {
+  const out: string[] = [];
+  const now = wrap(s.now, 60);
+  out.push(`${indent}${dim("now ")}  ${now[0] ?? ""}`);
+  for (const l of now.slice(1)) out.push(`${indent}      ${l}`);
+  if (s.later) {
+    const later = wrap(s.later, 60);
+    if (keys && s.apply) later[later.length - 1] += `  ${dim("(a applies it)")}`;
+    out.push(`${indent}${dim("then")}  ${later[0] ?? ""}`);
+    for (const l of later.slice(1)) out.push(`${indent}      ${l}`);
+  }
+  return out;
+}
+
+/**
+ * `live` on `n`: the biggest finding's step, with what it already cost and
+ * what it goes on costing per call until something changes.
+ */
+export function renderNextStep(
+  s: LiveNextStep | null,
+  opts: { now?: number; keys?: boolean; biggest?: BiggestNow | null } = {},
+): string {
+  const at = dim(new Date(opts.now ?? Date.now()).toLocaleTimeString());
+  if (!s) {
+    const out = [
+      `  ${green("✓")}  ${at}  ${bold("No waste found")}`,
+      `        ${dim("a step shows here once a finding comes up; ? shows what was checked")}`,
+    ];
+    // Nothing is wasted, but the money still goes somewhere: say where.
+    const b = opts.biggest;
+    if (b) {
+      out.push(
+        `        ${dim("most of this run:")} ${convoColor(b.sessionId)(clip(b.name, NAME_WIDTH))} ${dim(`${usd(b.usd)} of ${usd(b.runUsd)}`)}`,
+      );
+      if (b.perMessageUsd !== null) {
+        const fresh = b.source === "claude-code" ? "/clear" : "/new";
+        out.push(
+          `        ${dim(`it is ${fmtTokens(b.context)} long, and re-reading it costs about`)} ${usd(b.perMessageUsd)} ${dim("a message here.")}`,
+          `        ${dim(`Cheaper from here: /compact between tasks keeps a summary (early details can drop), ${fresh} starts empty.`)}`,
+        );
+      }
+    }
+    return out.join("\n");
+  }
+  const perCall = s.calls > 0 ? s.paidUsd / s.calls : 0;
+  const out = [
+    `  ${blue("→")}  ${at}  ${bold(`Next step: ${ruleLabel(s.rule).toLowerCase()}`)}`,
+    `        ${dim("already paid   ")} ${usd(s.paidUsd)} ${dim(`over ${s.calls} calls, ${span(s.spanMs)}`)}`,
+  ];
+  if (perCall > 0) {
+    out.push(
+      `        ${dim("still avoidable")} ${dim("about")} ${usd(perCall)} ${dim("a call, until it changes")}`,
+    );
+  }
+  out.push(...stepLines(s.step, "        ", opts.keys));
+  return out.join("\n");
+}
+
+/**
+ * `live`: what was checked and what each check saw, then one step for each
+ * finding worth changing. Printed on `?` and when a run stops.
+ */
+export function renderLiveChecks(
+  c: LiveChecks,
+  opts: { now?: number; steps?: LiveNextStep[]; keys?: boolean } = {},
+): string {
+  const out: string[] = [];
+  const now = opts.now ?? Date.now();
+  if (c.calls === 0) {
+    out.push(
+      `  ${dim("·")}  ${dim(new Date(now).toLocaleTimeString())}  ${bold("Nothing to check yet")}`,
+    );
+    out.push(
+      `        ${dim("no calls in the last hour; with the first one: cache, context, warm time, returns, rules")}`,
+    );
+    return out.join("\n");
+  }
+  const bad = c.checks.filter((x) => !x.ok).length;
+  const head =
+    bad === 0 ? green("No waste found") : yellow(`${bad} of ${c.checks.length} need a look`);
+  out.push(
+    `  ${bad === 0 ? green("✓") : yellow("⚠")}  ${dim(new Date(now).toLocaleTimeString())}  ${bold(head)} ${dim(`· the last ${c.calls} calls, ${span(c.spanMs)}`)}`,
+  );
+  const width = Math.max(...c.checks.map((x) => x.name.length));
+  for (const x of c.checks) {
+    out.push(`        ${x.ok ? green("✓") : yellow("!")} ${pad(x.name, width)}  ${dim(x.detail)}`);
+  }
+  for (const s of opts.steps ?? []) {
+    out.push("");
+    out.push(
+      `        ${bold(`Next: ${ruleLabel(s.rule).toLowerCase()}`)} ${dim(`· ${usd(s.paidUsd)} already paid`)}`,
+    );
+    out.push(...stepLines(s.step, "          ", opts.keys));
+  }
+  return out.join("\n");
 }
 
 export function renderLiveRecommendation(

@@ -164,6 +164,15 @@ test("live reports money observed, never money projected", async () => {
   }
 });
 
+test("the window spans earliest to latest call, whatever order they arrive in", async () => {
+  // Two tails replaying history interleave, so the newest call can come first.
+  const recs = streamAll((await events()).reverse());
+  assert.ok(recs.length > 0, "expected a recommendation");
+  for (const rec of recs) {
+    assert.ok(rec.windowMs >= 60_000, `${rec.finding.rule}: window of ${rec.windowMs}ms`);
+  }
+});
+
 test("the judge can veto a downgrade but can never invent one", async () => {
   const evts = await events();
 

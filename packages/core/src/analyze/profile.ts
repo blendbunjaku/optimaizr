@@ -216,6 +216,23 @@ export function buildProfile(
   const biggestWin = biggestOf(recs, share);
   // The screen leads with the biggest win, so the next step follows it.
   const next = biggestWin?.recommendation ?? bottleneck;
+  // A coding agent's calls have no request to replay, so `apply` prints the
+  // steps for them; `simulate` is for SDK traffic.
+  const nextFinding = next ? findings.find((f) => f.rule === next.id) : undefined;
+  const byAgent = nextFinding
+    ? data.events
+        .filter(nextFinding.affects)
+        .every((e) => e.source === "claude-code" || e.source === "codex" || e.source === "opencode")
+    : false;
+  // With no recommendation, the drill-down is the most useful place to look.
+  // Compaction writes the agents' settings, so its step is the preview.
+  const nextCommand = !next
+    ? "optimaizr why"
+    : !byAgent
+      ? `optimaizr simulate ${next.id}`
+      : next.id === "context-compaction"
+        ? "optimaizr apply context-compaction --dry-run"
+        : `optimaizr apply ${next.id}`;
   const savingsMonthlyUsd = recoverableMonthly(findings);
   const breakdown: SpendBreakdown = {
     reread: of(c.cacheRead),
@@ -255,9 +272,7 @@ export function buildProfile(
     biggestWin,
     habits: habitsOf(data.events, share(savingsMonthlyUsd), bottleneck),
     breakdown,
-    // Every recommendation can be simulated; with none, the drill-down is the
-    // most useful place to look instead.
-    nextCommand: next ? `optimaizr simulate ${next.id}` : "optimaizr why",
+    nextCommand,
     sessions,
     budget: budget
       ? budgetStatus(budget.events ?? data.events, {

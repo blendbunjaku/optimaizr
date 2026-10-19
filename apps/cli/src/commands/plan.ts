@@ -149,12 +149,15 @@ export async function cmdCard(args: Args): Promise<void> {
   if (data.events.length === 0) return emptyNotice(data);
   const dayOpts = summaryOptions(args);
   const { findings } = analyze(data);
+  // A change already made is not the card's biggest lever, as in `profile`.
+  const changes = appliedChanges();
   const profile = buildProfile(
     data,
     summarize(data, dayOpts),
     findings,
     undefined,
     planOptions(args).options,
+    { changes, results: measureResults(data, changes).results },
   );
   const recent = args.flags.days
     ? data

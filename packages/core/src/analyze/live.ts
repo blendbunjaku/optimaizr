@@ -104,8 +104,13 @@ export interface LiveAnalyzer {
 }
 
 function datasetOf(events: UsageEvent[]): Dataset {
-  const from = events[0]?.ts ?? "";
-  const to = events[events.length - 1]?.ts ?? "";
+  // Earliest and latest, not first and last: tails arrive interleaved.
+  let from = "";
+  let to = "";
+  for (const e of events) {
+    if (!from || e.ts < from) from = e.ts;
+    if (!to || e.ts > to) to = e.ts;
+  }
   const days =
     from && to ? Math.max(0, (new Date(to).getTime() - new Date(from).getTime()) / 86_400_000) : 0;
   return { events, window: { from, to, days }, sources: ["live"], warnings: [] };
@@ -188,11 +193,11 @@ export function createLiveAnalyzer(opts: LiveOptions = {}): LiveAnalyzer {
       if (before !== undefined && observedUsd < before * regrowth) continue;
       announced.set(finding.rule, observedUsd);
 
-      const first = events[0];
-      const last = events[events.length - 1];
-      const windowMs =
-        first && last ? new Date(last.ts).getTime() - new Date(first.ts).getTime() : 0;
-      const at = trigger ?? last;
+      // Tails interleave (transcripts, Codex, the ledger), so arrival order is
+      // not time order: span the earliest to the latest timestamp.
+      const times = events.map((e) => Date.parse(e.ts)).filter((t) => Number.isFinite(t));
+      const windowMs = times.length ? Math.max(...times) - Math.min(...times) : 0;
+      const at = trigger ?? events[events.length - 1];
       const affected = events.filter(finding.affects);
 
       out.push({

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { costOf, PROVIDERS, providerOf } from "../pricing.js";
+import { costOf, PROVIDERS, providerOf, statedCost } from "../pricing.js";
 import { toolSignatureOf, toolTargetOf, userPath } from "./claudecode.js";
 import type { CompactionRecord, Dataset, ToolCall, UsageEvent } from "../domain/types.js";
 
@@ -126,6 +126,18 @@ function usageShape(t: Tokens, provider: string): Record<string, unknown> {
     cache_read_input_tokens: read,
     cache_creation_input_tokens: write,
   };
+}
+
+/**
+ * optimAIzr's own prices first: opencode's `cost` is 0 on subscriptions. For a
+ * model with no card here, opencode's figure is better than $0.
+ */
+function costed(t: Tokens, provider: string, model: string, ts: string, own: unknown) {
+  const ours = costOf(usageShape(t, provider), model, { at: ts });
+  const stated = num(own);
+  if (!ours.unpriced || stated <= 0) return ours;
+  // With no card the provider is unknown to the split, so give it each count apart.
+  return statedCost(stated, usageShape(t, "unknown"), model);
 }
 
 const TOOL_NAMES = new Map([
@@ -296,8 +308,7 @@ export function mapOpencodeRows(rows: OpencodeRows, opts: OpencodeMapOptions = {
           ...(parentID ? { turnId: `${s.id}:${parentID}` } : {}),
           ...(epoch ? { contextEpoch: epoch } : {}),
           tools,
-          // optimAIzr's own prices: opencode's `cost` is 0 on subscriptions.
-          cost: costOf(usageShape(t, provider), model, { at: ts }),
+          cost: costed(t, provider, model, ts, part.cost),
         });
         tools = [];
         lastContext = num(t.input) + num(t.cache?.read) + num(t.cache?.write);
@@ -441,7 +452,8 @@ function emptyDataset(warnings: string[]): Dataset {
 export const OPENCODE_V2_WARNING =
   "opencode: history from opencode 2.0 (session_v2) isn't read yet, only 1.x sessions";
 
-export const OPENCODE_SQLITE_WARNING = "opencode history needs Node 22.13+ (node:sqlite); skipped";
+// Names the Node in use and the way out, so the note says what to do.
+export const OPENCODE_SQLITE_WARNING = `opencode history skipped: it needs Node 22.13 or later, and this is Node ${process.versions.node} (nvm install 22, or update Node)`;
 
 /**
  * opencode 2.0 writes `session_v2` and `session_message` and stops writing
