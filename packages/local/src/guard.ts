@@ -10,6 +10,7 @@ import {
   COMPACT_NUDGE_SHARE,
   compactNudge,
   type GuardReceipt,
+  guardSaved,
   HANDOFF_TTL_MS,
   handoffContext,
   handoffNote,
@@ -18,7 +19,9 @@ import {
   readTokens,
   RETRY_LIMIT,
   RETRY_REASON,
+  savedText,
   transcriptFacts,
+  writeUsd,
 } from "@optimaizr/core";
 import { optimaizrDir } from "./ledger.js";
 import { claudeSettingsPath } from "./rewriters.js";
@@ -68,6 +71,7 @@ function paths(opts: GuardPaths) {
     marks: path.join(dir, "marks.json"),
     receipts: path.join(dir, "receipts.jsonl"),
     handoffs: path.join(dir, "handoffs"),
+    week: path.join(dir, "week.json"),
   };
 }
 
@@ -356,6 +360,8 @@ export interface GuardHookOptions extends GuardPaths {
   now?: number;
   /** Where Claude Code compacts, when set. Unset falls back to the model's window. */
   compactAt?: number | null;
+  /** Starts working out the week's line in the background, so no hook waits on it. */
+  weekRun?: () => void;
 }
 
 /**
@@ -382,7 +388,7 @@ export function guardHook(
       case "SessionEnd":
         return onEnd(input, p, now);
       case "Stop":
-        return onStop(input, p, now, opts.compactAt ?? null);
+        return onStop(input, p, now, opts.compactAt ?? null) ?? onWeek(input, p, now, opts.weekRun);
       default:
         return null;
     }
@@ -484,12 +490,24 @@ function onRead(input: HookInput, p: Paths, now: number) {
   const bytes = readBytes(file, fileBytes);
   if (bytes <= BIG_READ_BYTES) return null;
   const key = `read|${session}|${file}`;
-  if (readMarks(p)[key]) return null;
+  const marks = readMarks(p);
+  if (marks[key]) {
+    // Read whole after all: the hold didn't stick, so it doesn't count as kept.
+    if (!marks[`${key}|sent`]) {
+      mark(p, `${key}|sent`, now);
+      receipt(p, { at: new Date(now).toISOString(), session, kind: "big-read-sent", detail: file });
+    }
+    return null;
+  }
   mark(p, key, now);
+  const lines = input.transcript_path ? transcriptTail(input.transcript_path) : null;
+  const s = lines && input.transcript_path ? cacheStateOf(lines, input.transcript_path) : null;
+  const usd = s ? writeUsd(readTokens(bytes), s) : null;
   receipt(p, {
     at: new Date(now).toISOString(),
     session,
     kind: "big-read",
+    ...(usd !== null ? { usd } : {}),
     tokens: readTokens(bytes),
     detail: file,
   });
@@ -508,14 +526,17 @@ function onBash(input: HookInput, p: Paths, now: number) {
   if ((facts.failing.get(cmd) ?? 0) < RETRY_LIMIT) return null;
   // One hold per streak: a change that works starts a new one.
   const key = `retry|${session}|${facts.lastChange ?? "start"}|${cmd}`;
-  if (readMarks(p)[key]) return null;
+  const detail = cmd.length > 120 ? `${cmd.slice(0, 117)}...` : cmd;
+  const marks = readMarks(p);
+  if (marks[key]) {
+    if (!marks[`${key}|sent`]) {
+      mark(p, `${key}|sent`, now);
+      receipt(p, { at: new Date(now).toISOString(), session, kind: "retry-sent", detail });
+    }
+    return null;
+  }
   mark(p, key, now);
-  receipt(p, {
-    at: new Date(now).toISOString(),
-    session,
-    kind: "retry",
-    detail: cmd.length > 120 ? `${cmd.slice(0, 117)}...` : cmd,
-  });
+  receipt(p, { at: new Date(now).toISOString(), session, kind: "retry", detail });
   return deny(RETRY_REASON);
 }
 
@@ -580,4 +601,53 @@ function onStop(input: HookInput, p: Paths, now: number, compactAt: number | nul
   mark(p, key, now);
   receipt(p, { at: new Date(now).toISOString(), session, kind: "compact", tokens: s.context });
   return { systemMessage: compactNudge(s.context, at) };
+}
+
+/** The Monday of `now`'s week, as a local YYYY-MM-DD. */
+function weekOf(now: number): string {
+  const d = new Date(now);
+  d.setDate(d.getDate() - ((d.getDay() + 6) % 7));
+  const two = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${two(d.getMonth() + 1)}-${two(d.getDate())}`;
+}
+
+/** Saved by `optimaizr guard week`, for the first conversation of the week to show. */
+export function saveWeekLine(text: string, opts: GuardPaths & { now?: number } = {}): void {
+  const p = paths(opts);
+  fs.mkdirSync(p.dir, { recursive: true });
+  const week = weekOf(opts.now ?? Date.now());
+  fs.writeFileSync(p.week, JSON.stringify({ week, text }) + "\n");
+}
+
+/**
+ * Once a week, at the end of a turn: the last 7 days in a line. Working it
+ * out reads two weeks of transcripts, so the first turn of the week starts it
+ * in the background and a later turn shows it.
+ */
+function onWeek(input: HookInput, p: Paths, now: number, run?: () => void) {
+  if (!input.transcript_path || !input.session_id) return null;
+  const week = weekOf(now);
+  const marks = readMarks(p);
+  if (marks[`week|${week}`]) return null;
+  const lines = transcriptTail(input.transcript_path);
+  // Nobody reads a headless run's messages.
+  if (!lines || transcriptFacts(lines).entrypoint?.startsWith("sdk")) return null;
+  let saved: { week?: string; text?: string } = {};
+  try {
+    saved = JSON.parse(fs.readFileSync(p.week, "utf8"));
+  } catch {
+    // Not worked out yet.
+  }
+  if (saved.week === week && typeof saved.text === "string") {
+    mark(p, `week|${week}`, now);
+    const kept = savedText(guardSaved(readReceipts(now - 7 * 86_400_000, { dir: p.dir })));
+    return {
+      systemMessage: `optimAIzr, your last 7 days: ${saved.text}.${kept ? ` Guard: ${kept}.` : ""}`,
+    };
+  }
+  if (run && !marks[`week-run|${week}`]) {
+    mark(p, `week-run|${week}`, now);
+    run();
+  }
+  return null;
 }

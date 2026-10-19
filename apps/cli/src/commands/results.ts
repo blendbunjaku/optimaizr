@@ -1,5 +1,5 @@
-import { measureResults, renderResults, resultsDays } from "@optimaizr/core";
-import { appliedChanges } from "@optimaizr/local";
+import { guardSaved, measureResults, renderResults, resultsDays, savedText } from "@optimaizr/core";
+import { appliedChanges, readReceipts } from "@optimaizr/local";
 import type { Args } from "../args.js";
 import { load } from "../data.js";
 
@@ -20,5 +20,6 @@ export async function cmdResults(args: Args): Promise<void> {
     console.log(JSON.stringify(report, null, 2));
     return;
   }
-  console.log(renderResults(report, { now }));
+  const kept = rule ? null : savedText(guardSaved(readReceipts(now - 7 * 86_400_000)));
+  console.log(renderResults(report, { now, kept }));
 }

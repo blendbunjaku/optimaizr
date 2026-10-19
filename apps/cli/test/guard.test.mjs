@@ -6,16 +6,25 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { handoffNote, renderGuardCatch, transcriptFacts } from "@optimaizr/core";
+import {
+  guardSaved,
+  handoffNote,
+  renderGuardCatch,
+  savedText,
+  transcriptFacts,
+  weekCompare,
+  weekText,
+} from "@optimaizr/core";
 import {
   applyGuard,
   guardApplied,
   guardHook,
   readReceipts,
+  saveWeekLine,
   tailReceipts,
   undoGuard,
 } from "@optimaizr/local";
-import { bash, edit, START, transcript } from "./fixtures/transcripts.mjs";
+import { bash, edit, load, START, transcript } from "./fixtures/transcripts.mjs";
 
 /**
  * 0.12: guard, the Claude Code hooks that hold a costly step once and let it
@@ -149,6 +158,58 @@ test("the handoff note is the last ask, the files changed, open todos and the la
     ].join("\n"),
   );
   assert.equal(handoffNote(transcriptFacts([])), null);
+});
+
+test("the note says what was tried and dropped: failed runs, edits turned down or undone", () => {
+  const recs = transcript("s", [
+    { prompt: "make the e2e pass" },
+    { tools: [bash("npm run e2e", { error: true })] },
+    { tools: [bash("npm run e2e", { error: true })] },
+    { tools: [bash("grep -rn nothing src", { error: true })] },
+    { tools: [bash("npm run build", { error: true })] },
+    { tools: [bash("npm run build")] },
+    { tools: [edit("/w/src/a.ts", "x")] },
+    {
+      tools: [
+        { name: "Edit", input: { file_path: "/w/src/a.ts", old_string: "x!", new_string: "x" } },
+      ],
+    },
+  ]);
+  const refused = [
+    {
+      type: "assistant",
+      sessionId: "s",
+      message: {
+        content: [
+          { type: "tool_use", id: "no1", name: "Write", input: { file_path: "/w/src/b.ts" } },
+        ],
+      },
+    },
+    {
+      type: "user",
+      sessionId: "s",
+      message: {
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: "no1",
+            is_error: true,
+            content: "The user doesn't want to proceed with this tool use.",
+          },
+        ],
+      },
+    },
+  ];
+  const f = transcriptFacts(lines([...recs, ...refused]));
+  assert.deepEqual(f.dropped, [
+    { kind: "failed", command: "npm run e2e", times: 2 },
+    { kind: "undone", file: "/w/src/a.ts" },
+    { kind: "declined", file: "/w/src/b.ts" },
+  ]);
+  assert.match(
+    handoffNote(f, "/w"),
+    /\nDropped: npm run e2e \(failed 2 times\); a change to src\/a\.ts, undone; an edit to src\/b\.ts, turned down$/,
+  );
 });
 
 test("guard on sets its hooks next to someone's own, and off takes out only its own", () => {
@@ -426,6 +487,7 @@ test("a command that failed twice with nothing changed is held once per streak",
     readReceipts(0, opts).map((r) => [r.kind, r.detail]),
     [
       ["retry", "npm test"],
+      ["retry-sent", "npm test"],
       ["retry", "npm test"],
     ],
   );
@@ -445,6 +507,99 @@ test("near the compaction point the end of a turn says so, once per conversation
   );
   assert.equal(guardHook(stop, { ...opts, compactAt: 200_000 }), null);
   assert.equal(guardHook({ hook_event_name: "Notification" }, opts), null);
+});
+
+test("only holds that stuck count as saved", () => {
+  const at = (m) => new Date(START + m * MIN).toISOString();
+  const r = (m, kind, extra = {}) => ({ at: at(m), session: "s1", kind, ...extra });
+  const saved = guardSaved([
+    // Sent again anyway: the hold did nothing.
+    r(1, "cold-hold", { usd: 2 }),
+    r(2, "cold-sent", { usd: 2 }),
+    // Started fresh from the note instead.
+    r(3, "cold-hold", { session: "s2", usd: 3 }),
+    // Read whole after all, then another file held and left.
+    r(4, "big-read", { detail: "/w/a.ts", usd: 0.4 }),
+    r(5, "big-read-sent", { detail: "/w/a.ts" }),
+    r(6, "big-read", { detail: "/w/b.ts", usd: 0.5 }),
+    // A retry held twice: run again the first time, not the second.
+    r(7, "retry", { detail: "npm test" }),
+    r(8, "retry-sent", { detail: "npm test" }),
+    r(9, "retry", { detail: "npm test" }),
+    r(10, "compact-nudge"),
+  ]);
+  assert.deepEqual(saved, { catches: 3, usd: 3.5 });
+  assert.equal(savedText(saved), "3 catches, $3.50 not spent");
+  assert.equal(savedText({ catches: 1, usd: 0 }), "1 catch");
+  assert.equal(savedText({ catches: 0, usd: 0 }), null);
+});
+
+test("a whole read or a retry that goes through the second time says so once", () => {
+  const dir = tmp("guard-sent");
+  const opts = { dir: path.join(dir, "guard") };
+  const big = path.join(dir, "big.ts");
+  fs.writeFileSync(big, `${"x".repeat(49)}\n`.repeat(2_000));
+  const readOf = { hook_event_name: "PreToolUse", session_id: "s1", cwd: dir, tool_name: "Read" };
+  for (let i = 0; i < 3; i++) guardHook({ ...readOf, tool_input: { file_path: big } }, opts);
+  assert.deepEqual(
+    readReceipts(0, opts).map((x) => x.kind),
+    ["big-read", "big-read-sent"],
+  );
+  assert.deepEqual(guardSaved(readReceipts(0, opts)), { catches: 0, usd: 0 });
+});
+
+test("the week line: the last 7 days against the 7 before", async () => {
+  const later = START + 2 * 86_400_000;
+  const data = await load({
+    s1: transcript("s1", [
+      { prompt: "build it" },
+      { out: 300, ctx: 0, write: 150_000 },
+      { out: 300, ctx: 150_000, write: 1_000 },
+      { prompt: "carry on", gap: 30 },
+      { out: 300, ctx: 0, write: 152_000 },
+    ]),
+  });
+  const w = weekCompare(data.events, later);
+  assert.equal(w.cold, 1);
+  assert.equal(w.rereadShareBefore, null, "nothing the week before");
+  assert.ok(w.rereadShare > 0 && w.rereadShare < 1);
+  assert.equal(weekCompare(data.events, later + 8 * 86_400_000), null, "a quiet week");
+  assert.equal(
+    weekText({ rereadShare: 0.28, rereadShareBefore: 0.56, cold: 1, coldBefore: 5, spendUsd: 9 }),
+    "re-reading 28% of spend (was 56%), 1 return to a cold cache (was 5)",
+  );
+});
+
+test("the first end of a turn in a week works the line out, and a later one shows it once", () => {
+  const dir = tmp("guard-week");
+  const opts = { dir: path.join(dir, "guard"), compactAt: 400_000, now: Date.now() };
+  const file = write(dir, "s1", longConversation("s1"));
+  const stop = { hook_event_name: "Stop", session_id: "s1", transcript_path: file };
+  let runs = 0;
+  const weekRun = () => runs++;
+
+  assert.equal(guardHook(stop, { ...opts, weekRun }), null, "nothing worked out yet");
+  assert.equal(guardHook(stop, { ...opts, weekRun }), null);
+  assert.equal(runs, 1, "worked out once a week, in the background");
+
+  saveWeekLine("re-reading 28% of spend (was 56%), 2 returns to a cold cache (was 5)", opts);
+  fs.appendFileSync(
+    path.join(opts.dir, "receipts.jsonl"),
+    `${JSON.stringify({ at: new Date(opts.now).toISOString(), session: "s0", kind: "cold-hold", usd: 1.2 })}\n`,
+  );
+  assert.equal(
+    guardHook(stop, { ...opts, weekRun }).systemMessage,
+    "optimAIzr, your last 7 days: re-reading 28% of spend (was 56%), 2 returns to a cold cache (was 5). Guard: 1 catch, $1.20 not spent.",
+  );
+  assert.equal(guardHook(stop, { ...opts, weekRun }), null, "once a week");
+
+  const sdk = write(dir, "sdk", [
+    ...longConversation("sdk"),
+    { type: "attachment", entrypoint: "sdk-cli", sessionId: "sdk" },
+  ]);
+  const fresh = { ...opts, dir: path.join(dir, "other"), weekRun };
+  assert.equal(guardHook({ ...stop, session_id: "sdk", transcript_path: sdk }, fresh), null);
+  assert.equal(runs, 1, "a headless run starts nothing");
 });
 
 test("live picks up what guard did from now on, and says it in a line", () => {

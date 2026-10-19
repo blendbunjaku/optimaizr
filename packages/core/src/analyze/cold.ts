@@ -26,6 +26,11 @@ export interface ColdResume {
   /** The call before it in the same conversation, the last one with a warm cache. */
   previous: UsageEvent;
   gapMinutes: number;
+  /**
+   * "tool" when Claude had asked for a tool and carried on in the same turn once
+   * it came back: a long command, a subagent or a permission prompt. Else "away".
+   */
+  waiting: "away" | "tool";
   /** The cache lifetime the conversation was written with; null where the provider decides. */
   ttlMinutes: 5 | 60 | null;
   rewriteTokens: number;
@@ -100,6 +105,8 @@ export function coldReturn(prev: UsageEvent, e: UsageEvent, before: CacheSeen): 
   const price = priceFor(e.model);
   if (!price) return null;
   const r = ratesFor(price, { at: e.ts, speed: e.speed, batch: e.batch });
+  // Still in the same turn after a tool call: no one typed, Claude was waiting.
+  const waiting = prev.stopReason === "tool_use" && e.turnId === prev.turnId ? "tool" : "away";
   if (auto) {
     // The recorded input cost already carries any long-context rate.
     const warmShare = r.inputPerM > 0 ? r.cachedInputPerM / r.inputPerM : 0;
@@ -107,6 +114,7 @@ export function coldReturn(prev: UsageEvent, e: UsageEvent, before: CacheSeen): 
       event: e,
       previous: prev,
       gapMinutes,
+      waiting,
       ttlMinutes,
       rewriteTokens,
       rewriteUsd: e.cost.input,
@@ -117,6 +125,7 @@ export function coldReturn(prev: UsageEvent, e: UsageEvent, before: CacheSeen): 
     event: e,
     previous: prev,
     gapMinutes,
+    waiting,
     ttlMinutes,
     rewriteTokens,
     rewriteUsd:
@@ -139,4 +148,12 @@ export function coldResumes(events: UsageEvent[]): ColdResume[] {
     }
   }
   return found;
+}
+
+/** What Claude was waiting on after `e` asked for tools: the command, a subagent, or the tool. */
+export function waitedOn(e: UsageEvent): string {
+  const bash = e.tools.find((t) => t.name === "Bash");
+  if (bash) return bash.signature.slice("Bash:".length).trim() || "a command";
+  if (e.tools.some((t) => t.name === "Task" || t.name === "Agent")) return "a subagent";
+  return e.tools[0]?.name ?? "a tool";
 }

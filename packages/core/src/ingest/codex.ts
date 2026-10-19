@@ -138,6 +138,8 @@ export interface CodexState {
   toolLast: boolean;
   /** The latest limit meter, including one from a refresh that billed nothing. */
   limits?: RateLimitSnapshot;
+  /** Started with `codex exec`: nobody was there to read it. */
+  headless?: boolean;
 }
 
 export function createCodexState(file: string): CodexState {
@@ -184,6 +186,7 @@ export function consumeCodexLine(state: CodexState, line: string): CallEvent | n
   if (row.type === "session_meta") {
     if (typeof p.id === "string") state.sessionId = p.id;
     if (typeof p.cwd === "string") state.cwd = p.cwd;
+    if (p.source === "exec") state.headless = true;
     return null;
   }
 
@@ -281,6 +284,7 @@ export function consumeCodexLine(state: CodexState, line: string): CallEvent | n
     cacheWrite5mTokens: 0,
     cacheWrite1hTokens: 0,
     effort: state.effort,
+    ...(state.headless ? { headless: true } : {}),
     ...(state.turnId ? { turnId: state.turnId } : {}),
     ...(state.epoch ? { contextEpoch: state.epoch } : {}),
     tools,

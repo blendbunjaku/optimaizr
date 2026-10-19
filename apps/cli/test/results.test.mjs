@@ -6,6 +6,7 @@ import path from "node:path";
 
 import {
   computeMetrics,
+  filesReadAgain,
   measureChange,
   measureResults,
   renderResults,
@@ -223,6 +224,59 @@ test("results: caveats name a project shift, a shorter baseline and another chan
   assert.match(text, /Against just the 3 days before the change it is 8% less instead of/);
   assert.match(text, /different projects: other went from 0% to 100%/);
   assert.match(text, /Another change landed in this period \(heavy-start, 2026-10-03\)/);
+  // The headline carries the spread across baselines, not just the full one.
+  assert.ok(r.range.low < -0.39 && r.range.high > -0.09);
+  assert.equal(r.range.shortest, 3);
+  assert.match(
+    renderResults(measureResults({ events }, [compact200], { now: AT + 8 * DAY })),
+    /Working:.*8% to 40% less per prompt than the 3 to 14 days before/,
+  );
+});
+
+test("results: more calls and errors per prompt are a trade-off for any change", () => {
+  const events = [
+    ...days(-14, 0, 30, { perPrompt: 1, ctx: 300_000, errors: 1 }),
+    ...days(0, 8, 30, { perPrompt: 0.6, ctx: 120_000, calls: 3, errors: 2 }),
+  ];
+  const r = measureChange({ events }, compact200, { now: AT + 8 * DAY });
+  assert.equal(r.verdict, "working");
+  assert.equal(r.withCost, true);
+  for (const key of ["callsPerPrompt", "errorsPerPrompt"]) {
+    const x = r.rows.find((y) => y.key === key);
+    assert.ok(x.tradeOff && x.worse, key);
+  }
+  assert.match(
+    renderResults(measureResults({ events }, [compact200], { now: AT + 8 * DAY })),
+    /It\s+comes\s+with\s+a\s+cost:\s+calls\s+per\s+prompt\s+and\s+tool\s+errors\s+per\s+prompt\s+went\s+up/,
+  );
+});
+
+test("results: files read again after a compaction are the ones read before it", () => {
+  const call = (session, minute, tools) => ({
+    id: `${session}-${minute}`,
+    sessionId: session,
+    ts: iso(AT + minute * 60_000),
+    isSubagent: false,
+    tools,
+  });
+  const read = (target) => ({ name: "Read", target });
+  const events = [
+    call("a", 0, [read("/w/x.ts"), read("/w/y.ts")]),
+    call("a", 1, [{ name: "Edit", target: "/w/z.ts" }]),
+    // After the summary: x and z again, w is new.
+    call("a", 10, [read("/w/x.ts"), read("/w/x.ts"), read("/w/w.ts")]),
+    call("a", 11, [read("/w/z.ts")]),
+    // After the second one: only y.
+    call("a", 20, [read("/w/y.ts")]),
+    // Another conversation reading x doesn't count.
+    call("b", 12, [read("/w/x.ts")]),
+  ];
+  const comps = [
+    { ...compaction(0), sessionId: "a", ts: iso(AT + 5 * 60_000) },
+    { ...compaction(0), sessionId: "a", ts: iso(AT + 15 * 60_000) },
+    { ...compaction(0), sessionId: "b", ts: iso(AT + 11 * 60_000) },
+  ];
+  assert.deepEqual(filesReadAgain(events, comps), [2, 1, 0]);
 });
 
 test("results: logs that stop short of the baseline are named", () => {

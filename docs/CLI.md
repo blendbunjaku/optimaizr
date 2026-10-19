@@ -95,6 +95,7 @@ mid-session and `/optimaizr handoff`, and nothing above needs it.
 | `optimaizr why`             | Drill into where the money actually goes                             |
 | `optimaizr live`            | Watch calls as they happen and surface fixes interactively           |
 | `optimaizr statusline on`   | Context, re-read cost and cache countdown under Claude Code's prompt |
+| `optimaizr guard on`        | Hold a costly step once in Claude Code, before it is paid            |
 | `optimaizr mod`             | Install steps and status of the Claude Code mod                      |
 | `optimaizr recommend`       | Ranked actions with impact and confidence                            |
 | `optimaizr show <rule>`     | The individual requests a recommendation touches                     |
@@ -117,11 +118,17 @@ mid-session and `/optimaizr handoff`, and nothing above needs it.
 Flags: `--why` (show every calculation and assumption), `--days N`,
 `--project STR`, `--source all|agents|sdk`, `--tz utc|local|<IANA>`, `--json`.
 
+`optimaizr help` lists the commands to start with, in four groups: start here,
+change things, look closer, about. `optimaizr help all` lists every one,
+including the older views, and `optimaizr <command> --help` gives a command's
+own flags.
+
 `live` also takes `--backfill N` (replay recorded history first), `--window N`,
 `--min-usd N` (default $0.25), `--source all|agents|sdk`, `--no-prompt` (print
 recommendations instead of asking), `--no-turns` (no line after each Claude
-Code turn) and `--auto` (apply confident model and effort switches through the
-Claude Code mod without asking). With `--json` it never prompts. `sessions`
+Code turn), `--notify` (system notifications, see
+[Watching live](#watching-live)) and `--auto` (apply confident model and effort
+switches through the Claude Code mod without asking). With `--json` it never prompts. `sessions`
 takes `--top N`, how many conversations to list (10 by default).
 
 ---
@@ -191,18 +198,19 @@ the same tokens on Opus 5.5 · this turn $0.10 on Sonnet 5.5 · 1 request`, the
   5-minute rate.
 - **Effort.** Accepting a `reasoning-effort` finding in `live` writes an effort
   switch: the same model, asked to think less on that work. The mod only ever
-  lowers effort, and `/optimaizr off` goes back. In one test of the mod
-  switching a session to low, the first request at the new effort read the
-  conversation without the cache ($0.23 against $0.02 to $0.03 for the next
-  ones). Effort changes made with `/effort` between the other levels kept the
-  cache in all 10 cases seen so far, so it may be low that costs the reload. Claude
-  Code doesn't report how much a request would have reasoned at the old
-  setting, so effort switches carry no dollar figure.
+  lowers effort, and `/optimaizr off` goes back. A change made with `/effort`
+  keeps the cache: in every case seen so far, `/effort low` among them, the
+  next request read the whole conversation from it. One early test of the mod
+  switching a session to low, on Claude Code 2.1.286, did read it again
+  ($0.23 against $0.02 to $0.03 for the next ones); that came from how the mod
+  switched, not from the lower effort. Claude Code doesn't report how much a
+  request would have reasoned at the old setting, so effort switches carry no
+  dollar figure.
 - **A retry guard.** When the same command fails twice in a row and nothing has
   changed since (no successful edit or command in between), the mod holds the
   next identical attempt once and tells Claude to change something first. If
   Claude runs it again anyway, it goes through. Set the `retryGuard` option to
-  `false` to turn it off. The mod keeps the commands it has seen in memory
+  `false` to turn it off. [Guard](#guard) does the same without the mod. The mod keeps the commands it has seen in memory
   only, and forgets them on compaction and `/clear`.
 
 Dollar figures are what Claude Code totals, at API rates; on a plan they are
@@ -545,16 +553,28 @@ few long sessions or many medium ones, and at what size does re-reading take
 over? All of it is measured, nothing is estimated:
 
 - calls, prompts and peak context per session (median and the top 1 in 10)
-- the cache hit rate
+- the cache hit rate, and how many sessions were headless: started by
+  `claude -p`, the Agent SDK or `codex exec`, with nobody there to read them.
+  The costliest conversations mark them too
+- the last five 5-hour windows: what each cost, its share of the window, how
+  many conversations spent it and how many ran at once, and which ones took
+  the most
 - main-conversation calls by context size (0-50K up to 500K+), each band's
   share of spend and how much of its cost was re-reading, with the size where
   re-reading becomes half the cost of a call
 - the costliest tenth of sessions and their share, the sessions that passed
   200K, and spend by session length
 - cache writes: their share of tokens and of spend, what a session spends on
-  them (median and the top 1 in 10), and what each write was for (below)
+  them (median and the top 1 in 10), how much went to the 1-hour cache and how
+  much to the 5-minute one, and what each write was for (below)
 - cold cache returns: how often a long conversation was picked up after its
-  cache expired, and what rewriting it cost against reading it warm
+  cache expired, and what rewriting it cost against reading it warm. They are
+  split into the times you were away and the times Claude was waiting on a
+  tool in the middle of a turn: a long command, a subagent or a permission
+  prompt left open. On the 5-minute cache, it names the commands Claude was
+  waiting on when the cache ran out
+- with [guard](#guard) on, conversations started from its handoff note against
+  conversations carrying on after a compaction (below)
 
 Re-reading is priced at the cache-read rate, already the cheapest rate there
 is. It is the biggest share because every call pays it. A cache write costs
@@ -574,6 +594,39 @@ tokens can be a quarter of the bill. Each write gets one cause:
 The last three wrote again what the cache already held, and the section totals
 them. `--json` prints the same numbers, and `profile --json` carries them as
 `sessions`.
+
+The windows show when parallel conversations are what drained one:
+
+```
+  5-hour windows (Claude Code, the latest 5 of 61)
+    Oct 18 20:00     $30.35   ~79% of 5h   4 conversations, 3 at once
+        90% Billing webhooks · 8% Release notes · 2% Flaky e2e test · 1 more
+    Oct 16 13:00     $0.485  ~1.3% of 5h   1 conversation
+        100% Landing page copy
+    Two or more conversations ran at once in 38 of 61 windows, 83% of spend.
+```
+
+A window starts at the hour of the first call after the last one closed and
+lasts five hours. At once is the most
+conversations with a call in the same 10 minutes.
+
+Guard's handoff note is a fresh start that carries the work over; compacting
+carries it over in a summary. Both are measured the same way:
+
+```
+  Starting from a note against compacting (Claude Code)
+                            from a note   after a compaction
+    times                             2                   69
+    first call                      39K                  46K
+    waited before it               none               1m 16s
+    files read again                0.0                  1.2
+    calls per prompt                3.0                 11.7
+```
+
+First call is the context of the first call after it, waited is how long the
+summary took, and files read again counts files the conversation had worked on
+before and read again after. Until there are 5 notes it says to read it as a
+first look.
 
 ---
 
@@ -818,29 +871,32 @@ against the days before: 14, or as many as the change has been in, up to 30.
 
 ```
   Compact earlier: Claude Code at 200K
-  applied Oct 7, 5 days ago
+  applied Oct 7, 12 days ago
 
-  Working: 28% less per prompt than the 14 days before. It comes with a
-  cost: compactions a day and waiting for summaries a day went up.
-  Early reading, 5 days in: one heavy day can still swing it.
+  Working: 5% to 24% less per prompt than the 3 to 14 days before. It
+  comes with a cost: calls per prompt, tool errors per prompt,
+  compactions a day, files read again after summaries a day and waiting
+  for summaries a day went up.
 
-                                     before     after
-    cost per prompt                   $1.06    $0.762   -28%
-    cost per call                    $0.142    $0.071   -50%
-    calls per prompt                    7.5        11   +44%
-    tool errors per prompt             0.21      0.35   +66%
-    calls past 200K                     60%        0%   -60 pts
-    median context                     288K       99K   -66%
-    compactions a day                  0.23       5.9   25x  trade-off
-    landed mid-task                    100%       95%   -5 pts
-    waiting for summaries a day        0.4m      8.0m   19x  trade-off
+                                                before     after
+    cost per prompt                              $1.06    $0.803   -24%
+    cost per call                               $0.142    $0.066   -54%
+    calls per prompt                               7.5        12   +64%  trade-off
+    tool errors per prompt                        0.21      0.35   +68%  trade-off
+    calls past 200K                                60%        0%   -60 pts
+    median context                                288K      100K   -65%
+    compactions a day                             0.23       5.2   23x  trade-off
+    landed mid-task                               100%       96%   -4 pts
+    files read again after summaries a day        0.38       6.2   16x  trade-off
+    waiting for summaries a day                   0.4m      6.8m   16x  trade-off
 
-  Since the change: 29 conversations, 233 prompts, 41 compactions, fired
-  at 168K on the median, 0 calls past 200K.
+  Since the change: 46 conversations, 363 prompts, 68 compactions, fired
+  at 168K on the median, 80 files read again after them, 0 calls past
+  200K.
 
   Worth knowing
-  · Against just the 5 days before the change it is 10% less instead
-    of 28% less, so part of the difference may have been under way
+  · Against just the 5 days before the change it is 5% less instead of
+    24% less, so part of the difference may have been under way
     already.
 ```
 
@@ -848,11 +904,17 @@ The verdict is judged on cost per prompt (per call where there are no
 prompts, as with SDK traffic), counted only for the agent and project the
 change covers. A verdict needs 3 active days and 100 prompts after the change
 (300 calls for SDK traffic); until then it says how far along it is and when
-to look again. A move of under 10% either way is no clear effect. The other rows
-are there so a saving that costs you something shows it: more calls, more tool
-errors, more time waiting on summaries. Codex changes get the same rows, from
-Codex's own compactions, except the wait: Codex doesn't record how long a
-summary takes.
+to look again. A move of under 10% either way is no clear effect. When a
+shorter baseline (3, 5 or 7 days) gives a different size, the verdict gives the
+range, lowest to highest, instead of the one number that reads best.
+
+The other rows are there so a saving that costs you something shows it, for
+every kind of change: more calls per prompt, more tool errors, more time
+waiting on summaries, and for compaction the files read again after each
+summary (files the conversation had worked on before it, read again before the
+next one). Any of them going up is marked as a trade-off, and the verdict says
+so. Codex changes get the same rows, from Codex's own compactions, except the
+wait: Codex doesn't record how long a summary takes.
 
 What it can't tell apart, it names: a baseline shorter than 14 days, a
 different mix of projects before and after, another change in the same days,
@@ -860,15 +922,43 @@ or a difference that was already under way in the days just before. `results
 <rule>` shows one change; `--json` gives the whole report.
 
 `optimaizr metrics` counts realised savings only from these readings: what
-each measured change saved since it went in, at the measured rate.
+each measured change saved since it went in, at the measured rate. With
+[guard](#guard) on, `results` ends with what it kept in the last 7 days.
 
 ---
 
 ## Watching live
 
 `optimaizr live` follows Claude Code, Codex, opencode and your wrapped apps as
-they run. On a terminal it keeps one status line at the bottom (calls, spend
-this run, the last call and its context, what it found, when it last checked).
+they run. It opens with a legend, not a manual: what it watches, how a finished
+turn reads, the three marks (**⚠** worth a look, **⏸** guard stepped in, **⏳**
+a cache about to expire), your last 7 days in a line, whether
+[guard](#guard) is on and what it kept, and the keys.
+
+On a terminal the bottom stays in place and redraws itself: a row for each
+conversation with a call in the last hour (up to four, then how many more),
+working ones first, and the status line under them:
+
+```
+  ── now ─────────────────────────────────────────────────────────
+  ⠹ Billing webhooks          Claude working · 1m 12s · $0.21 so far · 161K
+  ○ Release notes             idle 6m · 98K · cache warm 54m more
+  ◉ optimAIzr live · $4.80 this run · 37 calls · most: Billing webhooks $3.90 · nothing found yet (? why) · watching ⣾
+```
+
+A working conversation has a spinner and what the turn has cost so far. An
+idle one says how long its cache stays warm (yellow in the last 15 minutes) or
+that it expired. Each conversation keeps its colour everywhere it is named.
+The status line says what the run has found: nothing yet (under 50 calls), no
+waste found, or how much the findings have already cost and what they still
+cost a call.
+
+| Key | What it does                                                                                                                                                                                                                                                                        |
+| --- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `?` | What was checked and passed: the cache hit rate, context against the compaction point, how long caches stay warm, cold returns, tool errors, models. It also prints once at 50 calls and when you stop.                                                                             |
+| `n` | The next step for the biggest finding: what it has already cost, what it still costs a call, and what to do now and next time. With nothing found, the costliest conversation this run, what each message re-reads, and `/compact` against `/clear` (`/new` in Codex and opencode). |
+| `a` | Applies that step when it is a setting optimAIzr can undo (guard, compacting earlier), after a Y/N. With `--dry-run` it says what it would change.                                                                                                                                  |
+
 It says when a conversation's context jumps by 50K or more in one call, or
 passes 200K, with what re-reading it costs on that call, and the first time a
 Claude Code or Codex conversation passes 200K it offers to compact earlier from
@@ -876,20 +966,24 @@ then on. Findings come as cards with what happened, the change, the money and
 how sure it is; press **Y** to apply, **N** to skip, **D** for the evidence. On
 Ctrl-C it prints what the run saw and found.
 
-It also follows each long conversation's cache (50K tokens or more). The status
-line shows the warm cache that expires first (`cache 161.0K warm 42m`, or for
-Codex, whose cache lifetime OpenAI decides, how long it has sat idle). Five
-minutes before a cache expires it says what coming back after will cost, when
-that is 50 cents or more, and a call that did come back to an expired cache is
-shown with what it paid against a warm read. With `--json` these arrive as
-`{"cache": {"kind": "expiring" | "cold", ...}}`.
+It also follows each long conversation's cache (50K tokens or more), in the
+rows at the bottom (for Codex, whose cache lifetime OpenAI decides, how long it
+has sat idle). Five minutes before a cache expires it says what coming back
+after will cost, when that is 50 cents or more, and a call that did come back
+to an expired cache is shown with what it paid against a warm read, and
+whether you were away or Claude was waiting on a tool. With `--json` these
+arrive as `{"cache": {"kind": "expiring" | "cold", ...}}`.
 
-When a Claude Code turn ends, it says how long the agent worked, what the turn
-cost and its own share of your 5-hour window, then the conversation so far:
+`--notify` adds system notifications (macOS, or `notify-send` on Linux) for a
+cache about to expire, a cold return, and a turn done after 45 seconds or more,
+for when the terminal is out of sight.
+
+When a Claude Code turn ends, one line names the conversation, in its colour,
+then how long the agent worked, what the turn cost, its own share of your
+5-hour window and the conversation so far:
 
 ```
-  ✓  14:32:08  2m 10s · $0.620 · ~1.5% of 5h  Fix the login bug
-        this conversation $7.80 · ~19% of 5h · 41m 00s
+  ●  14:32:08  Fix the login bug     2m 10s · $0.620 · ~1.5% of 5h · conversation $7.80
 ```
 
 The share is the turn's dollars over what 1% of your window costs, not the
@@ -897,9 +991,12 @@ meter before and after: with three or four sessions open, all of them move it.
 What 1% costs is learned from the meter's history (Claude Desktop keeps one,
 and the status line logs a reading each time the meter moves) and what Claude
 Code spent while it moved, once three windows have each moved 5 points or
-more. Until then it is your plan's estimated limit over 100, and the line says
-which it used. This works for conversations in the VS Code extension too.
-`--no-turns` hides it, and with `--json` each turn arrives as `{"turn": ...}`.
+more. Until then it is your plan's estimated limit over 100, and the legend at
+the top says which it used. This works for conversations in the VS Code
+extension too. In a conversation over 100K a second line says what each
+message re-reads before anything new: `now 152K long: Claude re-reads all of it
+on every step, about $0.19 a message here`. `--no-turns` hides them, and with
+`--json` each turn arrives as `{"turn": ...}`.
 
 ### Under Claude Code's prompt
 
@@ -931,6 +1028,72 @@ replaced: `statusline on` says so and changes nothing. `apply statusline` and
 Claude Code draws status lines in a terminal. The VS Code extension's chat panel
 doesn't show one, so there run `optimaizr live` in the editor's terminal for the
 same countdown.
+
+---
+
+## Guard
+
+`live` says what a step cost after it was paid. Guard steps in before, through
+ordinary Claude Code hooks, so its holds work in the terminal and the VS Code
+extension's chat panel alike, with no mod:
+
+```
+optimaizr guard on        # adds its hooks to ~/.claude/settings.json
+optimaizr guard off       # takes out only its own
+optimaizr guard           # on or off, and what it held in the last 7 days
+```
+
+It holds a costly step once and lets it through when it comes again:
+
+| Hold          | When                                                                                                                                                                    |
+| ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Expired cache | A message to a conversation whose cache expired, when sending it writes 50 cents or more back into the cache. It says what, and on Opus or Fable what Sonnet would pay. |
+| Big read      | Claude reading a whole file over 64KB. Claude is told to Grep for the part it needs or read a range, and a second whole read goes through.                              |
+| Retry         | The same command failing twice in a row with nothing changed in between. Claude is told to change something or say what blocks it.                                      |
+| Compact nudge | Once, at the end of a turn, when the conversation is at 75% of where it compacts: `/compact` now, before the next task starts mid-summary.                              |
+
+A held message isn't lost: Claude Code prints it under the hold as Original
+prompt. Send it again to go ahead, or type `/clear` and send it there: the
+new conversation starts from a short note of where the held one stood, built
+from its transcript with no model call:
+
+```
+Asked last: add the retry to the webhook handler
+Changed: src/webhooks.ts, test/webhooks.test.ts
+Dropped: npm run e2e (failed 2 times); a change to src/queue.ts, undone
+Still open: update the docs
+Last reply: The handler now retries three times...
+```
+
+Dropped is what was tried and didn't work: a command that kept failing, an
+edit you turned down, a change Claude made and then undid, so the next
+conversation doesn't try it again. A search that finds nothing isn't counted.
+The note goes only to the `/clear` of the conversation it was held in, once,
+within 30 minutes. `optimaizr sessions` compares conversations started from it
+with ones carrying on after a compaction.
+
+**What it kept.** Every hold is logged, and so is a held step that went
+through after all. Only holds that stuck count: a message never sent again, a
+whole read never made, a retry never run. The total, as `4 catches, $2.17 not
+spent`, shows in `guard`, at the start of `live`, on the profile, at the end of
+`results` and on the status line when there is nothing to warn about. A cold
+hold counts the rewrite it avoided, a big read the first write of what it
+would have sent; a retry has no dollar figure.
+
+**Once a week.** The first conversation you finish a turn in each week starts
+`optimaizr guard week` in the background, and the next turn shows its line:
+
+```
+optimAIzr, your last 7 days: re-reading 31% of spend (was 37%), 10 returns to a cold cache (was 24). Guard: 4 catches, $2.17 not spent.
+```
+
+The same line opens `live` and the profile. Headless runs (`claude -p`, the
+SDK) never get it, and the cold hold skips them too.
+
+Guard reads the end of the conversation's transcript at each message and tool
+call, in memory: about 50ms on a 405K conversation. What it keeps is in
+[SECURITY.md](../SECURITY.md): what it held, the note until it is used, and
+the week's line.
 
 ---
 
@@ -996,6 +1159,17 @@ On Anthropic models cache reads bill at 10% of the input rate by default,
 5-minute writes at 125%, 1-hour writes at 200%, and batch traffic at 50%. That
 is per-provider policy, and a model can set its own: Opus 5.5 reads at 5%
 ($0.20/M against $4/M input) and Fable 5.1 at 2.5%.
+
+**Open models count too.** Through opencode you can run DeepSeek, GLM, Kimi or
+MiniMax, and each has a card from its vendor's own price list: DeepSeek V4 at
+half price off-peak (outside 01:00 to 04:00 and 06:00 to 10:00 UTC on
+weekdays), MiniMax M3 with its long-context rate, the free GLM models at $0.
+They are priced so their calls count; `guide` lists them on one line and
+never suggests switching to one. A model with no card is priced at what
+opencode itself recorded for the call, when it recorded anything, and the
+report says how many calls that was. Calls nothing could price are counted
+under the total as $0, with the models named, so a gap never passes for a
+cheap month.
 
 **Some things aren't billed per token at all.** Server-side web search bills
 $10 per 1,000 searches regardless of tokens, so a report that sums only
@@ -1123,7 +1297,9 @@ with `--json` or when output is piped, and is off with
 [SECURITY.md](../SECURITY.md).
 
 Prompt contents are not stored unless you explicitly enable capture, which is
-sampled, capped, redacted before it touches disk, and local-only. Nothing in
+sampled, capped, redacted before it touches disk, and local-only. The one
+exception is [guard](#guard)'s handoff note, kept until the `/clear` it was
+made for, 30 minutes at most. Nothing in
 that store is ever uploaded.
 
 `optimaizr privacy` prints the full answer; [SECURITY.md](../SECURITY.md) is the

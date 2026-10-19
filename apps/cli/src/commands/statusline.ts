@@ -3,13 +3,16 @@ import {
   bold,
   dim,
   green,
+  guardSaved,
   red,
   renderStatusline,
+  savedText,
   type StatuslineMeter,
 } from "@optimaizr/core";
 import {
   applyStatusline,
   latestClaudeTranscript,
+  readReceipts,
   recordMeter,
   statuslineApplied,
   statuslineCommand,
@@ -34,6 +37,7 @@ export async function cmdStatusline(): Promise<void> {
       contextTokens: input.context_window?.total_input_tokens ?? null,
       fiveHour: meter(input.rate_limits?.five_hour),
       sevenDay: meter(input.rate_limits?.seven_day),
+      kept: savedText(guardSaved(readReceipts(Date.now() - 7 * 86_400_000))),
       now: Date.now(),
       color: !process.env.NO_COLOR,
     });

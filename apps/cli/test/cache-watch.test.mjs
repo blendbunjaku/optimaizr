@@ -239,6 +239,16 @@ test("a short conversation gets no countdown, and the weekly meter shows only wh
   );
 });
 
+test("what guard kept shows in quiet moments, never next to a warning", () => {
+  const kept = "4 catches, $2.17 not spent";
+  const quiet = renderStatusline({ state: state(), now: 18 * MIN, color: false, kept });
+  assert.match(quiet, /guard: 4 catches, \$2\.17 not spent in 7 days$/);
+  const soon = renderStatusline({ state: state(), now: 48 * MIN, color: false, kept });
+  assert.doesNotMatch(soon, /guard:/);
+  const gone = renderStatusline({ state: state(), now: 61 * MIN, color: false, kept });
+  assert.doesNotMatch(gone, /guard:/);
+});
+
 test("the status line reads the cache state from the end of a real transcript", async () => {
   const dir = tmp("tail");
   const file = path.join(dir, "s1.jsonl");

@@ -141,6 +141,8 @@ export interface TranscriptState {
   compactions: Map<string, CompactionRecord>;
   /** The latest title Claude Code gave each conversation, by session id. */
   titles: Map<string, string>;
+  /** How each session was started (cli, claude-vscode, sdk-cli), by session id. */
+  entrypoints: Map<string, string>;
 }
 
 export function createTranscriptState(): TranscriptState {
@@ -151,6 +153,7 @@ export function createTranscriptState(): TranscriptState {
     threads: new Map(),
     compactions: new Map(),
     titles: new Map(),
+    entrypoints: new Map(),
   };
 }
 
@@ -282,6 +285,9 @@ export function consumeTranscriptLine(
     rec = JSON.parse(line);
   } catch {
     return false;
+  }
+  if (typeof rec.entrypoint === "string" && typeof rec.sessionId === "string") {
+    state.entrypoints.set(rec.sessionId, rec.entrypoint);
   }
 
   // A compaction replaces the conversation with a summary: what was read before is gone.
@@ -547,6 +553,7 @@ export function buildTranscriptEvent(p: Partial, state: TranscriptState): CallEv
     speed: u.speed ?? null,
     serviceTier: u.service_tier ?? null,
     isSubagent: p.isSubagent,
+    ...(state.entrypoints.get(p.sessionId)?.startsWith("sdk") ? { headless: true } : {}),
     ...(p.turnId ? { turnId: p.turnId } : {}),
     ...(p.turnStartedAt ? { turnStartedAt: p.turnStartedAt } : {}),
     ...(p.endTs !== p.ts ? { endTs: p.endTs } : {}),

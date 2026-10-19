@@ -155,7 +155,7 @@ export function cmdPrivacy(): void {
     ],
     [
       "Guard (guard on)",
-      `Reads the end of the conversation's transcript at each message and tool call, in memory. When it holds a message to an expired cache it saves a short note (the last ask, files changed, open todos, a clip of the last reply) in ${optimaizrDir()}/guard/handoffs/, read once when you /clear that conversation, then deleted; notes nobody reads go after 30 minutes. What it held goes to guard/receipts.jsonl: when, what kind, the cost, and the file or command.`,
+      `Reads the end of the conversation's transcript at each message and tool call, in memory. When it holds a message to an expired cache it saves a short note (the last ask, files changed, what was tried and dropped, open todos, a clip of the last reply) in ${optimaizrDir()}/guard/handoffs/, read once when you /clear that conversation, then deleted; notes nobody reads go after 30 minutes. What it held, and what went through after all, goes to guard/receipts.jsonl: when, what kind, the cost, and the file or command. Once a week its end-of-turn hook starts 'optimaizr guard week' in the background, which saves one line on the last 7 days against the 7 before in guard/week.json.`,
     ],
     [
       "Prompt contents",
@@ -318,6 +318,7 @@ export const HELP_GROUPS: Array<{ title: string; more?: boolean; commands: HelpE
         flags: [
           ["off", "take its hooks out again"],
           ["(alone)", "whether it is on, and what it held this week"],
+          ["week", "the last 7 days against the 7 before, shown once a week"],
         ],
       },
       { cmd: "optimaizr results", what: "did it work: the days after each change against before" },

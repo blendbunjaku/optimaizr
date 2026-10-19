@@ -12,14 +12,14 @@ import type {
 import type { Summary, TopCall } from "../analyze/summary.js";
 import type { DrillNode, DrillTree } from "../analyze/drilldown.js";
 import type { Profile } from "../analyze/profile.js";
-import type { SessionStats } from "../analyze/sessions.js";
+import type { FiveHourWindows, SessionStats, StartFacts } from "../analyze/sessions.js";
 import { type ConversationRow, windowShareLabel, workLabel } from "../analyze/conversations.js";
 import type { WriteCause } from "../analyze/writes.js";
 import type { BudgetCrossing, BudgetStatus } from "../analyze/budget.js";
 import type { PlanView, SessionCrossing } from "../analyze/plan.js";
 import type { CodexLimitCrossing, CodexPlanView } from "../analyze/codex-plan.js";
 import type { CacheState } from "../analyze/cache-watch.js";
-import type { ColdResume } from "../analyze/cold.js";
+import { type ColdResume, waitedOn } from "../analyze/cold.js";
 import type { LiveChecks, LiveStep } from "../analyze/checks.js";
 import type { GuardReceipt } from "../analyze/guard.js";
 import { compactPointOf } from "../analyze/results.js";
@@ -670,7 +670,10 @@ function pct(share: number): string {
 /** Below this a month, an opportunity is folded into "+N smaller" on the profile. */
 const WORTH_LISTING_USD = 0.25;
 
-export function renderProfile(p: Profile): string {
+export function renderProfile(
+  p: Profile,
+  opts: { week?: string | null; kept?: string | null } = {},
+): string {
   const out: string[] = [];
   out.push("");
   out.push(`  ${bold("optimAIzr")} ${dim("|")} profile`);
@@ -683,6 +686,14 @@ export function renderProfile(p: Profile): string {
 
   // What you changed comes first, so a second run starts where the first left off.
   if (p.applied.length > 0) out.push(...renderApplied(p.applied), "");
+  // The week in a line, and what guard kept: the reason to come back on a Monday.
+  if (opts.week || opts.kept) {
+    if (opts.week) {
+      for (const line of wrap(`Last 7 days: ${opts.week}.`, 76)) out.push(`  ${dim(line)}`);
+    }
+    if (opts.kept) out.push(`  ${dim("Guard:")} ${green(opts.kept)} ${dim("in the last 7 days.")}`);
+    out.push("");
+  }
   if (p.firstLook) {
     for (const line of wrap(p.firstLook.fact, 70)) out.push(`  ${bold(line)}`);
     out.push(`  ${dim("Start here:")} ${blue(p.firstLook.command)}   ${dim(p.firstLook.why)}`);
@@ -897,11 +908,25 @@ function resultChange(r: ResultRow): string {
   return r.worse ? yellow(`${text}  trade-off`) : text;
 }
 
-/** "33% less per prompt", for the verdict and the profile's applied line. */
+/** The low and high end in whole percent, when the baselines agree on the direction but not the size. */
+function spread(r: ChangeResult): [number, number] | null {
+  const g = r.range;
+  if (!g || g.low < 0 !== g.high < 0) return null;
+  const ends = [g.low, g.high].map((x) => Math.round(Math.abs(x) * 100)).sort((x, y) => x - y);
+  return ends[0] !== ends[1] ? [ends[0]!, ends[1]!] : null;
+}
+
+/** "33% less per prompt", or "10% to 28% less per prompt", for the verdict and the profile's applied line. */
 function perUnit(r: ChangeResult): string {
   const c = r.headline?.change ?? 0;
-  const size = Math.round(Math.abs(c) * 100);
-  return `${size}% ${c < 0 ? "less" : "more"} per ${r.measure}`;
+  const both = spread(r);
+  const size = both ? `${both[0]}% to ${both[1]}%` : `${Math.round(Math.abs(c) * 100)}%`;
+  return `${size} ${c < 0 ? "less" : "more"} per ${r.measure}`;
+}
+
+/** "a, b and c" */
+function listed(xs: readonly string[]): string {
+  return xs.length < 2 ? (xs[0] ?? "") : `${xs.slice(0, -1).join(", ")} and ${xs.at(-1)}`;
 }
 
 function sinceWhen(iso: string, now: number): string {
@@ -910,7 +935,10 @@ function sinceWhen(iso: string, now: number): string {
 }
 
 function verdictLine(r: ChangeResult): string {
-  const base = `the ${days(r.before.days)} before`;
+  const both = spread(r);
+  const base = both
+    ? `the ${r.range!.shortest} to ${days(r.range!.longest)} before`
+    : `the ${days(r.before.days)} before`;
   switch (r.verdict) {
     case "too-early": {
       const p = r.progress;
@@ -933,7 +961,7 @@ function verdictLine(r: ChangeResult): string {
       return `${yellow("Not enough from before the change to compare:")} ${r.before.activeDays} active days in ${base}.`;
     case "working": {
       const costs = r.rows.filter((x) => x.worse).map((x) => x.label);
-      const extra = r.withCost ? ` It comes with a cost: ${costs.join(" and ")} went up.` : "";
+      const extra = r.withCost ? ` It comes with a cost: ${listed(costs)} went up.` : "";
       return `${green("Working:")} ${perUnit(r)} than ${base}.${extra}`;
     }
     case "worse":
@@ -943,7 +971,10 @@ function verdictLine(r: ChangeResult): string {
   }
 }
 
-export function renderResults(report: ResultsReport, opts: { now?: number } = {}): string {
+export function renderResults(
+  report: ResultsReport,
+  opts: { now?: number; kept?: string | null } = {},
+): string {
   const now = opts.now ?? Date.parse(report.generatedAt);
   const out: string[] = [""];
   out.push(`  ${bold("optimAIzr")} ${dim("|")} results`);
@@ -1010,6 +1041,15 @@ export function renderResults(report: ResultsReport, opts: { now?: number } = {}
       for (const n of r.next) out.push(`    ${blue(pad(n.command, width))}${dim(n.why)}`);
       out.push("");
     }
+  }
+  if (opts.kept) {
+    out.push(rule());
+    out.push("");
+    out.push(`  ${bold("Guard")} ${dim("last 7 days")}  ${green(opts.kept)}`);
+    out.push(
+      `  ${dim("Only holds that stuck count: a message never sent again, a whole read never made.")}`,
+    );
+    out.push("");
   }
   out.push(rule());
   if (tables) {
@@ -1094,7 +1134,7 @@ function renderConversations(list: ConversationList, totalUsd: number): string[]
   );
   for (const r of top) {
     const name = r.title ? clip(r.title, 40) : dim(`${r.sessionId.slice(0, 8)} (no title)`);
-    const where = `${projectName(r.project)} · ${monthDay(r.lastTs.slice(0, 10))}`;
+    const where = `${projectName(r.project)} · ${monthDay(r.lastTs.slice(0, 10))}${r.headless ? " · headless" : ""}`;
     out.push(
       `    ${padLeft(usd(r.costUsd), 9)}${rate ? padLeft(windowShareLabel(r.costUsd, rate.usdPerPercent), 8) : ""}${padLeft(workLabel(r.workMs), 9)}   ${pad(name, 42)}${dim(where)}`,
     );
@@ -1117,7 +1157,69 @@ function renderConversations(list: ConversationList, totalUsd: number): string[]
   return out;
 }
 
-export function renderSessions(c: SessionStats, s: Summary, convos?: ConversationList): string {
+/** `Oct 19 14:00`, local time. */
+function hourLabel(iso: string): string {
+  const d = new Date(iso);
+  return `${MONTHS[d.getMonth()]} ${d.getDate()} ${String(d.getHours()).padStart(2, "0")}:00`;
+}
+
+function renderWindows(w: FiveHourWindows, convos?: ConversationList): string[] {
+  if (w.count === 0) return [];
+  const rows = new Map((convos?.rows ?? []).map((r) => [r.sessionId, r]));
+  const name = (id: string) => {
+    const r = rows.get(id);
+    return r?.title ? clip(r.title, 28) : r ? projectName(r.project) : id.slice(0, 8);
+  };
+  const rate = convos?.rate;
+  const out = [
+    `  ${bold("5-hour windows")} ${dim(`(Claude Code, the latest ${w.recent.length} of ${w.count})`)}`,
+  ];
+  for (const x of w.recent) {
+    const n = x.conversations.length;
+    const share = rate
+      ? padLeft(`${windowShareLabel(x.costUsd, rate.usdPerPercent)} of 5h`, 13)
+      : "";
+    const ran = `${n} conversation${n === 1 ? "" : "s"}${x.atOnce >= 2 ? `, ${x.atOnce} at once` : ""}`;
+    out.push(`    ${pad(hourLabel(x.start), 14)}${padLeft(usd(x.costUsd), 9)}${share}   ${ran}`);
+    const top = x.conversations.slice(0, 3).map((c) => `${pct(c.share)} ${name(c.sessionId)}`);
+    const more = n > 3 ? ` · ${n - 3} more` : "";
+    out.push(`        ${dim(`${top.join(" · ")}${more}`)}`);
+  }
+  if (w.parallel > 0) {
+    out.push(
+      `    ${dim(`Two or more conversations ran at once in ${w.parallel} of ${w.count} windows, ${pct(w.parallelShare)} of spend.`)}`,
+    );
+  }
+  out.push("");
+  return out;
+}
+
+function renderNoteVsCompaction(f: { note: StartFacts; compaction: StartFacts }): string[] {
+  const out = [`  ${bold("Starting from a note against compacting")} ${dim("(Claude Code)")}`];
+  out.push(
+    `    ${dim(`${pad("", 22)}${padLeft("from a note", 13)}${padLeft("after a compaction", 21)}`)}`,
+  );
+  const row = (label: string, a: string, b: string) =>
+    out.push(`    ${pad(label, 22)}${padLeft(a, 13)}${padLeft(b, 21)}`);
+  const per = (n: number | null) => (n === null ? "n/a" : n.toFixed(1));
+  const wait = (ms: number) => (ms <= 0 ? "none" : workLabel(ms));
+  row("times", String(f.note.count), String(f.compaction.count));
+  row("first call", kTokens(f.note.firstCall), kTokens(f.compaction.firstCall));
+  row("waited before it", wait(f.note.waitMs), wait(f.compaction.waitMs));
+  row("files read again", per(f.note.readAgain), per(f.compaction.readAgain));
+  row("calls per prompt", per(f.note.callsPerPrompt), per(f.compaction.callsPerPrompt));
+  out.push(`    ${dim("A note: guard's handoff, used by the /clear after a held message.")}`);
+  if (f.note.count < 5) out.push(`    ${dim("Few notes so far, so read this as a first look.")}`);
+  out.push("");
+  return out;
+}
+
+export function renderSessions(
+  c: SessionStats,
+  s: Summary,
+  convos?: ConversationList,
+  opts: { fresh?: { note: StartFacts; compaction: StartFacts } | null } = {},
+): string {
   const out: string[] = [];
   out.push("");
   out.push(`  ${bold("optimAIzr")} ${dim("|")} sessions`);
@@ -1141,7 +1243,13 @@ export function renderSessions(c: SessionStats, s: Summary, convos?: Conversatio
   }
   row("largest conversation", kTokens(c.peakContext.median), kTokens(c.peakContext.p90));
   out.push(`    ${pad("cache hit rate", 24)}${(c.cacheHitRate * 100).toFixed(1)}%`);
+  if (c.headless.sessions > 0) {
+    out.push(
+      `    ${pad("headless runs", 24)}${c.headless.sessions} session${c.headless.sessions === 1 ? "" : "s"} · ${usd(c.headless.costUsd)} ${dim(`(${pct(c.headless.share)}) claude -p, the SDK, codex exec`)}`,
+    );
+  }
   out.push("");
+  out.push(...renderWindows(c.windows, convos));
 
   const bands = c.byContext.filter((b) => b.calls > 0);
   if (bands.length > 0) {
@@ -1187,6 +1295,21 @@ export function renderSessions(c: SessionStats, s: Summary, convos?: Conversatio
       `  ${bold("Cache writes")} ${dim(`(${(w.tokenShare * 100).toFixed(1)}% of tokens, ${pct(w.spendShare)} of spend)`)}`,
     );
     row("per session", usd(w.perSession.median), usd(w.perSession.p90));
+    const life = w.lifetime;
+    if (life.hourTokens + life.fiveTokens > 0) {
+      const h = life.hourShare;
+      const text =
+        h === 1
+          ? "1 hour on all of it"
+          : h === 0
+            ? "5 minutes on all of it"
+            : h >= 0.995
+              ? "1 hour on over 99% of it"
+              : h <= 0.005
+                ? "5 minutes on over 99% of it"
+                : `1 hour on ${pct(h)} of it, 5 minutes on ${pct(1 - h)}`;
+      out.push(`    ${pad("cache lifetime", 24)}${text}`);
+    }
     for (const r of w.byCause.filter((r) => r.costUsd > 0)) {
       const [label, one, many] = WRITE_CAUSE_LABEL[r.cause];
       const times = one
@@ -1205,18 +1328,37 @@ export function renderSessions(c: SessionStats, s: Summary, convos?: Conversatio
     out.push("");
   }
 
-  if (c.coldResumes.count > 0) {
+  const cold = c.coldResumes;
+  if (cold.count > 0) {
     out.push(`  ${bold("Cold cache returns")}`);
-    const times = c.coldResumes.count === 1 ? "Once" : `${c.coldResumes.count} times`;
-    out.push(`    ${times} you came back after a long conversation's cache`);
-    out.push(
-      `    expired, and paid for all of it again: ${fmtTokens(c.coldResumes.tokens)} tokens for`,
-    );
-    out.push(
-      `    ${bold(usd(c.coldResumes.costUsd))}, where a warm cache would have read it for ${usd(c.coldResumes.warmUsd)}.`,
-    );
+    const times = cold.count === 1 ? "Once" : `${cold.count} times`;
+    const text =
+      `${times} a long conversation's cache had expired by its next call, and all of it ` +
+      `was written again: ${fmtTokens(cold.tokens)} tokens for ${usd(cold.costUsd)}, where a warm ` +
+      `cache would have read it for ${usd(cold.warmUsd)}.`;
+    for (const line of wrap(text, 70)) out.push(`    ${line}`);
+    const kind = (label: string, k: { count: number; costUsd: number }) =>
+      out.push(
+        `      ${pad(label, 30)}${padLeft(String(k.count), 5)}${padLeft(usd(k.costUsd), 10)}`,
+      );
+    if (cold.tool.count > 0) {
+      kind("you were away", cold.away);
+      kind("Claude was waiting on a tool", cold.tool);
+      out.push(
+        `    ${dim("A tool: a long command, a subagent or a permission prompt left open.")}`,
+      );
+    }
+    if (cold.outlasted.length > 0) {
+      out.push(`    ${dim("On the 5-minute cache, Claude was waiting on these when it expired:")}`);
+      for (const o of cold.outlasted.slice(0, 5)) {
+        out.push(
+          `      ${pad(clip(o.label, 30), 30)}${padLeft(`${o.times}x`, 5)}${padLeft(usd(o.costUsd), 10)}`,
+        );
+      }
+    }
     out.push("");
   }
+  if (opts.fresh) out.push(...renderNoteVsCompaction(opts.fresh));
 
   out.push(rule());
   out.push(`  ${dim("Measured from your logs, nothing estimated. --json for the numbers.")}`);
@@ -1674,8 +1816,13 @@ export function renderColdReturn(c: ColdResume, title?: string): string {
     c.ttlMinutes === null
       ? `sent ${fmtTokens(c.rewriteTokens)} again uncached`
       : `wrote ${fmtTokens(c.rewriteTokens)} into the cache again`;
+  const gap = minutesLabel(c.gapMinutes * 60_000);
+  const waited =
+    c.waiting === "tool"
+      ? `Claude waited ${gap} on ${clip(waitedOn(c.previous), 40)}`
+      : `back after ${gap}`;
   return [
-    `  ${yellow("⚠")}  ${dim(new Date(e.ts).toLocaleTimeString())}  ${bold("Cold cache")} ${dim(`back after ${minutesLabel(c.gapMinutes * 60_000)}, the first call ${what}`)}`,
+    `  ${yellow("⚠")}  ${dim(new Date(e.ts).toLocaleTimeString())}  ${bold("Cold cache")} ${dim(`${waited}, the first call ${what}`)}`,
     `        ${convoColor(e.sessionId)(clip(convoName(e.sessionId, e.project, title), 60))}`,
     `        ${dim("That call paid")} ${bold(usd(c.rewriteUsd))} ${dim(`for it; a warm cache would have read it for ${usd(c.warmUsd)}.`)}`,
   ].join("\n");

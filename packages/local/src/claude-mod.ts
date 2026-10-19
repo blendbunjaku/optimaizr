@@ -250,10 +250,10 @@ export function claudeModRewriter(opts: ClaudeModRewriterOptions = {}): RequestR
           `${added.map(describeClaudeOverride).join(", ")}. ` +
           `${n} Claude Code session${n === 1 ? "" : "s"} running the optimAIzr mod ` +
           `switch${n === 1 ? "es" : ""} from the next request, no restart. ` +
-          // A new model can't reuse the cached conversation. A lower effort cost one
-          // uncached read in the one test of a switch to low.
+          // A new model can't reuse the cached conversation. /effort keeps it, low
+          // too; the mod's own switch to low cost one uncached read on 2.1.286.
           (effort
-            ? "A conversation already under way may read its context once more without the cache. "
+            ? "In its one test, the mod's switch read the conversation once without the cache; /effort typed in the session keeps it. "
             : "Subagents switch now. A conversation already under way switches once reloading " +
               "it into the new model's cache pays back within 10 requests; until then the mod " +
               "shows it as waiting. ") +

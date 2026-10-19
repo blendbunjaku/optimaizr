@@ -22,6 +22,8 @@ export interface StatuslineInput {
   contextTokens?: number | null;
   fiveHour?: StatuslineMeter | null;
   sevenDay?: StatuslineMeter | null;
+  /** What guard kept in the last 7 days, like "9 catches, $14.20 not spent". */
+  kept?: string | null;
   now: number;
   color?: boolean;
 }
@@ -38,6 +40,7 @@ export function renderStatusline(i: StatuslineInput): string {
   const parts: string[] = [`${blue("◉")} optimAIzr`];
   const s = i.state;
   const context = s?.context ?? i.contextTokens ?? 0;
+  let warning = false;
 
   if (context > 0) {
     const long = context >= COLD_MIN_CONTEXT;
@@ -53,11 +56,13 @@ export function renderStatusline(i: StatuslineInput): string {
           yellow(`cache expired, next message writes it all again (${usd(s.rewriteUsd)})`),
         );
         parts.push(dim("new task? /clear first"));
+        warning = true;
       } else if (left <= COUNTDOWN_MS) {
         parts.push(
           yellow(`cache warm ${minutesLabel(left)}, then ${usd(s.rewriteUsd)} to write again`),
         );
         parts.push(dim("leaving? handoff note, then /clear"));
+        warning = true;
       } else {
         parts.push(dim(`cache warm ${minutesLabel(left)}`));
       }
@@ -72,6 +77,8 @@ export function renderStatusline(i: StatuslineInput): string {
   };
   meter("5h", i.fiveHour, true);
   meter("week", i.sevenDay, false);
+  // Kept for quiet moments, so it never crowds out a warning.
+  if (i.kept && !warning) parts.push(dim(`guard: ${i.kept} in 7 days`));
 
   return parts.join(dim(" · "));
 }

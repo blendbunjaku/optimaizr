@@ -1,4 +1,17 @@
-import { BIG_READ_BYTES, blue, bold, dim, green, HOLD_MIN_USD, red } from "@optimaizr/core";
+import { spawn } from "node:child_process";
+import {
+  BIG_READ_BYTES,
+  blue,
+  bold,
+  dim,
+  green,
+  guardSaved,
+  HOLD_MIN_USD,
+  red,
+  savedText,
+  weekCompare,
+  weekText,
+} from "@optimaizr/core";
 import {
   applyGuard,
   compactionStatus,
@@ -7,22 +20,27 @@ import {
   type HookInput,
   ownCommand,
   readReceipts,
+  saveWeekLine,
   undoGuard,
 } from "@optimaizr/local";
 import type { Args } from "../args.js";
+import { load } from "../data.js";
 import { readStdin } from "./statusline.js";
 
 /**
  * `optimaizr guard`: Claude Code hooks that hold a costly step once, before it
  * is paid. Alone it says whether it is on and what it held this week.
  */
-export function cmdGuard(args: Args): void {
+export function cmdGuard(args: Args): void | Promise<void> {
   const what = args.positional[0];
   if (what === "on") return guardOn();
   if (what === "off") return guardOff();
   if (what === undefined || what === "status") return guardStatus();
+  if (what === "week") return guardWeek(args);
   console.log("");
-  console.log(`  ${red("usage:")} optimaizr guard ${dim("[")}on ${dim("|")} off${dim("]")}`);
+  console.log(
+    `  ${red("usage:")} optimaizr guard ${dim("[")}on ${dim("|")} off ${dim("|")} week${dim("]")}`,
+  );
   console.log("");
   process.exitCode = 1;
 }
@@ -32,11 +50,30 @@ export async function cmdGuardHook(): Promise<void> {
   try {
     const input = JSON.parse(await readStdin(2_000)) as HookInput;
     const set = input.hook_event_name === "Stop" ? compactionStatus()["claude-code"] : null;
-    const out = guardHook(input, { compactAt: set && Number(set) > 0 ? Number(set) : null });
+    const out = guardHook(input, {
+      compactAt: set && Number(set) > 0 ? Number(set) : null,
+      weekRun: () => {
+        const cmd = ownCommand("guard week");
+        if (cmd) spawn(cmd, { shell: true, detached: true, stdio: "ignore" }).unref();
+      },
+    });
     if (out) process.stdout.write(`${JSON.stringify(out)}\n`);
   } catch {
     // Say nothing and Claude Code goes on as if guard were off.
   }
+}
+
+/**
+ * `optimaizr guard week`: the last 7 days against the 7 before, saved for the
+ * first conversation of the week. The Stop hook runs it in the background.
+ */
+async function guardWeek(args: Args): Promise<void> {
+  const data = await load({ ...args, flags: { ...args.flags, days: "14", source: "agents" } });
+  const w = weekCompare(data.events);
+  if (!w) return;
+  const text = weekText(w);
+  saveWeekLine(text);
+  if (process.stdout.isTTY) console.log(`\n  ${dim("Last 7 days:")} ${text}\n`);
 }
 
 /** `optimaizr guard on`, also reached as `apply guard`. */
@@ -114,6 +151,10 @@ function guardStatus(): void {
     console.log(
       `               ${plural(count("big-read"), "big read")}, ${plural(count("retry"), "retry", "retries")}, ${plural(count("compact"), "compact nudge")}`,
     );
+    const kept = savedText(guardSaved(week));
+    if (kept) {
+      console.log(`               ${green(kept)} ${dim("(only holds that stuck count)")}`);
+    }
   }
   console.log("");
   console.log(

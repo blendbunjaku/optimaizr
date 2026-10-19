@@ -235,7 +235,8 @@ const M1 = 1_048_576;
 const K200 = 202_752;
 
 export const OPEN_MODELS: ModelPrice[] = [
-  // DeepSeek bills half from 10:00 to 01:00 UTC and on weekends.
+  // DeepSeek bills half outside 01:00 to 04:00 and 06:00 to 10:00 UTC on
+  // weekdays, and all weekend.
   openModel(
     "deepseek-v4-pro",
     "DeepSeek V4 Pro",

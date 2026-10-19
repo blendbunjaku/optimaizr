@@ -113,6 +113,11 @@ export interface ChangeResult {
     /** When there should be enough for a first reading, as a YYYY-MM-DD. */
     readyAround?: string;
   };
+  /**
+   * The headline against the full baseline and each shorter one inside it,
+   * lowest and highest, so a reading that depends on the baseline shows it.
+   */
+  range: { low: number; high: number; shortest: number; longest: number } | null;
   /** What the change saved since it was made, at the measured rate. Negative when it cost more. */
   measuredSavingUsd: number | null;
   caveats: string[];
@@ -233,9 +238,9 @@ export function measureChange(
   const countOf = (p: Period) => (measure === "prompt" ? p.prompts : p.calls);
   const need = measure === "prompt" ? READY_PROMPTS : READY_CALLS;
 
-  const rows = rowsFor(change, [
+  const rows = markTradeOffs([
     ...generalRows(before, after, b, a, measure),
-    ...leverRows(change, before, after, b, a, compsBefore, compsAfter),
+    ...leverRows(change, scoped, before, after, b, a, compsBefore, compsAfter),
   ]);
   const headline = rows[0] ?? null;
 
@@ -255,6 +260,7 @@ export function measureChange(
   const ra = rate(a);
   const measuredSavingUsd =
     ready && baseline && rb !== null && ra !== null ? (rb - ra) * countOf(a) : null;
+  const vs = verdict === "too-early" ? [] : againstBaselines(scoped, after, b, lo, at);
 
   return {
     change,
@@ -266,7 +272,7 @@ export function measureChange(
     before: b,
     after: a,
     rows,
-    since: sinceFacts(change, after, a, compsAfter),
+    since: sinceFacts(change, scoped, after, a, compsAfter),
     progress: {
       activeDays: a.activeDays,
       count: countOf(a),
@@ -274,8 +280,9 @@ export function measureChange(
       needCount: need,
       readyAround: ready ? undefined : readyAround(a, countOf(a), need, at, now),
     },
+    range: ready && baseline && vs.length > 1 ? rangeOf(vs) : null,
     measuredSavingUsd,
-    caveats: verdict === "too-early" ? [] : caveats(change, scoped, b, a, at, lo, end, others),
+    caveats: verdict === "too-early" ? [] : caveats(change, scoped, vs, b, a, at, lo, end, others),
     next: nextSteps(change, verdict, rows),
   };
 }
@@ -380,8 +387,11 @@ function generalRows(
   ];
 }
 
-/** Model and effort changes can make the agent work harder for the same answer. */
-function markEffortTradeOffs(rows: ResultRow[]): ResultRow[] {
+/**
+ * Any change can make the agent work harder for the same answer: a smaller
+ * model, less effort, or a summary that lost what it had read.
+ */
+function markTradeOffs(rows: ResultRow[]): ResultRow[] {
   return rows.map((r) =>
     r.key === "callsPerPrompt" || r.key === "errorsPerPrompt"
       ? row(r.key, r.label, r.unit, r.before, r.after, r.better, true)
@@ -395,8 +405,50 @@ export function compactPointOf(change: AppliedChange): number {
   return Number.isFinite(n) && n > 0 ? n : COMPACT_AT;
 }
 
+/** File tools by agent: Claude Code's Read and opencode's read. */
+const READ_TOOLS = new Set(["Read", "read"]);
+
+/**
+ * Files read again after each compaction, one count per compaction: files the
+ * conversation had already worked on before the summary and read after it,
+ * up to the next one. Main thread only.
+ */
+export function filesReadAgain(
+  events: readonly UsageEvent[],
+  comps: readonly CompactionRecord[],
+): number[] {
+  const bySession = new Map<string, { t: number; target: string; read: boolean }[]>();
+  for (const e of events) {
+    if (e.isSubagent) continue;
+    for (const tool of e.tools) {
+      if (!tool.target) continue;
+      const list = bySession.get(e.sessionId) ?? [];
+      list.push({ t: Date.parse(e.ts), target: tool.target, read: READ_TOOLS.has(tool.name) });
+      bySession.set(e.sessionId, list);
+    }
+  }
+  const times = new Map<string, number[]>();
+  for (const c of comps)
+    times.set(c.sessionId, [...(times.get(c.sessionId) ?? []), Date.parse(c.ts)]);
+  return comps.map((c) => {
+    const at = Date.parse(c.ts);
+    const next = Math.min(...(times.get(c.sessionId) ?? []).filter((t) => t > at), Infinity);
+    const uses = bySession.get(c.sessionId) ?? [];
+    const known = new Set(uses.filter((u) => u.t < at).map((u) => u.target));
+    const again = new Set(
+      uses
+        .filter((u) => u.read && u.t >= at && u.t < next && known.has(u.target))
+        .map((u) => u.target),
+    );
+    return again.size;
+  });
+}
+
+const sum = (xs: readonly number[]) => xs.reduce((s, x) => s + x, 0);
+
 function leverRows(
   change: AppliedChange,
+  scoped: readonly UsageEvent[],
   before: readonly UsageEvent[],
   after: readonly UsageEvent[],
   b: Period,
@@ -453,6 +505,20 @@ function leverRows(
           true,
         ),
       );
+      // Only agents that name the file they read can say what was read again.
+      if (scoped.some((e) => e.tools.some((t) => t.target))) {
+        rows.push(
+          row(
+            "readAgainPerDay",
+            "files read again after summaries a day",
+            "count",
+            ratio(sum(filesReadAgain(scoped, compsBefore)), b.activeDays),
+            ratio(sum(filesReadAgain(scoped, compsAfter)), a.activeDays),
+            "lower",
+            true,
+          ),
+        );
+      }
       // Codex doesn't record how long a summary took, so there is nothing to add up.
       if ([...compsBefore, ...compsAfter].some((c) => c.durationMs !== undefined)) {
         rows.push(
@@ -526,12 +592,9 @@ function leverRows(
   return [];
 }
 
-function rowsFor(change: AppliedChange, rows: ResultRow[]): ResultRow[] {
-  return change.to || change.rule === "reasoning-effort" ? markEffortTradeOffs(rows) : rows;
-}
-
 function sinceFacts(
   change: AppliedChange,
+  scoped: readonly UsageEvent[],
   after: readonly UsageEvent[],
   a: Period,
   compsAfter: readonly CompactionRecord[],
@@ -558,6 +621,14 @@ function sinceFacts(
       value: compsAfter.length,
       text: `${plural(compsAfter.length, "compaction")}${at ? `, fired at ${Math.round(at / 1000)}K on the median` : ""}`,
     });
+    if (compsAfter.length > 0 && scoped.some((e) => e.tools.some((t) => t.target))) {
+      const again = sum(filesReadAgain(scoped, compsAfter));
+      facts.push({
+        key: "filesReadAgain",
+        value: again,
+        text: `${plural(again, "file")} read again after them`,
+      });
+    }
     const past = main.filter((e) => contextOf(e) > point).length;
     facts.push({
       key: "callsPastPoint",
@@ -643,9 +714,48 @@ function projectLabel(p: string): string {
   return p.split(/[\\/]/).filter(Boolean).pop() ?? p;
 }
 
+/** Cost per prompt, or per call without prompts. */
+function costPerUnit(es: readonly UsageEvent[]): number | null {
+  const p = periodOf(es, 0, 0);
+  const n = p.prompts > 0 ? p.prompts : p.calls;
+  return n > 0 ? p.costUsd / n : null;
+}
+
+/** The change against the full baseline first, then each shorter one that fits inside it. */
+function againstBaselines(
+  scoped: readonly UsageEvent[],
+  after: readonly UsageEvent[],
+  b: Period,
+  lo: number,
+  at: number,
+): { days: number; vs: number }[] {
+  const full = costPerUnit(scoped.filter(within(lo, at)));
+  const now = costPerUnit(after);
+  if (!full || !now) return [];
+  const out = [{ days: b.days, vs: now / full - 1 }];
+  for (const days of SHORT_BASELINES) {
+    if (days >= b.days - 1) continue;
+    const short = costPerUnit(scoped.filter(within(Math.max(lo, at - days * DAY), at)));
+    if (short) out.push({ days, vs: now / short - 1 });
+  }
+  return out;
+}
+
+function rangeOf(vs: readonly { days: number; vs: number }[]): NonNullable<ChangeResult["range"]> {
+  const all = vs.map((v) => v.vs);
+  const days = vs.map((v) => v.days);
+  return {
+    low: Math.min(...all),
+    high: Math.max(...all),
+    shortest: Math.min(...days),
+    longest: Math.max(...days),
+  };
+}
+
 function caveats(
   change: AppliedChange,
   scoped: readonly UsageEvent[],
+  vs: readonly { days: number; vs: number }[],
   b: Period,
   a: Period,
   at: number,
@@ -656,29 +766,16 @@ function caveats(
   const out: string[] = [];
   const before = scoped.filter(within(lo, at));
   const after = scoped.filter(within(at, end));
-  const perUnit = (es: readonly UsageEvent[]) => {
-    const p = periodOf(es, 0, 0);
-    const n = p.prompts > 0 ? p.prompts : p.calls;
-    return n > 0 ? p.costUsd / n : null;
-  };
-
   // A shorter baseline should agree. The one that disagrees most is reported,
   // since a caveat that errs is better than a saving that doesn't hold.
-  const full = perUnit(before);
-  const now = perUnit(after);
+  const [full, ...shorter] = vs;
   let widest: { days: number; vs: number } | null = null;
-  for (const days of SHORT_BASELINES) {
-    if (!full || !now || days >= b.days - 1) continue;
-    const short = perUnit(scoped.filter(within(Math.max(lo, at - days * DAY), at)));
-    if (!short) continue;
-    const vs = now / short - 1;
-    if (!widest || Math.abs(vs - (now / full - 1)) > Math.abs(widest.vs - (now / full - 1))) {
-      widest = { days, vs };
-    }
+  for (const s of shorter) {
+    if (!widest || Math.abs(s.vs - full!.vs) > Math.abs(widest.vs - full!.vs)) widest = s;
   }
-  if (full && now && widest && Math.abs(widest.vs - (now / full - 1)) > 0.1) {
+  if (full && widest && Math.abs(widest.vs - full.vs) > 0.1) {
     out.push(
-      `Against just the ${widest.days} days before the change it is ${signed(widest.vs)} instead of ${signed(now / full - 1)}, so part of the difference may have been under way already.`,
+      `Against just the ${widest.days} days before the change it is ${signed(widest.vs)} instead of ${signed(full.vs)}, so part of the difference may have been under way already.`,
     );
   }
 

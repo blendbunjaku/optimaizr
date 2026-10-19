@@ -24,6 +24,8 @@ export interface ConversationRow {
   calls: number;
   firstTs: string;
   lastTs: string;
+  /** Started by `claude -p`, the SDK or `codex exec`. */
+  headless: boolean;
 }
 
 /**
@@ -110,6 +112,7 @@ export function conversations(data: Pick<Dataset, "events" | "titles">): Convers
       calls: list.length,
       firstTs: first,
       lastTs: last,
+      headless: list.some((e) => e.headless),
     });
   }
   return rows.sort((a, b) => b.costUsd - a.costUsd);

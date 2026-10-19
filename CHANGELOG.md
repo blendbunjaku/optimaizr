@@ -1,5 +1,75 @@
 # Changelog
 
+## 0.12.0
+
+**Guard: the expensive moments, held before they are paid.**
+
+- **`optimaizr guard on`.** It adds Claude Code hooks next to your own, no mod
+  needed, and holds each of these once, letting it through when it comes
+  again: a message to a conversation idle past its cache, when writing it all
+  again costs $0.50 or more (with what that costs, and on Opus or Fable what
+  Sonnet would pay); a whole read of a file over 64KB, so Claude reads the part
+  it needs; a command that failed twice in a row with nothing changed since.
+  Near the compaction point, the end of a turn says once that this is a good
+  moment to `/compact`. A headless run's message (`claude -p`, the SDK) is
+  never held, and `optimaizr guard off` takes out only its own hooks.
+- **Start fresh from a note.** When a message is held, `/clear` in that
+  conversation starts the new one from a short note of where the old one
+  stood: the last ask, the files changed, what was tried and dropped, open
+  todos and a clip of the last reply. It is written on your machine from the
+  transcript, read once by the `/clear` of the held conversation and then
+  deleted; a note nobody reads goes after 30 minutes.
+- **What it kept.** Every hold, and what went through after all, goes to
+  `~/.optimaizr/guard/receipts.jsonl`. One number counts only the holds that
+  stuck, like "4 catches, $2.17 not spent": `live` opens with it, and the
+  profile, `results` and the status line show it. `optimaizr guard` lists the
+  last 7 days.
+- **Once a week.** How the last 7 days compare with the 7 before: the share
+  of spend going to re-reading, returns to a cold cache, and what guard kept.
+  `live` and the profile open with it, and with guard on, Claude Code shows it
+  at the end of a turn once a week.
+- **`optimaizr live`, redesigned.** It opens with a legend instead of a
+  manual. The bottom keeps a row for each open conversation, each in its own
+  colour: a spinner and the cost so far while Claude works, how long the cache
+  stays warm once it stops (yellow in the last 15 minutes). Under them, the
+  run's status line: what it cost, the costliest conversation, and what was
+  found. `?` shows what was checked and passed, `n` the next step for the
+  biggest finding, and `a` applies it when it is a setting optimAIzr can undo.
+  `--notify` sends a system notification for a cache about to expire, a cold
+  return, and a long turn done. Each finished turn is one line, with a second
+  over 100K saying what every message re-reads first, and a cold return says
+  whether you were away or Claude was waiting on a tool.
+- **`optimaizr results` gives a range.** The headline is measured against the
+  3, 5, 7 and 14 days before, and says the range, so a drop that was already
+  under way shows. Every row that got worse is marked as a trade-off, a new
+  row counts files read again after summaries, and the end says what guard
+  kept.
+- **`optimaizr sessions` and the cache.** How much of your spend was on the
+  1-hour cache and how much on the 5-minute one. Cold returns are split into
+  you away and Claude waiting on a tool, and on the 5-minute cache it names
+  the commands that outlasted it. Each 5-hour window lists the conversations
+  that spent it and how many ran at once. Runs from `claude -p`, the SDK or
+  `codex exec` are tagged headless. Conversations started from guard's note
+  are measured against compactions: the first call, the wait, files read
+  again and calls per prompt.
+- **Help, regrouped.** `optimaizr help` shows the commands you use, the older
+  views moved under `optimaizr help all`, and `optimaizr <command> --help`
+  gives that command's own flags.
+- **Open models are priced.** DeepSeek V4, GLM, Kimi and MiniMax M3 through
+  opencode, from each vendor's own price list: DeepSeek at half price off-peak,
+  MiniMax M3's long-context rate, the free GLM models at $0. They are never
+  suggested as a switch. A model with no price card takes what opencode
+  recorded for the call, and calls nothing could price are counted as $0 with
+  the models named.
+- **The handoff note in the mod** has a Dropped line too: what was tried and
+  given up, so the next conversation doesn't try it again.
+- **Fixed.** The 5-hour window spans the earliest to the latest call, whatever
+  order they arrive in. After a compaction only the new conversation counts
+  as warm. The profile's next step for a coding agent is `apply`, not
+  `simulate`. The docs and the mod said a switch to low effort may
+  read the conversation again without the cache. `/effort` keeps it, low too;
+  the one uncached read came from how the mod switched.
+
 ## 0.11.1
 
 - **opencode support.** optimAIzr reads opencode's history next to Claude
