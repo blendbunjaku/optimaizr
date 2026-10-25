@@ -1,31 +1,55 @@
 import { spawn } from "node:child_process";
+import readline from "node:readline";
 import {
   BIG_READ_BYTES,
   blue,
   bold,
+  type Dataset,
   dim,
   green,
   guardSaved,
   HOLD_MIN_USD,
+  observedCompactPoint,
+  paceCheck,
+  paceText,
   red,
   savedText,
+  type UsageEvent,
   weekCompare,
   weekText,
+  wouldHold,
+  wrap,
 } from "@optimaizr/core";
 import {
+  appliedChanges,
   applyGuard,
   compactionStatus,
   guardApplied,
   guardHook,
+  guardOffered,
   type HookInput,
+  markGuardOffered,
   ownCommand,
   readReceipts,
+  readWindowRate,
+  saveCompactPoint,
+  savePace,
   saveWeekLine,
   undoGuard,
 } from "@optimaizr/local";
 import type { Args } from "../args.js";
-import { load } from "../data.js";
+import { limitHits, load } from "../data.js";
+import { planLimitUsd, shareRate } from "../share.js";
 import { readStdin } from "./statusline.js";
+
+// A rate older than this may belong to a plan since changed.
+const RATE_MAX_AGE_MS = 30 * 86_400_000;
+
+/** What 1% of the 5-hour window costs, as last learned, if it is recent. */
+function savedRate(now = Date.now()): number | null {
+  const r = readWindowRate();
+  return r && now - Date.parse(r.at) < RATE_MAX_AGE_MS ? r.usdPerPercent : null;
+}
 
 /**
  * `optimaizr guard`: Claude Code hooks that hold a costly step once, before it
@@ -37,6 +61,7 @@ export function cmdGuard(args: Args): void | Promise<void> {
   if (what === "off") return guardOff();
   if (what === undefined || what === "status") return guardStatus();
   if (what === "week") return guardWeek(args);
+  if (what === "pace") return guardPace(args);
   console.log("");
   console.log(
     `  ${red("usage:")} optimaizr guard ${dim("[")}on ${dim("|")} off ${dim("|")} week${dim("]")}`,
@@ -52,10 +77,13 @@ export async function cmdGuardHook(): Promise<void> {
     const set = input.hook_event_name === "Stop" ? compactionStatus()["claude-code"] : null;
     const out = guardHook(input, {
       compactAt: set && Number(set) > 0 ? Number(set) : null,
-      weekRun: () => {
-        const cmd = ownCommand("guard week");
-        if (cmd) spawn(cmd, { shell: true, detached: true, stdio: "ignore" }).unref();
-      },
+      usdPerPercent: input.hook_event_name === "UserPromptSubmit" ? savedRate() : null,
+      weekRun: () => inBackground("guard week"),
+      // Only a plan with a learned limit has a pace to keep.
+      paceRun:
+        input.hook_event_name === "Stop" && savedRate()
+          ? () => inBackground("guard pace")
+          : undefined,
     });
     if (out) process.stdout.write(`${JSON.stringify(out)}\n`);
   } catch {
@@ -69,11 +97,52 @@ export async function cmdGuardHook(): Promise<void> {
  */
 async function guardWeek(args: Args): Promise<void> {
   const data = await load({ ...args, flags: { ...args.flags, days: "14", source: "agents" } });
-  const w = weekCompare(data.events);
+  learnCompactPoint(data);
+  // Keeps the rate the holds quote fresh, for people who never open sessions or live.
+  shareRate(data.events, { limitUsd: planLimitUsd(args, data) });
+  const w = weekCompare(data.events, Date.now(), limitHits(data));
   if (!w) return;
   const text = weekText(w);
   saveWeekLine(text);
   if (process.stdout.isTTY) console.log(`\n  ${dim("Last 7 days:")} ${text}\n`);
+}
+
+function inBackground(what: string): void {
+  const cmd = ownCommand(what);
+  if (cmd) spawn(cmd, { shell: true, detached: true, stdio: "ignore" }).unref();
+}
+
+/**
+ * `optimaizr guard pace`: whether the 5-hour limit runs out before the reset
+ * at the last hour's pace, saved for guard's end-of-turn hook.
+ */
+async function guardPace(args: Args): Promise<void> {
+  const rate = savedRate();
+  if (!rate) return;
+  // A day back is enough to find where the window running now started.
+  const data = await load({ ...args, flags: { ...args.flags, days: "1", source: "agents" } });
+  const pace = paceCheck(data.events, rate * 100);
+  savePace(pace);
+  if (!process.stdout.isTTY) return;
+  console.log(
+    `\n  ${pace ? paceText(pace) : dim("Nothing to warn about in this 5-hour window.")}\n`,
+  );
+}
+
+/**
+ * Claude Code compacts under its setting (168K with 200K set, on my machine),
+ * so the nudge goes by where it really did since the setting last changed.
+ */
+function learnCompactPoint(data: Pick<Dataset, "compactions">): void {
+  const setting = Number(compactionStatus()["claude-code"]);
+  if (!(setting > 0)) return;
+  const since = appliedChanges()
+    .filter((c) => c.rule === "context-compaction" && (!c.source || c.source === "claude-code"))
+    .map((c) => (c.until && c.until > c.at ? c.until : c.at))
+    .sort()
+    .pop();
+  const point = observedCompactPoint(data.compactions ?? [], since);
+  if (point) saveCompactPoint({ ...point, setting });
 }
 
 /** `optimaizr guard on`, also reached as `apply guard`. */
@@ -109,6 +178,65 @@ export function guardOff(): void {
 
 const money = (n: number) => `$${n.toFixed(2)}`;
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+
+const OFFER_DAYS = 30;
+// Under this the pitch is too small to make: a later run, with more behind it, asks.
+const OFFER_MIN_USD = 5;
+
+/**
+ * Asked once, after the first report: turn guard on, with what it would have
+ * held in the last 30 days. Only in a terminal, and only once that is $5 or more.
+ */
+export async function offerGuard(
+  events: readonly UsageEvent[],
+  opts: { onPlan: boolean },
+): Promise<void> {
+  if (!process.stdin.isTTY || !process.stdout.isTTY || process.env.CI) return;
+  if (guardOffered() || guardApplied()) return;
+  const held = wouldHold(events, Date.now() - OFFER_DAYS * 86_400_000);
+  if (!held || held.usd < OFFER_MIN_USD) return;
+  // Marked first, so leaving the question with Ctrl-C doesn't bring it back.
+  markGuardOffered();
+
+  const n = held.count;
+  const sent =
+    n === 1
+      ? "a message you sent after a break went to a Claude Code conversation whose cache had expired, and wrote all of it into the cache again"
+      : `${n} messages you sent after a break went to a Claude Code conversation whose cache had expired, each writing all of it into the cache again for ${money(HOLD_MIN_USD)} or more`;
+  const text =
+    `In the last ${OFFER_DAYS} days, ${sent}: ${money(held.usd)}${n === 1 ? "" : " in all"}${opts.onPlan ? " at API prices" : ""}, ` +
+    `where a warm cache would have read it for ${money(held.warmUsd)}. Guard holds a message like that once, ` +
+    "with its price, so you can /clear and go on from a short note of where it stood. Send it again and it goes through.";
+  console.log(`  ${bold(`Guard would have held ${plural(n, "message")}`)}`);
+  for (const line of wrap(text, 78)) console.log(`  ${line}`);
+  console.log("");
+  const more =
+    "It adds optimAIzr's hooks to ~/.claude/settings.json, next to your own, and also holds a whole big file read and a third try of a failing command, once each.";
+  for (const line of wrap(more, 78)) console.log(`  ${dim(line)}`);
+  console.log(`  ${dim("Undo any time:")} ${blue("optimaizr guard off")}`);
+  console.log("");
+
+  if (await yes(`  ${bold("Turn guard on?")} ${dim("[Y/n]")} `)) return guardOn();
+  console.log(`  ${dim("Any time:")} ${blue("optimaizr guard on")}`);
+  console.log("");
+}
+
+// Enter is yes. Ctrl-C or Ctrl-D is no.
+function yes(question: string): Promise<boolean> {
+  return new Promise((resolve) => {
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    let answer: string | null = null;
+    rl.on("SIGINT", () => rl.close());
+    rl.on("close", () => {
+      if (answer === null) process.stdout.write("\n");
+      resolve(answer !== null && /^\s*(y|yes)?\s*$/i.test(answer));
+    });
+    rl.question(question, (a) => {
+      answer = a;
+      rl.close();
+    });
+  });
+}
 
 function guardStatus(): void {
   const on = guardApplied();

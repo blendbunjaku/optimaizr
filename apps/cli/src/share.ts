@@ -2,7 +2,7 @@ import { type Dataset, planView, windowRate } from "@optimaizr/core";
 import { latestClaudeWindows, readMeter, type ShareRate, writeWindowRate } from "@optimaizr/local";
 import type { Args } from "./args.js";
 import { resolvePlan } from "./config.js";
-import { readLimitHits } from "./data.js";
+import { limitHits } from "./data.js";
 
 /**
  * What 1% of Claude's 5h window costs: learned from the meter's history when
@@ -24,14 +24,17 @@ export function shareRate(
 }
 
 /** The plan's estimated 5h limit in dollars, when a Claude plan is set or detected. */
-export function planLimitUsd(args: Args, events: Dataset["events"]): number | null {
+export function planLimitUsd(
+  args: Args,
+  data: Pick<Dataset, "events" | "limitHits">,
+): number | null {
   const choice = resolvePlan(args);
   if (!choice.plan) return null;
   return (
-    planView(events, [], {
+    planView(data.events, [], {
       plan: choice.plan,
       source: choice.source ?? undefined,
-      limitHits: readLimitHits(),
+      limitHits: limitHits(data),
       windows: latestClaudeWindows(),
     }).limit?.usd ?? null
   );

@@ -7,6 +7,7 @@ import {
   type Dataset,
   dim,
   ingest,
+  type LimitHit,
   OPENCODE_SQLITE_WARNING,
   OPENCODE_V2_WARNING,
   opencodeDbPath,
@@ -39,6 +40,17 @@ export function readLimitHits(): string[] {
   } catch {
     return [];
   }
+}
+
+/**
+ * Every 5-hour limit hit known: the ones Claude Code recorded in its
+ * transcripts, with their real reset, and any recorded by hand.
+ */
+export function limitHits(data?: Pick<Dataset, "limitHits"> | null): LimitHit[] {
+  const recorded = (data?.limitHits ?? [])
+    .filter((h) => h.window === "five_hour")
+    .map((h) => ({ ts: h.ts, ...(h.resetsAt ? { resetsAt: h.resetsAt } : {}) }));
+  return [...recorded, ...readLimitHits()];
 }
 
 /**

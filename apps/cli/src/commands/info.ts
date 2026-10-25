@@ -138,7 +138,7 @@ export function cmdPrivacy(): void {
     ["Telemetry", "None. No analytics, no usage reporting, no crash reporting."],
     [
       "Agent logs",
-      "Claude Code and Codex logs, and opencode's database (read-only), are read for usage. What each tool call was given (a path, a command, the first 200 characters of anything else) is read in memory only, never stored. Prompts and answers aren't used, except for guard's handoff note.",
+      "Claude Code and Codex logs, and opencode's database (read-only), are read for usage. What each tool call was given (a path, a command, the first 200 characters of anything else) is read in memory. Only a report you export, and guard's log of what it held, name a file or command. By default prompts and answers aren't read; guard, once on, reads them for its handoff note.",
     ],
     ["Usage records", `${optimaizrDir()}/events.jsonl - tokens, cost, latency, model.`],
     [
@@ -155,7 +155,7 @@ export function cmdPrivacy(): void {
     ],
     [
       "Guard (guard on)",
-      `Reads the end of the conversation's transcript at each message and tool call, in memory. When it holds a message to an expired cache it saves a short note (the last ask, files changed, what was tried and dropped, open todos, a clip of the last reply) in ${optimaizrDir()}/guard/handoffs/, read once when you /clear that conversation, then deleted; notes nobody reads go after 30 minutes. What it held, and what went through after all, goes to guard/receipts.jsonl: when, what kind, the cost, and the file or command. Once a week its end-of-turn hook starts 'optimaizr guard week' in the background, which saves one line on the last 7 days against the 7 before in guard/week.json.`,
+      `Reads the end of the conversation's transcript at each message and tool call, in memory. When it holds a message to an expired cache it saves a short note (the last ask, files changed, what was tried and dropped, open todos, a clip of the last reply) in ${optimaizrDir()}/guard/handoffs/, read once when you /clear that conversation, then deleted; notes nobody reads go after 30 minutes. What it held, and what went through after all, goes to guard/receipts.jsonl: when, what kind, the cost, and the file or command. Once a week its end-of-turn hook starts 'optimaizr guard week' in the background, which saves one line on the last 7 days against the 7 before in guard/week.json, and where Claude Code really compacts in guard/compact-point.json. On a Claude plan with a learned limit it starts 'optimaizr guard pace' at most every 10 minutes, which saves whether the 5-hour window runs out before it resets in guard/pace.json. guard/offered.json keeps when optimaizr offered to turn guard on, so it asks once.`,
     ],
     [
       "Prompt contents",
@@ -394,7 +394,7 @@ export const HELP_GROUPS: Array<{ title: string; more?: boolean; commands: HelpE
       { cmd: "optimaizr metrics", what: "how much was analysed and how much was found" },
       {
         cmd: "optimaizr limit",
-        what: "record a session-limit hit (not needed while the status line or mod runs)",
+        what: "record a session-limit hit Claude Code's transcripts missed",
         flags: [
           ["--at 15:10", "record one after the fact"],
           ["undo", "remove the last one"],

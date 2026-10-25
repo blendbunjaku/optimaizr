@@ -1,5 +1,8 @@
+import type { CompactionRecord, UsageEvent } from "../domain/types.js";
 import { allModels, priceFor, ratesFor } from "../pricing.js";
 import type { CacheState } from "./cache-watch.js";
+import { coldResumes } from "./cold.js";
+import { sessionBlocks } from "./plan.js";
 
 /**
  * Guard: Claude Code hooks that hold a costly step once, before it is paid,
@@ -22,6 +25,30 @@ export function readTokens(bytes: number): number {
 export const RETRY_LIMIT = 2;
 /** The compact nudge comes at this share of where the conversation compacts. */
 export const COMPACT_NUDGE_SHARE = 0.75;
+/** Where Claude Code compacts is the median of its last this many automatic compactions. */
+const POINT_FROM = 10;
+const POINT_MIN = 3;
+
+/**
+ * Where Claude Code really compacts, from its automatic compactions since
+ * `since` (when the setting last changed). It runs under the setting: with
+ * 200K set, mine were at 168K on the median.
+ */
+export function observedCompactPoint(
+  compactions: readonly CompactionRecord[],
+  since?: string,
+): { tokens: number; from: number } | null {
+  const auto = compactions
+    .filter((c) => c.source === "claude-code" && c.trigger === "auto" && (!since || c.ts >= since))
+    .sort((a, b) => a.ts.localeCompare(b.ts))
+    .slice(-POINT_FROM);
+  if (auto.length < POINT_MIN) return null;
+  const sorted = auto.map((c) => c.preTokens).sort((a, b) => a - b);
+  const mid = sorted.length >> 1;
+  const tokens =
+    sorted.length % 2 ? sorted[mid]! : Math.round((sorted[mid - 1]! + sorted[mid]!) / 2);
+  return { tokens, from: auto.length };
+}
 /** A new conversation in the same folder starts from the handoff note for this long. */
 export const HANDOFF_TTL_MS = 30 * 60_000;
 
@@ -44,6 +71,8 @@ export interface TranscriptFacts {
   entrypoint: string | null;
   /** What was tried and did not work, oldest first. */
   dropped: Dropped[];
+  /** The conversation stopped because a plan limit refused its last request. */
+  limited: boolean;
 }
 
 export type Dropped =
@@ -68,11 +97,22 @@ interface Block {
 interface TranscriptRecord {
   type?: string;
   isSidechain?: boolean;
+  isApiErrorMessage?: boolean;
+  error?: string;
   isMeta?: boolean;
   isCompactSummary?: boolean;
   entrypoint?: string;
   lastPrompt?: string;
   message?: { content?: string | Block[] };
+}
+
+// Asking for the work in hand to go on, which a fresh start would not serve.
+const CARRY_ON =
+  /^\s*(please\s+)?(continue|go on|keep going|carry on|resume|proceed|go ahead)(\s+please)?[\s.!]*$/i;
+
+/** Whether a prompt only asks Claude to carry on. */
+export function carriesOn(prompt: string | undefined): boolean {
+  return typeof prompt === "string" && CARRY_ON.test(prompt);
 }
 
 // Text Claude Code adds to a user message that the person did not type.
@@ -101,6 +141,7 @@ export function transcriptFacts(lines: Iterable<string>): TranscriptFacts {
     lastChange: null,
     entrypoint: null,
     dropped: [],
+    limited: false,
   };
   const calls = new Map<string, { name: string; input: Record<string, unknown> }>();
   // Keyed so a later outcome replaces an earlier one; insertion order is the order tried.
@@ -127,7 +168,13 @@ export function transcriptFacts(lines: Iterable<string>): TranscriptFacts {
     }
     const content = r.message?.content;
 
+    // A refused request is Claude Code's error text, not a reply.
+    if (r.type === "assistant" && r.isApiErrorMessage) {
+      if (r.error === "rate_limit") f.limited = true;
+      continue;
+    }
     if (r.type === "assistant" && Array.isArray(content)) {
+      f.limited = false;
       for (const b of content) {
         if (b.type === "text" && typeof b.text === "string" && b.text.trim()) {
           f.lastReply = b.text.trim();
@@ -313,11 +360,25 @@ export function writeUsd(tokens: number, s: CacheState): number | null {
 export function coldHoldReason(
   s: CacheState,
   now: number,
-  opts: { handoff: boolean; cheaper?: { label: string; usd: number } | null },
+  opts: {
+    handoff: boolean;
+    cheaper?: { label: string; usd: number } | null;
+    /** What 1% of the 5-hour window costs, on a Claude plan. */
+    usdPerPercent?: number | null;
+  },
 ): string {
   const label = priceFor(s.event.model)?.label ?? s.event.model;
+  const rate = opts.usdPerPercent && opts.usdPerPercent > 0 ? opts.usdPerPercent : null;
+  // On a plan the window is what runs out, so it leads and the dollars follow.
+  const share = (usd: number) => {
+    const pct = Math.round(usd / rate!);
+    return pct < 1 ? "under 1%" : `about ${pct}%`;
+  };
+  const cost = rate
+    ? `${share(s.rewriteUsd)} of your 5-hour limit (${money(s.rewriteUsd)} at API prices, ${label})`
+    : `about ${money(s.rewriteUsd)} on ${label}`;
   const lines = [
-    `optimAIzr held this message once. The conversation has been idle ${idle(now - Date.parse(s.event.ts))} and its cache expired, so sending it writes all ${size(s.context)} tokens again: about ${money(s.rewriteUsd)} on ${label}.`,
+    `optimAIzr held this message once. The conversation has been idle ${idle(now - Date.parse(s.event.ts))} and its cache expired, so sending it writes all ${size(s.context)} tokens again: ${cost}.`,
     // Claude Code empties the input box on a hold and prints the text below as
     // "Original prompt", so the way back is to copy it from there.
     opts.handoff
@@ -326,7 +387,7 @@ export function coldHoldReason(
   ];
   if (opts.cheaper) {
     lines.push(
-      `On ${opts.cheaper.label} the same rewrite is about ${money(opts.cheaper.usd)}: /model ${opts.cheaper.label.split(" ")[0]!.toLowerCase()}, then send it again.`,
+      `On ${opts.cheaper.label} the same rewrite is ${rate ? `${share(opts.cheaper.usd)} (${money(opts.cheaper.usd)})` : `about ${money(opts.cheaper.usd)}`}: /model ${opts.cheaper.label.split(" ")[0]!.toLowerCase()}, then send it again.`,
     );
   }
   return lines.join("\n");
@@ -350,10 +411,13 @@ export const RETRY_REASON =
   "Change something first (the command, the code or the setup), or tell the user what is blocking you. " +
   "If it must run unchanged, run it again and it will go through.";
 
-/** Shown to the person at the end of a turn, once, when the conversation nears compaction. */
-export function compactNudge(context: number, compactAt: number): string {
+/**
+ * Shown to the person at the end of a turn, once, when the conversation nears
+ * compaction. `seen` when the point is where it really compacted, not the setting.
+ */
+export function compactNudge(context: number, compactAt: number, seen = false): string {
   return (
-    `optimAIzr: this conversation is at ${size(context)} and compacts at ${size(compactAt)}. ` +
+    `optimAIzr: this conversation is at ${size(context)} and compacts at ${seen ? "about " : ""}${size(compactAt)}. ` +
     "If this task is done, /compact now (or /clear), so it does not compact in the middle of the next one."
   );
 }
@@ -422,9 +486,102 @@ export function guardSaved(receipts: readonly GuardReceipt[]): GuardSaved {
   return { catches: kept.length, usd: kept.reduce((t, r) => t + (r.usd ?? 0), 0) };
 }
 
-/** "9 catches, $14.20 not spent", or null before guard has kept anything. */
-export function savedText(s: GuardSaved): string | null {
+/** The pace warning starts once this share of the 5-hour limit is used. */
+export const PACE_FROM = 0.5;
+const PACE_OVER_MS = 3_600_000;
+// Running out a few minutes before the reset is not worth a warning.
+const PACE_MARGIN_MS = 15 * 60_000;
+
+export interface Pace {
+  /** When the 5-hour window runs out at the last hour's pace. */
+  runsOutAt: string;
+  resetsAt: string;
+  /** The share of the limit used so far. */
+  used: number;
+  /** The balanced model, when the conversation is on a frontier one. */
+  lighter?: string;
+}
+
+/**
+ * Whether the 5-hour window runs out before it resets, at the last hour's
+ * pace. Tried on my 7 stops at the limit, it came before each, 19 minutes to
+ * 2h 44m ahead, and in 10 of the 44 windows that never got there.
+ */
+export function paceCheck(
+  events: readonly UsageEvent[],
+  limitUsd: number,
+  now = Date.now(),
+): Pace | null {
+  const own = events
+    .filter((e) => e.source === "claude-code" && Date.parse(e.ts) <= now)
+    .sort((a, b) => a.ts.localeCompare(b.ts));
+  const window = sessionBlocks(own).at(-1);
+  if (!window || limitUsd <= 0 || now >= Date.parse(window.end)) return null;
+  if (window.usd < PACE_FROM * limitUsd || window.usd >= limitUsd) return null;
+  const lastHour = own
+    .filter((e) => Date.parse(e.ts) >= now - PACE_OVER_MS)
+    .reduce((t, e) => t + e.cost.total, 0);
+  if (lastHour <= 0) return null;
+  const out = now + ((limitUsd - window.usd) / lastHour) * PACE_OVER_MS;
+  if (out > Date.parse(window.end) - PACE_MARGIN_MS) return null;
+  const last = own.filter((e) => !e.isSubagent).at(-1);
+  const price = last ? priceFor(last.model) : undefined;
+  const lighter =
+    price?.provider === "anthropic" && price.tier === "frontier"
+      ? allModels().find((m) => m.provider === "anthropic" && m.tier === "balanced")
+      : undefined;
+  return {
+    runsOutAt: new Date(out).toISOString(),
+    resetsAt: window.end,
+    used: window.usd / limitUsd,
+    ...(lighter ? { lighter: lighter.label } : {}),
+  };
+}
+
+/** Shown once a window, at the end of a turn. */
+export function paceText(p: Pace): string {
+  const clock = (iso: string) =>
+    new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  const early = idle(Date.parse(p.resetsAt) - Date.parse(p.runsOutAt));
+  const lighter = p.lighter ? ` ${p.lighter} makes it last longer: /model sonnet.` : "";
+  return (
+    `optimAIzr: at the last hour's pace, your 5-hour limit runs out around ${clock(p.runsOutAt)}, ` +
+    `${early} before it resets at ${clock(p.resetsAt)}. About ${Math.round(p.used * 100)}% is used.${lighter}`
+  );
+}
+
+/** The messages guard would have held, from history it never saw. */
+export interface WouldHold {
+  count: number;
+  /** What writing those conversations into the cache again cost. */
+  usd: number;
+  /** What a warm cache would have read the same tokens for. */
+  warmUsd: number;
+}
+
+/**
+ * Returns to a Claude Code conversation after a break, since `since`, whose
+ * cache had expired and whose rewrite was worth a hold. Null when there were none.
+ */
+export function wouldHold(events: readonly UsageEvent[], since = 0): WouldHold | null {
+  const held = coldResumes(events.filter((e) => e.source === "claude-code")).filter(
+    (c) => c.waiting === "away" && c.rewriteUsd >= HOLD_MIN_USD && Date.parse(c.event.ts) >= since,
+  );
+  if (held.length === 0) return null;
+  return {
+    count: held.length,
+    usd: held.reduce((t, c) => t + c.rewriteUsd, 0),
+    warmUsd: held.reduce((t, c) => t + c.warmUsd, 0),
+  };
+}
+
+/**
+ * "9 catches, $14.20 not spent", or null before guard has kept anything. With
+ * the week before's catches: "9 catches (was 4), $14.20 not spent".
+ */
+export function savedText(s: GuardSaved, before?: number): string | null {
   if (s.catches === 0) return null;
-  const n = `${s.catches} ${s.catches === 1 ? "catch" : "catches"}`;
+  const was = before ? ` (was ${before})` : "";
+  const n = `${s.catches} ${s.catches === 1 ? "catch" : "catches"}${was}`;
   return s.usd >= 0.01 ? `${n}, ${money(s.usd)} not spent` : n;
 }

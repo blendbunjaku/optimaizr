@@ -51,7 +51,9 @@ export interface AppliedChange {
   until?: string;
 }
 
-export type ResultVerdict = "too-early" | "no-baseline" | "working" | "no-change" | "worse";
+/** "unclear" when the baselines disagree on whether it moved past the usual swing. */
+export type ResultVerdict =
+  "too-early" | "no-baseline" | "working" | "no-change" | "unclear" | "worse";
 
 export interface ResultRow {
   key: string;
@@ -247,12 +249,16 @@ export function measureChange(
   const ready = a.activeDays >= READY_ACTIVE_DAYS && countOf(a) >= need;
   const baseline = b.activeDays >= READY_ACTIVE_DAYS && countOf(b) >= need / 2;
   const withCost = rows.some((r) => r.worse);
+  const vs = ready ? againstBaselines(scoped, after, b, lo, at) : [];
+  // Every baseline has to agree: 4% against the 5 days before and 22% against
+  // the 16 is not yet a saving.
+  const agree = (sign: number) => vs.every((v) => sign * v.vs >= EFFECT);
   let verdict: ResultVerdict;
   if (!ready) verdict = "too-early";
   else if (!baseline) verdict = "no-baseline";
   else if (headline?.change == null) verdict = "no-change";
-  else if (headline.change <= -EFFECT) verdict = "working";
-  else if (headline.change >= EFFECT) verdict = "worse";
+  else if (headline.change <= -EFFECT) verdict = agree(-1) ? "working" : "unclear";
+  else if (headline.change >= EFFECT) verdict = agree(1) ? "worse" : "unclear";
   else verdict = "no-change";
 
   const rate = (p: Period) => (countOf(p) > 0 ? p.costUsd / countOf(p) : null);
@@ -260,12 +266,11 @@ export function measureChange(
   const ra = rate(a);
   const measuredSavingUsd =
     ready && baseline && rb !== null && ra !== null ? (rb - ra) * countOf(a) : null;
-  const vs = verdict === "too-early" ? [] : againstBaselines(scoped, after, b, lo, at);
 
   return {
     change,
     verdict,
-    withCost: verdict === "working" && withCost,
+    withCost: (verdict === "working" || verdict === "unclear") && withCost,
     early: ready && afterDays < SETTLED_DAYS,
     measure,
     headline,

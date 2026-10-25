@@ -439,6 +439,58 @@ test("simulation operates on exactly the calls the finding counted", async () =>
   assert.ok(sim.caveat.includes("verify"), "a behavioural simulation must point at verification");
 });
 
+// Claude Code writes a refused request as a synthetic reply, the way it does on a real plan.
+function refusal({
+  ts,
+  uuid,
+  quota,
+  text = "You've hit your session limit · resets 1am (Europe/Belgrade)",
+  error = "rate_limit",
+}) {
+  return {
+    type: "assistant",
+    uuid,
+    timestamp: ts,
+    sessionId: "session-a",
+    isApiErrorMessage: true,
+    error,
+    apiErrorStatus: error === "rate_limit" ? 429 : 500,
+    ...(quota ? { quotaLimits: quota } : {}),
+    message: { id: `msg-${uuid}`, model: "<synthetic>", content: [{ type: "text", text }] },
+  };
+}
+
+test("plan limit hits are read from the transcript, one per window", async () => {
+  const quota = { status: "rejected", rateLimitType: "five_hour", resetsAt: 1790118000 };
+  const records = [
+    assistant({ id: "m1", ts: "2026-09-22T20:50:00.000Z", content: bash(1) }),
+    refusal({ ts: "2026-09-22T20:57:55.095Z", uuid: "r1", quota }),
+    // Sending again before the reset is refused again: the same limit.
+    refusal({ ts: "2026-09-22T21:10:00.000Z", uuid: "r2", quota }),
+    // An older Claude Code writes the text only.
+    refusal({ ts: "2026-09-25T18:00:00.000Z", uuid: "r3" }),
+    refusal({ ts: "2026-09-26T18:00:00.000Z", uuid: "r4", text: "You've hit your weekly limit" }),
+    // An outage is not a limit.
+    refusal({
+      ts: "2026-09-27T18:00:00.000Z",
+      uuid: "r5",
+      text: "API Error: 500",
+      error: "server_error",
+    }),
+  ];
+  const data = await ingestClaudeCode({ root: writeFixture(records) });
+
+  assert.equal(data.events.length, 1, "a refusal is not a call");
+  assert.deepEqual(
+    data.limitHits.map((h) => [h.ts, h.window, h.resetsAt]),
+    [
+      ["2026-09-22T20:57:55.095Z", "five_hour", "2026-09-22T23:00:00.000Z"],
+      ["2026-09-25T18:00:00.000Z", "five_hour", undefined],
+      ["2026-09-26T18:00:00.000Z", "seven_day", undefined],
+    ],
+  );
+});
+
 /* ------------------------------------------------------------------ *
  * Provider registry
  * ------------------------------------------------------------------ */

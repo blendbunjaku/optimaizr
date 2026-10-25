@@ -99,7 +99,7 @@ import {
 } from "@optimaizr/local";
 import { Args, num } from "../args.js";
 import { budgetOf, planNote, resolvePlan } from "../config.js";
-import { load, readLimitHits, summaryOptions } from "../data.js";
+import { limitHits, load, summaryOptions } from "../data.js";
 import { createLivePrompt } from "../live-prompt.js";
 import {
   createStatusLine,
@@ -334,7 +334,7 @@ export async function cmdLive(args: Args): Promise<void> {
     planNow = planView(seed, [], {
       plan,
       source: planChoice.source ?? undefined,
-      limitHits: readLimitHits(),
+      limitHits: limitHits(seedData),
       windows: latestClaudeWindows(),
     });
     if (planNow.limit) {
@@ -828,7 +828,7 @@ export async function cmdLive(args: Args): Promise<void> {
       );
     }
     if (watchesAgents) {
-      const week = weekCompare(seed);
+      const week = weekCompare(seed, Date.now(), limitHits(seedData));
       if (week) console.log(`  ${dim(`Last 7 days: ${weekText(week)}.`)}`);
       const kept = savedText(guardSaved(readReceipts(Date.now() - 7 * 86_400_000)));
       console.log(
