@@ -7,24 +7,33 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
+  coldResumes,
   guardSaved,
   handoffNote,
+  observedCompactPoint,
+  paceCheck,
+  paceText,
   renderGuardCatch,
   savedText,
   transcriptFacts,
   weekCompare,
   weekText,
+  wouldHold,
 } from "@optimaizr/core";
 import {
   applyGuard,
   guardApplied,
   guardHook,
+  guardOffered,
+  markGuardOffered,
   readReceipts,
+  saveCompactPoint,
+  savePace,
   saveWeekLine,
   tailReceipts,
   undoGuard,
 } from "@optimaizr/local";
-import { bash, edit, load, START, transcript } from "./fixtures/transcripts.mjs";
+import { bash, edit, load, OPUS, START, transcript } from "./fixtures/transcripts.mjs";
 
 /**
  * 0.12: guard, the Claude Code hooks that hold a costly step once and let it
@@ -403,6 +412,71 @@ test("a cold hold leaves headless runs, small rewrites and stale notes alone", (
   assert.deepEqual(fs.readdirSync(path.join(opts.dir, "handoffs")), []);
 });
 
+// Claude Code's own line when the plan's window ran out mid-task.
+const refusal = (session, at = START + 6 * MIN) => ({
+  type: "assistant",
+  timestamp: new Date(at).toISOString(),
+  sessionId: session,
+  isApiErrorMessage: true,
+  error: "rate_limit",
+  message: {
+    model: "<synthetic>",
+    content: [{ type: "text", text: "You've hit your session limit · resets 1am" }],
+  },
+});
+
+test("a cold hold leaves a conversation the limit stopped, and a bare continue, alone", () => {
+  const dir = tmp("guard-cold-carry");
+  const opts = { dir: path.join(dir, "guard") };
+  const later = START + 3 * 60 * MIN;
+  const input = (file, session, prompt) => ({
+    hook_event_name: "UserPromptSubmit",
+    session_id: session,
+    transcript_path: file,
+    cwd: "/w",
+    prompt,
+  });
+
+  // Locked out until the reset, there was no keeping the cache warm.
+  const limited = write(dir, "lim", longConversation("lim", [refusal("lim")]));
+  assert.equal(guardHook(input(limited, "lim", "fix the test"), { ...opts, now: later }), null);
+  assert.equal(transcriptFacts(fs.readFileSync(limited, "utf8").split("\n")).lastReply, null);
+  // Claude answering after the refusal means the limit is no longer why it stopped.
+  const recs = [...longConversation("x", [refusal("x"), reply("x", "Done.", START + 7 * MIN)])];
+  assert.equal(transcriptFacts(lines(recs)).limited, false);
+
+  const file = write(dir, "s1", longConversation("s1"));
+  for (const p of ["continue", "Continue.", "go on", "keep going please"]) {
+    assert.equal(guardHook(input(file, "s1", p), { ...opts, now: later }), null, p);
+  }
+  assert.ok(guardHook(input(file, "s1", "continue with the docs"), { ...opts, now: later }));
+  assert.deepEqual(
+    readReceipts(0, opts).map((r) => [r.kind, r.session]),
+    [["cold-hold", "s1"]],
+  );
+});
+
+test("on a Claude plan a hold says its share of the 5-hour limit first", () => {
+  const dir = tmp("guard-cold-share");
+  const opts = { dir: path.join(dir, "guard") };
+  const file = write(dir, "s1", longConversation("s1"));
+  const prompt = {
+    hook_event_name: "UserPromptSubmit",
+    session_id: "s1",
+    transcript_path: file,
+    cwd: "/w",
+  };
+  const held = guardHook(prompt, { ...opts, now: START + 3 * 60 * MIN, usdPerPercent: 0.4 });
+  assert.match(
+    held.reason,
+    /writes all 151K tokens again: about 3% of your 5-hour limit \(\$1\.2\d at API prices, Opus 5\.5\)\./,
+  );
+  assert.match(
+    held.reason,
+    /On Sonnet 5\.5 the same rewrite is about 2% \(\$0\.6\d\): \/model sonnet/,
+  );
+});
+
 test("a whole big file is held once per conversation; a range, a small file or an image is not", () => {
   const dir = tmp("guard-read");
   const opts = { dir: path.join(dir, "guard") };
@@ -509,6 +583,50 @@ test("near the compaction point the end of a turn says so, once per conversation
   assert.equal(guardHook({ hook_event_name: "Notification" }, opts), null);
 });
 
+test("the nudge goes by where Claude Code really compacted, under the same setting", () => {
+  const dir = tmp("guard-point");
+  const opts = { dir: path.join(dir, "guard") };
+  const file = write(dir, "s1", longConversation("s1"));
+  const stop = { hook_event_name: "Stop", session_id: "s1", transcript_path: file };
+
+  // 75% of 220K is 165K, past this conversation's 151K.
+  saveCompactPoint({ tokens: 168_000, from: 10, setting: 200_000 }, opts);
+  assert.equal(guardHook(stop, { ...opts, compactAt: 220_000 }), null, "learned at 200K");
+  saveCompactPoint({ tokens: 168_000, from: 10, setting: 220_000 }, opts);
+  assert.equal(
+    guardHook(stop, { ...opts, compactAt: 220_000 }).systemMessage,
+    "optimAIzr: this conversation is at 151K and compacts at about 168K. If this task is done, /compact now (or /clear), so it does not compact in the middle of the next one.",
+  );
+});
+
+test("the compaction point is the median of the last automatic ones since the setting changed", () => {
+  const c = (day, preTokens, extra = {}) => ({
+    source: "claude-code",
+    ts: `2026-10-${String(day).padStart(2, "0")}T12:00:00.000Z`,
+    sessionId: "s1",
+    project: "/w",
+    trigger: "auto",
+    preTokens,
+    midTask: true,
+    ...extra,
+  });
+  const seen = [c(2, 380_000), c(8, 167_000), c(9, 203_000), c(10, 168_000)];
+  assert.deepEqual(observedCompactPoint(seen, "2026-10-07T00:00:00.000Z"), {
+    tokens: 168_000,
+    from: 3,
+  });
+  assert.equal(observedCompactPoint(seen.slice(0, 3), "2026-10-07T00:00:00.000Z"), null);
+  assert.equal(
+    observedCompactPoint([
+      ...seen.slice(1, 3),
+      c(11, 90_000, { trigger: "manual" }),
+      c(11, 150_000, { source: "codex" }),
+    ]),
+    null,
+    "/compact and Codex say nothing about where Claude Code compacts",
+  );
+});
+
 test("only holds that stuck count as saved", () => {
   const at = (m) => new Date(START + m * MIN).toISOString();
   const r = (m, kind, extra = {}) => ({ at: at(m), session: "s1", kind, ...extra });
@@ -568,6 +686,25 @@ test("the week line: the last 7 days against the 7 before", async () => {
     weekText({ rereadShare: 0.28, rereadShareBefore: 0.56, cold: 1, coldBefore: 5, spendUsd: 9 }),
     "re-reading 28% of spend (was 56%), 1 return to a cold cache (was 5)",
   );
+
+  // Retries until the reset are one stop; without a reset, 5 hours are.
+  const at = (h) => new Date(later - 86_400_000 + h * 3_600_000).toISOString();
+  const hits = [
+    { ts: at(0), resetsAt: at(2) },
+    { ts: at(1), resetsAt: at(2) },
+    at(3),
+    at(4),
+    at(9),
+  ];
+  assert.equal(weekCompare(data.events, later, hits).stops, 3);
+  assert.equal(
+    weekText({ ...w, rereadShare: 0.3, stops: 0, stopsBefore: 2 }),
+    "re-reading 30% of spend, 1 return to a cold cache, no stops at the 5-hour limit (was 2)",
+  );
+  assert.equal(
+    weekText({ ...w, rereadShare: 0.3, stops: 1, stopsBefore: null }),
+    "re-reading 30% of spend, 1 return to a cold cache, 1 stop at the 5-hour limit",
+  );
 });
 
 test("the first end of a turn in a week works the line out, and a later one shows it once", () => {
@@ -587,9 +724,16 @@ test("the first end of a turn in a week works the line out, and a later one show
     path.join(opts.dir, "receipts.jsonl"),
     `${JSON.stringify({ at: new Date(opts.now).toISOString(), session: "s0", kind: "cold-hold", usd: 1.2 })}\n`,
   );
+  // The week before, for the comparison: two holds, one of them sent anyway.
+  const before = (kind, session) =>
+    `${JSON.stringify({ at: new Date(opts.now - 8 * 86_400_000).toISOString(), session, kind, usd: 2 })}\n`;
+  fs.appendFileSync(
+    path.join(opts.dir, "receipts.jsonl"),
+    before("cold-hold", "a") + before("cold-hold", "b") + before("cold-sent", "b"),
+  );
   assert.equal(
     guardHook(stop, { ...opts, weekRun }).systemMessage,
-    "optimAIzr, your last 7 days: re-reading 28% of spend (was 56%), 2 returns to a cold cache (was 5). Guard: 1 catch, $1.20 not spent.",
+    "optimAIzr, your last 7 days: re-reading 28% of spend (was 56%), 2 returns to a cold cache (was 5). Guard: 1 catch (was 1), $1.20 not spent.",
   );
   assert.equal(guardHook(stop, { ...opts, weekRun }), null, "once a week");
 
@@ -600,6 +744,99 @@ test("the first end of a turn in a week works the line out, and a later one show
   const fresh = { ...opts, dir: path.join(dir, "other"), weekRun };
   assert.equal(guardHook({ ...stop, session_id: "sdk", transcript_path: sdk }, fresh), null);
   assert.equal(runs, 1, "a headless run starts nothing");
+});
+
+/** A call `min` minutes into a 5-hour window that starts at START. */
+const spend = (min, usd, model = OPUS) => ({
+  id: `c${min}`,
+  ts: new Date(START + min * MIN).toISOString(),
+  source: "claude-code",
+  model,
+  cost: { total: usd },
+  isSubagent: false,
+});
+
+test("the pace check: the 5-hour limit running out before the reset, at the last hour's pace", () => {
+  // $1 every 10 minutes for two hours, then $2: $25 by 13:00, $13 in the last hour.
+  const events = [];
+  for (let m = 0; m <= 120; m += 10) events.push(spend(m, 1));
+  for (let m = 130; m <= 180; m += 10) events.push(spend(m, 2));
+  const now = START + 180 * MIN;
+
+  const pace = paceCheck(events, 40, now);
+  assert.equal(pace.resetsAt, new Date(START + 300 * MIN).toISOString());
+  // $15 left at $13 an hour: 69 minutes.
+  assert.equal(Math.round((Date.parse(pace.runsOutAt) - now) / MIN), 69);
+  assert.equal(pace.used, 25 / 40);
+  assert.equal(pace.lighter, "Sonnet 5.5");
+  assert.match(
+    paceText(pace),
+    /^optimAIzr: at the last hour's pace, your 5-hour limit runs out around .+, 51 minutes before it resets at .+\. About 63% is used\. Sonnet 5\.5 makes it last longer: \/model sonnet\.$/,
+  );
+
+  assert.equal(paceCheck(events, 60, now), null, "under half the limit");
+  assert.equal(paceCheck(events, 24, now), null, "past it already");
+  // $49.70 runs out at 14:54, six minutes before the reset: not worth saying.
+  assert.equal(paceCheck(events, 49.7, now), null);
+  assert.equal(paceCheck(events, 40, START + 301 * MIN), null, "a new window");
+  const sonnet = events.map((e) => ({ ...e, model: "claude-sonnet-5-5" }));
+  assert.equal(paceCheck(sonnet, 40, now).lighter, undefined, "already on the balanced model");
+
+  // Quiet for the last hour: no pace to go by.
+  const quiet = events.filter((e) => Date.parse(e.ts) < START + 110 * MIN);
+  assert.equal(paceCheck([...quiet, spend(110, 12)], 40, START + 180 * MIN), null);
+});
+
+test("the pace warning shows once a window; working it out runs at most every 10 minutes", () => {
+  const dir = tmp("guard-pace");
+  const now = START + 180 * MIN;
+  const opts = { dir: path.join(dir, "guard"), compactAt: 400_000, now };
+  const file = write(dir, "s1", longConversation("s1"));
+  const stop = { hook_event_name: "Stop", session_id: "s1", transcript_path: file };
+  let runs = 0;
+  const paceRun = () => runs++;
+
+  assert.equal(guardHook(stop, opts), null, "not on a plan with a learned limit");
+  assert.equal(runs, 0);
+  assert.equal(guardHook(stop, { ...opts, paceRun }), null, "nothing worked out yet");
+  assert.equal(guardHook(stop, { ...opts, paceRun, now: now + 5 * MIN }), null);
+  assert.equal(runs, 1, "not again within 10 minutes");
+
+  savePace(null, { dir: opts.dir, now: now + 9 * MIN });
+  guardHook(stop, { ...opts, paceRun, now: now + 10 * MIN });
+  assert.equal(runs, 2, "nothing to warn about: worked out again later");
+
+  const pace = {
+    runsOutAt: new Date(START + 249 * MIN).toISOString(),
+    resetsAt: new Date(START + 300 * MIN).toISOString(),
+    used: 0.625,
+  };
+  savePace(pace, { dir: opts.dir, now: now + 12 * MIN });
+  const at = { ...opts, paceRun, now: now + 14 * MIN };
+  assert.equal(guardHook(stop, at).systemMessage, paceText(pace));
+  assert.equal(guardHook(stop, { ...at, now: now + 40 * MIN }), null, "once a window");
+  assert.equal(runs, 2, "and nothing more to work out in it");
+
+  // A stale answer is worked out again, not shown.
+  const later = { ...opts, dir: path.join(dir, "later"), paceRun };
+  savePace(pace, { dir: later.dir, now });
+  assert.equal(guardHook(stop, { ...later, now: now + 20 * MIN }), null);
+  assert.equal(runs, 3);
+
+  // So is one whose run-out time has gone by.
+  const gone = { ...opts, dir: path.join(dir, "gone"), paceRun };
+  savePace({ ...pace, runsOutAt: new Date(now + 4 * MIN).toISOString() }, { dir: gone.dir, now });
+  assert.equal(guardHook(stop, { ...gone, now: now + 5 * MIN }), null);
+  assert.equal(runs, 4);
+
+  const sdk = write(dir, "sdk", [
+    ...longConversation("sdk"),
+    { type: "attachment", entrypoint: "sdk-cli", sessionId: "sdk" },
+  ]);
+  const headless = { ...opts, dir: path.join(dir, "sdk"), paceRun, now: now + 13 * MIN };
+  savePace(pace, { dir: headless.dir, now: now + 12 * MIN });
+  assert.equal(guardHook({ ...stop, session_id: "sdk", transcript_path: sdk }, headless), null);
+  assert.equal(runs, 4, "a headless run is told nothing and starts nothing");
 });
 
 test("live picks up what guard did from now on, and says it in a line", () => {
@@ -690,4 +927,78 @@ test("`optimaizr guard` alone says it is off and what it would hold", () => {
   );
   assert.match(out, /Last 7 days\s+nothing held/);
   assert.match(out, /optimaizr guard on turns it on/);
+});
+
+/** A conversation come back to `returns` times after `gap` minutes away. */
+function comebacks({ returns = 3, gap = 90, size = 150_000, hour = true } = {}) {
+  const script = [{ prompt: "build it" }, { out: 300, ctx: 0, write: size, hour }];
+  for (let r = 0; r < returns; r++) {
+    script.push({ prompt: "carry on", gap });
+    script.push({ out: 300, ctx: 0, write: size + 10_000, hour });
+    script.push({ out: 300, ctx: size + 10_000, write: 1_000, hour });
+  }
+  return script;
+}
+
+test("the first-run offer counts the returns guard would have held", async () => {
+  const data = await load({ s1: transcript("s1", comebacks()) });
+  const held = wouldHold(data.events);
+  // 160K at Opus 5.5's 1-hour write rate, $8 a million, three times.
+  assert.equal(held.count, 3);
+  assert.ok(Math.abs(held.usd - 3.84) < 1e-9);
+  assert.ok(Math.abs(held.warmUsd - 0.096) < 1e-9);
+
+  const last = coldResumes(data.events).at(-1);
+  assert.equal(wouldHold(data.events, Date.parse(last.event.ts)).count, 1, "only since then");
+
+  // 60K on the 5-minute cache is $0.375 to write again: under what guard holds.
+  const small = await load({
+    s1: transcript("s1", comebacks({ size: 50_000, gap: 10, hour: false })),
+  });
+  assert.equal(coldResumes(small.events).length, 3);
+  assert.equal(wouldHold(small.events), null);
+});
+
+test("guard is offered once, and never to someone who had it on", () => {
+  const dir = path.join(tmp("offer"), "guard");
+  assert.equal(guardOffered({ dir }), false);
+  markGuardOffered({ dir });
+  assert.equal(guardOffered({ dir }), true);
+
+  const was = {
+    dir: path.join(tmp("offer"), "guard"),
+    claudeSettings: path.join(tmp("offer"), "settings.json"),
+  };
+  assert.equal(applyGuard("optimaizr guard hook", was).ok, true);
+  undoGuard(was);
+  assert.equal(guardApplied(was), false);
+  assert.equal(guardOffered(was), true, "turned off, it isn't asked again");
+});
+
+test("`optimaizr` piped or in CI never asks", async () => {
+  const dir = tmp("offer-cli");
+  const projects = path.join(dir, "claude", "projects", "-w");
+  fs.mkdirSync(projects, { recursive: true });
+  // Within the last 30 days, so the offer would have something to say.
+  const recs = transcript("s1", comebacks()).map((r) =>
+    r.timestamp
+      ? {
+          ...r,
+          timestamp: new Date(
+            Date.parse(r.timestamp) - START + Date.now() - 86_400_000,
+          ).toISOString(),
+        }
+      : r,
+  );
+  fs.writeFileSync(path.join(projects, "s1.jsonl"), recs.map((r) => JSON.stringify(r)).join("\n"));
+  const env = {
+    ...process.env,
+    OPTIMAIZR_DIR: dir,
+    CLAUDE_CONFIG_DIR: path.join(dir, "claude"),
+    OPTIMAIZR_NO_UPDATE_CHECK: "1",
+  };
+  const out = strip(execFileSync(process.execPath, [CLI], { env, encoding: "utf8" }));
+  assert.match(out, /Where it goes/);
+  assert.doesNotMatch(out, /Guard would have held/);
+  assert.equal(guardOffered({ dir: path.join(dir, "guard") }), false, "not asked, so not marked");
 });

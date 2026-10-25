@@ -9,7 +9,8 @@ import type { OptimizationFinding, UsageEvent } from "../domain/types.js";
  * Two things are reconstructed, and the report says so: sessions are rebuilt
  * from timestamps (one opens at the top of the hour of the first message after
  * the last one closed, and lasts five hours), and the limit, which isn't
- * published, is learned from hits the user records with `optimaizr limit`.
+ * published, is learned from the times Claude Code refused a request for it,
+ * plus any the user records with `optimaizr limit`.
  */
 
 export type PlanId = "pro" | "max5" | "max20" | "team" | "team-premium";
@@ -133,6 +134,9 @@ export interface PlanSession {
   usdAtLimit?: number;
 }
 
+/** A time the limit was hit. `resetsAt`, when Claude Code gave it, marks the window's real end. */
+export type LimitHit = string | { ts: string; resetsAt?: string };
+
 /** Only Claude Code traffic counts against a Claude plan. */
 function planEvents(events: UsageEvent[]): UsageEvent[] {
   return events
@@ -144,13 +148,14 @@ function planEvents(events: UsageEvent[]): UsageEvent[] {
 export function sessionBlocks(
   events: UsageEvent[],
   findings: OptimizationFinding[] = [],
-  limitHits: string[] = [],
+  limitHits: LimitHit[] = [],
 ): PlanSession[] {
   const { byEvent } = recoverableByEvent(findings);
   const sessions: Array<PlanSession & { startMs: number; items: UsageEvent[] }> = [];
   let cur: (typeof sessions)[number] | undefined;
+  const all = planEvents(events);
 
-  for (const e of planEvents(events)) {
+  for (const e of all) {
     const t = Date.parse(e.ts);
     if (!cur || t >= cur.startMs + SESSION_MS) {
       const startMs = Math.floor(t / HOUR) * HOUR;
@@ -172,11 +177,20 @@ export function sessionBlocks(
   }
 
   for (const hit of limitHits) {
-    const h = Date.parse(hit);
+    const h = Date.parse(typeof hit === "string" ? hit : hit.ts);
     if (!Number.isFinite(h)) continue;
     const s = sessions.find((x) => h >= x.startMs && h < x.startMs + SESSION_MS);
     if (!s) continue;
-    const used = s.items.filter((e) => Date.parse(e.ts) <= h).reduce((t, e) => t + e.cost.total, 0);
+    // With the real reset known, count from the real start, which can fall
+    // before the rebuilt one.
+    const reset = typeof hit === "string" || !hit.resetsAt ? NaN : Date.parse(hit.resetsAt);
+    const from = Number.isFinite(reset) ? reset - SESSION_MS : s.startMs;
+    const used = (Number.isFinite(reset) ? all : s.items)
+      .filter((e) => {
+        const t = Date.parse(e.ts);
+        return t >= from && t <= h;
+      })
+      .reduce((t, e) => t + e.cost.total, 0);
     // Two hits recorded in one session describe one limit: keep the later.
     s.usdAtLimit = Math.max(s.usdAtLimit ?? 0, used);
   }
@@ -237,7 +251,7 @@ export function planView(
   findings: OptimizationFinding[],
   opts: {
     plan: PlanId;
-    limitHits?: string[];
+    limitHits?: LimitHit[];
     now?: Date;
     source?: PlanSource;
     windows?: ClaudeWindows | null;

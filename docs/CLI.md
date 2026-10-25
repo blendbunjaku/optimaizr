@@ -13,16 +13,21 @@ Every fix is checked against your own quality bar first, on your own traffic,
 so you're never trading cost for worse output.
 
 ```
-  51% of your spend went on re-reading the conversation so far; the
-  answers themselves were 22%.
+  41% of your spend went on re-reading the conversation so far; the
+  answers themselves were 25%.
   Start here: optimaizr apply context-compaction   compact sooner, so there is less to re-read
 
-  Your Claude Pro did $1,146/mo of work at API prices: 57x what you pay
+  Your Claude Pro did $801.89/mo of work at API prices: 40x what you pay
 
-  Savings found
-    Clear waste              $9.44/mo  $114.87/yr · fix it, nothing to lose
-    Likely, if you try     +$92.81/mo  cold cache returns, model mismatch
-    Up to, if you test     $272.14/mo  compact earlier · 37% of calls carry over 200K of conversation
+  Up to 30% of it can be saved: about 1.4x the work per 5-hour window and per
+  week, if you take every step below.
+
+  Where the 30% comes from
+    Compact earlier                18%
+    Cold cache returns              8%
+    Smaller default model           3%
+    6 smaller ones                  1%
+    Each is taken from what the ones above leave, so nothing counts twice.
 ```
 
 Once a change is in, `optimaizr results` puts the days after it against the
@@ -243,7 +248,7 @@ There is a test asserting exactly that.
 
 ---
 
-## Three tiers of saving, never added together
+## Three tiers of saving
 
 Each finding says what kind of move it asks for:
 
@@ -254,7 +259,10 @@ Each finding says what kind of move it asks for:
 | **TEST** | Trade-offs sized from your own usage: compact earlier, a smaller default model. Only ever "up to ".  |
 
 "Likely +" counts only calls that clear waste did not already claim, and a
-TEST lever is never added to anything. Each figure also says how sure it is:
+TEST lever is never added to either. Only the profile's all-in figure puts
+every tier together: the largest saving first, then each one on what the ones
+before it leave, so two changes never save the same dollar (30% here, where the
+plain sum of the parts would say 33%). Each figure also says how sure it is:
 **high confidence**, **likely** or **possible** (the `high`, `medium` and
 `low` confidence levels below).
 
@@ -277,33 +285,41 @@ npx optimaizr profile
 
 ```
   optimAIzr | profile
-  2026-04-08 to 2026-10-05  (180.2 days)
+  2026-09-25 to 2026-10-25  (30.0 days)
 
 ------------------------------------------------------------------
 
-  Your Claude Pro did $938.12/mo of work at API prices: 47x what you pay
-  $974.52 in this window · 7,693 calls · 1.98B tokens · list rates, not a bill
+  41% of your spend went on re-reading the conversation so far; the
+  answers themselves were 25%.
+  Start here: optimaizr apply context-compaction   compact sooner, so there is less to re-read
 
-  Savings found
-    Clear waste             $13.07/mo  $159.01/yr · fix it, nothing to lose
-    Likely, if you try      +$1.54/mo  model mismatch, excess reasoning
-    Up to, if you test     $263.14/mo  compact earlier · 48% of calls carry over 200K of conversation
-                            $54.45/mo  smaller default model · 16% of Opus 5.5 spend is light work
+  Your Claude Pro did $801.89/mo of work at API prices: 40x what you pay
+  $823.97 in this window · 8,448 calls · 1.73B tokens · list rates, not a bill
+
+  Up to 30% of it can be saved: about 1.4x the work per 5-hour window and per
+  week, if you take every step below.
+
+  Where the 30% comes from
+    Compact earlier                18%
+    Cold cache returns              8%
+    Smaller default model           3%
+    6 smaller ones                  1%
+    Each is taken from what the ones above leave, so nothing counts twice.
 
   Biggest win  Compact earlier  TEST · possible
-    Up to 28% less usage (~$263.14/mo), about 1.4x the work per 5-hour window
+    Up to 18% less usage (~$149.73/mo), about 1.2x the work per 5-hour window
 
-    What happened   48% of your Claude Code calls carried over 200K of
+    What happened   23% of your Claude Code calls carried over 200K of
                     conversation
     Why it matters  Every call re-reads the whole conversation, so each
-                    call costs more than the last: re-reading took 56% of
+                    call costs more than the last: re-reading took 41% of
                     your Claude Code spend.
     What to do      Compact by hand when you finish a piece of work,
                     saying what to keep (/compact keep the API decisions).
-                    Automatic compaction usually lands mid-task, and a
-                    summary can drop details from early in the
-                    conversation. Or have it compact at 200K on its own.
-                    Claude Code: add "env": {
+                    Automatic compaction usually lands mid-task (88 of
+                    your 92 compactions did), and a summary can drop
+                    details from early in the conversation. Or have it
+                    compact at 200K on its own. Claude Code: add "env": {
                     "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "200000" } to
                     ~/.claude/settings.json, and it compacts a little
                     before that point. The saving already pays for each
@@ -317,24 +333,28 @@ npx optimaizr profile
 
   Where it goes
 
-    Re-reading the conversation    56%  ███████████░░░░░░░░░
-    Loading context into cache     24%  █████░░░░░░░░░░░░░░░
-    Answers, code and thinking     20%  ████░░░░░░░░░░░░░░░░
+    Re-reading the conversation    41%  ████████░░░░░░░░░░░░
+    Loading context into cache     34%  ███████░░░░░░░░░░░░░
+    Answers, code and thinking     25%  █████░░░░░░░░░░░░░░░
+    Re-reading is billed at the cache-read rate, the cheapest there is.
 
   Clear waste and likely savings, item by item
 
-    FIX   Oversized context               $12.15/mo     1% of usage  likely
-    FIX   Oversized tool output           $0.847/mo    <1% of usage  likely
-    TRY   Model mismatch                   $1.75/mo    <1% of usage  likely
-    TRY   Excess reasoning                $0.415/mo    <1% of usage  likely
+    FIX   Oversized context                $4.95/mo     1% of usage  likely
+    FIX   Oversized tool output            $1.75/mo    <1% of usage  likely
+    TRY   Cold cache returns              $80.07/mo    10% of usage  high confidence
+    TRY   Model mismatch                  $0.987/mo    <1% of usage  likely
     +1 smaller, under $0.25/mo each: optimaizr recommend
 ```
 
-The money comes first, by tier, and is never added up. The biggest win is the
-largest opportunity of any tier; on a plan it is also put as more work per
-5-hour window (cutting a share s of usage leaves room for 1 / (1 - s) as much),
-and each item below shows its share of your usage, about its share of your
-5-hour windows.
+The savings come first, all together: "up to", because it counts the TEST
+levers too, each taken from what the larger ones leave. On a plan it is put as
+more work per 5-hour window and per week (cutting a share s of usage leaves
+room for 1 / (1 - s) as much); off a plan, as dollars a month. Parts under 1%
+fold into one row, and the rows add up to the total. Under 5% in all, the
+screen shows each tier on its own line instead, as "Savings found". The biggest
+win is the largest opportunity of any tier, put the same way, and each item
+below shows its share of your usage, about its share of your 5-hour windows.
 "Where it goes" splits spend into re-reading context, loading it into the
 cache, output and new input. Below the screen shown here: each clear-waste and
 likely item, your plan block and the next step.
@@ -440,13 +460,17 @@ a little low. Two plans have no session view, and optimAIzr says so:
   5-hour sessions                18  in the last 30 days
   Typical session            $18.50  median · heaviest $67.20 on Sep 14
   Waste per session             10%  fix it and you'd hit the limit ~11% later
-  Your session limit        ~$26.90  learned from 3 recorded hits
+  Your session limit        ~$26.90  learned from 3 times you hit it
   This session               $12.40  since 20:00, resets 01:00 · ~46% of it
 ```
 
-**Teaching it your limit.** Anthropic does not publish the limit, and Claude
-Code does not write it to its transcripts. When Claude says the limit is
-reached, run:
+**How it learns your limit.** Anthropic does not publish the limit. Each time
+Claude Code refuses a request because the 5-hour window ran out, it writes that
+to the transcript with the time the window resets, and optimAIzr reads it from
+there: what the window had used by then, counted from its real start, is one
+hit. Nothing to set up, in the terminal or in VS Code. Mine, 7 hits in four
+weeks, were all between $33.50 and $42.06. For a hit the transcripts missed,
+run:
 
 ```bash
 optimaizr limit             # now
@@ -873,10 +897,10 @@ against the days before: 14, or as many as the change has been in, up to 30.
   Compact earlier: Claude Code at 200K
   applied Oct 7, 12 days ago
 
-  Working: 5% to 24% less per prompt than the 3 to 14 days before. It
-  comes with a cost: calls per prompt, tool errors per prompt,
-  compactions a day, files read again after summaries a day and waiting
-  for summaries a day went up.
+  Not clear yet: 5% to 24% less per prompt than the 3 to 14 days before,
+  and 5% is within the usual swing. The trade-offs are clearer: calls
+  per prompt, tool errors per prompt, compactions a day, files read
+  again after summaries a day and waiting for summaries a day went up.
 
                                                 before     after
     cost per prompt                              $1.06    $0.803   -24%
@@ -906,7 +930,10 @@ change covers. A verdict needs 3 active days and 100 prompts after the change
 (300 calls for SDK traffic); until then it says how far along it is and when
 to look again. A move of under 10% either way is no clear effect. When a
 shorter baseline (3, 5 or 7 days) gives a different size, the verdict gives the
-range, lowest to highest, instead of the one number that reads best.
+range, lowest to highest, instead of the one number that reads best, and it
+says Working or Not working only when every baseline puts the move past 10%.
+Otherwise it is Not clear yet, as with mine above: 24% less against the 14
+days before, 5% against the 5 days before.
 
 The other rows are there so a saving that costs you something shows it, for
 every kind of change: more calls per prompt, more tool errors, more time
@@ -1055,14 +1082,19 @@ optimaizr guard off       # takes out only its own
 optimaizr guard           # on or off, and what it held in the last 7 days
 ```
 
+The first time `optimaizr` finds $5 or more of messages guard would have held
+in the last 30 days, it says how many and what they cost, and asks once to turn
+it on (Enter is yes). Under $5 it waits for a later run. Only in a terminal:
+piped, with `--json` or in CI it never asks.
+
 It holds a costly step once and lets it through when it comes again:
 
-| Hold          | When                                                                                                                                                                    |
-| ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Expired cache | A message to a conversation whose cache expired, when sending it writes 50 cents or more back into the cache. It says what, and on Opus or Fable what Sonnet would pay. |
-| Big read      | Claude reading a whole file over 64KB. Claude is told to Grep for the part it needs or read a range, and a second whole read goes through.                              |
-| Retry         | The same command failing twice in a row with nothing changed in between. Claude is told to change something or say what blocks it.                                      |
-| Compact nudge | Once, at the end of a turn, when the conversation is at 75% of where it compacts: `/compact` now, before the next task starts mid-summary.                              |
+| Hold          | When                                                                                                                                                                                                                                                                                                      |
+| ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Expired cache | A message to a conversation whose cache expired, when sending it writes 50 cents or more back into the cache. It says what, as a share of your 5-hour limit on a Claude plan, and on Opus or Fable what Sonnet would pay. Not after the 5-hour limit stopped the conversation, nor for a bare "continue". |
+| Big read      | Claude reading a whole file over 64KB. Claude is told to Grep for the part it needs or read a range, and a second whole read goes through.                                                                                                                                                                |
+| Retry         | The same command failing twice in a row with nothing changed in between. Claude is told to change something or say what blocks it.                                                                                                                                                                        |
+| Compact nudge | Once, at the end of a turn, when the conversation is at 75% of where it compacts: `/compact` now, before the next task starts mid-summary. Claude Code compacts under its setting (168K with 200K set, on mine), so once it has compacted 3 times under yours, the nudge goes by where it really did.     |
 
 A held message isn't lost: Claude Code prints it under the hold as Original
 prompt. Send it again to go ahead, or type `/clear` and send it there: the
@@ -1096,16 +1128,36 @@ would have sent; a retry has no dollar figure.
 `optimaizr guard week` in the background, and the next turn shows its line:
 
 ```
-optimAIzr, your last 7 days: re-reading 31% of spend (was 37%), 10 returns to a cold cache (was 24). Guard: 4 catches, $2.17 not spent.
+optimAIzr, your last 7 days: re-reading 33% of spend (was 29%), 3 returns to a cold cache (was 25), 1 stop at the 5-hour limit (was 1). Guard: 4 catches, $2.17 not spent.
 ```
 
-The same line opens `live` and the profile. Headless runs (`claude -p`, the
+Stops at the 5-hour limit come from Claude Code's transcripts and show when
+either week had one; a retry before the reset is the same stop. Guard's
+catches get a "was" once it has been on for a week before. The same line opens
+`live` and the profile. Headless runs (`claude -p`, the
 SDK) never get it, and the cold hold skips them too.
+
+**Your 5-hour pace.** On a Claude plan whose limit optimAIzr has learned (from
+the status line's meter, Claude Desktop, or the stops Claude Code writes in its
+transcripts), guard works out at most every 10 minutes, in the background,
+whether the window runs out before it resets at the last hour's pace. From
+half the limit used, it says so once a window, at the end of a turn:
+
+```
+optimAIzr: at the last hour's pace, your 5-hour limit runs out around 14:09, 51 minutes before it resets at 15:00. About 63% is used. Sonnet 5.5 makes it last longer: /model sonnet.
+```
+
+The model line shows only on a frontier model, and running out within 15
+minutes of the reset isn't worth a warning. On my last 51 windows it came
+before all 7 stops at the limit, 19 minutes to 2h 44m ahead, 67 on the median.
+It also came in 10 of the 44 windows that never stopped, 4 of which still
+ended at 80% of the limit or more. `optimaizr guard pace` runs the same check
+by hand.
 
 Guard reads the end of the conversation's transcript at each message and tool
 call, in memory: about 50ms on a 405K conversation. What it keeps is in
-[SECURITY.md](../SECURITY.md): what it held, the note until it is used, and
-the week's line.
+[SECURITY.md](../SECURITY.md): what it held, the note until it is used, the
+week's line and the pace.
 
 ---
 

@@ -27,7 +27,8 @@ import {
 /**
  * Findings come in three tiers: `fix` (clear waste, the headline), `try`
  * (likely, but it changes what the model does) and `test` (trade-offs sized
- * from the user's own usage, shown as "up to" and never added to anything).
+ * from the user's own usage, shown as "up to"). Only the all-in figure puts
+ * them together, each taken from what the others leave.
  */
 
 /** One long conversation whose context grows past the compaction window. */
@@ -177,7 +178,7 @@ test("a smaller default model is a lever over work without heavy reasoning", asy
   assert.equal(lever.candidate?.kind, "swap-model", "verify can replay it before anyone switches");
 });
 
-test("levers never reach the headline, the totals or the opportunities", async () => {
+test("levers never reach clear waste, its totals or the opportunities", async () => {
   const data = await load({ s1: transcript("s1", longConversation()) });
   const summary = summarize(data);
   const findings = findWaste(data);
@@ -192,11 +193,82 @@ test("levers never reach the headline, the totals or the opportunities", async (
     "the lever is far bigger, and still not in the headline",
   );
 
+  // They do count in the all-in figure, which says it is an "up to".
   const text = renderProfile(profile);
-  assert.match(text, /Clear waste/);
-  assert.match(text, /Up to, if you test\s+\$[\d,.]+\/mo\s+compact earlier/);
+  assert.match(text, /Up to \d+% of it can be saved: about \$[\d,.]+\/mo/);
+  assert.match(text, /Where the \d+% comes from\s+Compact earlier\s+\d+%/);
   assert.match(text, /Biggest win\s+Compact earlier/, "the biggest lever leads the screen");
   assert.match(text, /Up to \d+% less usage/);
+});
+
+test("the all-in figure takes each saving from what the others leave", async () => {
+  const lookups = [];
+  for (let i = 0; i < 8; i++) lookups.push(...lookup());
+  const data = await load({
+    s1: transcript("s1", longConversation()),
+    s2: transcript("s2", lookups),
+  });
+  const summary = summarize(data);
+  const p = buildProfile(data, summary, findWaste(data));
+  const all = p.allIn;
+  const share = (usd) => usd / p.perMonthUsd;
+  const raw = [...p.opportunities, ...p.levers].map((r) => share(r.savings.monthlyUsd));
+  assert.ok(raw.length >= 2, "a lever and something to fix");
+
+  // Less than the plain sum, and never less than the biggest lever on its own.
+  const sum = raw.reduce((s, x) => s + x, 0);
+  const alone = 1 - raw.reduce((left, x) => left * (1 - x), 1);
+  assert.ok(all.share < sum, "not added up");
+  assert.ok(all.share <= alone + 1e-9);
+  assert.ok(all.share >= Math.max(...p.levers.map((r) => share(r.savings.monthlyUsd))) - 1e-9);
+  assert.ok(Math.abs(all.parts.reduce((s, x) => s + x.share, 0) - all.share) < 1e-9);
+  assert.ok(all.parts.every((x, i) => i === 0 || x.share <= all.parts[i - 1].share));
+  assert.ok(Math.abs(all.moreWork - 1 / (1 - all.share)) < 1e-9);
+  assert.ok(Math.abs(all.monthlyUsd - all.share * p.perMonthUsd) < 1e-9);
+
+  // Clear waste and likely savings already count each call once: their parts stay within it.
+  const sure = all.parts.filter((x) => x.tier !== "test").reduce((s, x) => s + x.share, 0);
+  assert.ok(sure <= share(p.savingsMonthlyUsd + p.likelyMonthlyUsd) + 1e-9);
+});
+
+test("where the all-in figure comes from: rows add up, small ones fold", async () => {
+  const data = await load({ s1: transcript("s1", longConversation()) });
+  const onPlan = buildProfile(data, summarize(data), findWaste(data), undefined, { plan: "pro" });
+  const parts = [
+    { rule: "context-compaction", tier: "test", share: 0.184 },
+    { rule: "cold-resume", tier: "try", share: 0.081 },
+    { rule: "model-default", tier: "test", share: 0.031 },
+    { rule: "oversized-input", tier: "fix", share: 0.004 },
+    { rule: "error-loops", tier: "fix", share: 0.003 },
+    { rule: "model-fit", tier: "try", share: 0.002 },
+  ];
+  const allIn = { share: 0.305, monthlyUsd: 244.1, moreWork: 1 / 0.695, parts };
+  const text = renderProfile({ ...onPlan, allIn });
+
+  assert.match(
+    text,
+    /Up to 31% of it can be saved: about 1\.4x the work per 5-hour window and per\s+week/,
+  );
+  const rows = [...text.matchAll(/^ {4}(.+?)\s+(\d+)%$/gm)].filter((m) =>
+    /Compact earlier|Cold cache|Smaller default|smaller ones/.test(m[1]),
+  );
+  assert.deepEqual(
+    rows.map((m) => m[1].trim()),
+    ["Compact earlier", "Cold cache returns", "Smaller default model", "3 smaller ones"],
+  );
+  assert.equal(
+    rows.reduce((s, m) => s + Number(m[2]), 0),
+    31,
+    "the rows add up to the headline",
+  );
+  assert.doesNotMatch(text, /Savings found/);
+
+  // Off a plan it is money; too small to lead, each tier shows on its own.
+  const plain = buildProfile(data, summarize(data), findWaste(data));
+  assert.match(renderProfile({ ...plain, allIn }), /can be saved: about \$244\.10\/mo/);
+  const small = renderProfile({ ...onPlan, allIn: { ...allIn, share: 0.04 } });
+  assert.match(small, /Savings found/);
+  assert.doesNotMatch(small, /comes from/);
 });
 
 test("the long-conversation fact and the compaction lever count the same calls", async () => {
@@ -266,7 +338,8 @@ test("savings found: exact dollars per tier, each lever with the fact behind it"
   assert.match(long.note, /^\d+% of calls carry over 200K of conversation$/);
   const lever = profile.levers.find((r) => r.rule === "context-compaction");
 
-  const text = renderProfile(profile);
+  // When everything together is too small to lead, each tier shows on its own.
+  const text = renderProfile({ ...profile, allIn: null });
   assert.match(text, /Savings found/);
   assert.match(text, new RegExp(`Clear waste\\s+\\$${profile.savingsMonthlyUsd.toFixed(2)}/mo`));
   assert.match(

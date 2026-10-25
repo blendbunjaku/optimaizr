@@ -61,7 +61,7 @@ export async function cmdScan(args: Args): Promise<void> {
               .filter((f) => f.tier === "test")
               .map((f) => ({ rule: f.rule, upToMonthlyUsd: f.savings.monthlyUsd })),
             overlap: savingsOverlap(findings),
-            note: "Estimates. monthlyUsd is clear waste (tier fix) only; likelyMonthlyUsd is what tier try findings add; each lever is an 'up to' on its own and is never added. Findings that claim the same call are counted once, at the largest claim.",
+            note: "Estimates. monthlyUsd is clear waste (tier fix) only; likelyMonthlyUsd is what tier try findings add; each lever is an 'up to' on its own, added to neither. Findings that claim the same call are counted once, at the largest claim.",
           },
           findings: stripFns(findings),
           errors,
@@ -302,7 +302,7 @@ export async function cmdSessions(args: Args): Promise<void> {
 
   const c = sessionStats(data);
   const rows = conversations(data);
-  const rate = shareRate(data.events, { limitUsd: planLimitUsd(args, data.events) });
+  const rate = shareRate(data.events, { limitUsd: planLimitUsd(args, data) });
   // Conversations guard started from a note, from its receipts.
   const notes = readReceipts(0)
     .filter((r) => r.kind === "handoff-used" && r.detail)

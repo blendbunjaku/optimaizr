@@ -5,7 +5,7 @@ import readline from "node:readline";
 
 import { costOf, providerOf } from "../pricing.js";
 import { estimateImageTokens } from "./images.js";
-import type { CallEvent, CompactionRecord, Dataset, ToolCall } from "../types.js";
+import type { CallEvent, CompactionRecord, Dataset, LimitHitRecord, ToolCall } from "../types.js";
 
 /**
  * Ingest Claude Code session transcripts. Claude Code writes one JSONL record
@@ -143,6 +143,8 @@ export interface TranscriptState {
   titles: Map<string, string>;
   /** How each session was started (cli, claude-vscode, sdk-cli), by session id. */
   entrypoints: Map<string, string>;
+  /** Plan limits Claude Code was refused at, one per window it names. */
+  limitHits: Map<string, LimitHitRecord>;
 }
 
 export function createTranscriptState(): TranscriptState {
@@ -154,6 +156,7 @@ export function createTranscriptState(): TranscriptState {
     compactions: new Map(),
     titles: new Map(),
     entrypoints: new Map(),
+    limitHits: new Map(),
   };
 }
 
@@ -195,6 +198,41 @@ function isPrompt(rec: {
     text = blocks.find((b) => b?.type === "text")?.text;
   }
   return typeof text === "string" && text.trim() !== "" && !NOT_A_PROMPT.test(text);
+}
+
+// Older Claude Code versions write the refusal as text only.
+const LIMIT_TEXT = /hit your (session|weekly) limit/i;
+
+/**
+ * A request Claude Code was refused because the plan's window ran out. It is
+ * written as a synthetic reply; newer versions add `quotaLimits` with the
+ * window and its reset, older ones only the text.
+ */
+function limitHitOf(rec: any, file: string): LimitHitRecord | null {
+  if (!rec.isApiErrorMessage || typeof rec.timestamp !== "string") return null;
+  if (typeof rec.error === "string" && rec.error !== "rate_limit") return null;
+  const q = rec.quotaLimits;
+  let window: string;
+  let resetsAt: string | undefined;
+  if (q?.status === "rejected") {
+    window = typeof q.rateLimitType === "string" ? q.rateLimitType : "unknown";
+    if (typeof q.resetsAt === "number") resetsAt = new Date(q.resetsAt * 1000).toISOString();
+  } else {
+    const content = rec.message?.content;
+    const text = Array.isArray(content)
+      ? content.map((b: any) => (typeof b?.text === "string" ? b.text : "")).join(" ")
+      : String(content ?? "");
+    const m = LIMIT_TEXT.exec(text);
+    if (!m) return null;
+    window = m[1]!.toLowerCase() === "weekly" ? "seven_day" : "five_hour";
+  }
+  return {
+    source: "claude-code",
+    ts: rec.timestamp,
+    sessionId: rec.sessionId ?? path.basename(file, ".jsonl"),
+    window,
+    ...(resetsAt ? { resetsAt } : {}),
+  };
 }
 
 function tokenWeight(u: RawUsage | undefined): number {
@@ -343,6 +381,14 @@ export function consumeTranscriptLine(
   }
 
   if (rec.type !== "assistant") return true;
+  const hit = limitHitOf(rec, file);
+  if (hit) {
+    // Retries until the reset are the same limit: keep the first refusal.
+    const key = hit.resetsAt ? `${hit.window}|${hit.resetsAt}` : (rec.uuid ?? `${file}:${hit.ts}`);
+    const seen = state.limitHits.get(key);
+    if (!seen || hit.ts < seen.ts) state.limitHits.set(key, hit);
+    return true;
+  }
   const msg = rec.message;
   if (!msg) return true;
   const model: string = msg.model ?? "";
@@ -508,7 +554,20 @@ export async function ingestClaudeCode(opts: IngestOptions = {}): Promise<Datase
   const sessions = new Set(events.map((e) => e.sessionId));
   const titles = Object.fromEntries([...state.titles].filter(([id]) => sessions.has(id)));
 
-  return { events, window: { from, to, days }, sources: files, warnings, compactions, titles };
+  // A plan limit is the account's, not a project's, so --project keeps them all.
+  const limitHits = [...state.limitHits.values()]
+    .filter((h) => !cutoff || new Date(h.ts).getTime() >= cutoff)
+    .sort((a, b) => a.ts.localeCompare(b.ts));
+
+  return {
+    events,
+    window: { from, to, days },
+    sources: files,
+    warnings,
+    compactions,
+    titles,
+    limitHits,
+  };
 }
 
 /**

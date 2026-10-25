@@ -103,7 +103,8 @@ export function wrap(text: string, width: number): string[] {
   const lines: string[] = [];
   let line = "";
   for (const w of words) {
-    if (line.length + w.length + 1 > width) {
+    // Colour codes take no room on screen.
+    if (visible(line) + visible(w) + 1 > width) {
       if (line) lines.push(line);
       line = w;
     } else {
@@ -721,39 +722,14 @@ export function renderProfile(
   out.push(
     `  ${dim(`${usd(p.spendUsd)} in this window · ${p.calls.toLocaleString()} calls · ${fmtTokens(p.tokens.total)} tokens · list rates, not a bill`)}`,
   );
-  // The money first: each tier on its own line, exact, and never added up.
-  const fact = (rule: string) => p.habits.find((h) => h.rule === rule)?.note;
-  const tried = p.opportunities.filter((r) => r.tier === "try");
-  const money = (label: string, value: string, note: string) =>
-    out.push(`    ${dim(pad(label, 20))}${padLeft(value, 13)}  ${dim(note)}`);
+  const windowed = Boolean(claudePlan || p.codex);
   out.push("");
-  out.push(`  ${bold("Savings found")}`);
-  money(
-    "Clear waste",
-    bold(green(`${usd(p.savingsMonthlyUsd)}/mo`)),
-    p.savingsMonthlyUsd > 0.005
-      ? `${usd(p.savingsAnnualUsd)}/yr · fix it, nothing to lose`
-      : "none worth fixing",
-  );
-  if (p.likelyMonthlyUsd > 0.005) {
-    money(
-      "Likely, if you try",
-      yellow(`+${usd(p.likelyMonthlyUsd)}/mo`),
-      tried.map((r) => ruleLabel(r.rule).toLowerCase()).join(", "),
-    );
-  }
-  p.levers.forEach((r, i) => {
-    const why = fact(r.rule);
-    money(
-      i === 0 ? "Up to, if you test" : "",
-      blue(`${usd(r.savings.monthlyUsd)}/mo`),
-      `${ruleLabel(r.rule).toLowerCase()}${why ? ` · ${why}` : ""}`,
-    );
-  });
+  // Everything together when it's worth a line, else each tier on its own.
+  if (p.allIn && p.allIn.share >= ALL_IN_FROM) out.push(...renderAllIn(p.allIn, windowed));
+  else out.push(...savingsFound(p));
   out.push("");
 
   // The biggest single win, whatever its tier, labelled for what it is.
-  const windowed = Boolean(claudePlan || p.codex);
   const win = p.biggestWin;
   if (win) {
     const r = win.recommendation;
@@ -794,7 +770,7 @@ export function renderProfile(
   }
   out.push("");
 
-  // Everything worth doing, clear waste first, levers last and never added.
+  // Everything worth doing, clear waste first.
   const all = p.opportunities;
   // Cents a month are noise on this screen; `recommend` lists everything.
   const ways = all.filter((r) => r.savings.monthlyUsd >= WORTH_LISTING_USD);
@@ -820,7 +796,7 @@ export function renderProfile(
     }
     out.push("");
     out.push(
-      `  ${dim(`Clear waste ${usd(p.savingsMonthlyUsd)}/mo${p.likelyMonthlyUsd > 0.005 ? ` · likely +${usd(p.likelyMonthlyUsd)}/mo` : ""}. Each call is counted once; the "up to" figures above are never added in.`)}`,
+      `  ${dim(`Clear waste ${usd(p.savingsMonthlyUsd)}/mo${p.likelyMonthlyUsd > 0.005 ? ` · likely +${usd(p.likelyMonthlyUsd)}/mo` : ""}, each call counted once.`)}`,
     );
     if (windowed) {
       out.push(
@@ -829,7 +805,102 @@ export function renderProfile(
     }
     out.push("");
   }
+  return finishProfile(p, out, win);
+}
 
+/** Below this share the all-in line gives way to the tiers, each on its own. */
+const ALL_IN_FROM = 0.05;
+/** Parts of the all-in figure under this share fold into "N smaller ones". */
+const ALL_IN_ROW = 0.01;
+
+/**
+ * "Up to 30% of it can be saved", then where the 30% comes from. The rows are
+ * rounded so they add up to the headline, the way the parts themselves do.
+ */
+function renderAllIn(a: NonNullable<Profile["allIn"]>, windowed: boolean): string[] {
+  const out: string[] = [];
+  const total = pct(a.share);
+  const gain = windowed
+    ? `about ${a.moreWork.toFixed(1)}x the work per 5-hour window and per week`
+    : `about ${usd(a.monthlyUsd)}/mo`;
+  for (const line of wrap(
+    `Up to ${total} of it can be saved: ${gain}, if you take every step below.`,
+    76,
+  )) {
+    out.push(`  ${bold(line)}`);
+  }
+  out.push("");
+  out.push(`  ${bold(`Where the ${total} comes from`)}`);
+  const big = a.parts.filter((x) => x.share >= ALL_IN_ROW);
+  const small = a.parts.filter((x) => x.share < ALL_IN_ROW);
+  const rows = big.map((x) => ({ label: ruleLabel(x.rule), share: x.share }));
+  if (small.length === 1) rows.push({ label: ruleLabel(small[0]!.rule), share: small[0]!.share });
+  if (small.length > 1) {
+    rows.push({
+      label: `${small.length} smaller ones`,
+      share: small.reduce((s, x) => s + x.share, 0),
+    });
+  }
+  const shown = roundedTo(
+    rows.map((r) => r.share * 100),
+    Math.round(a.share * 100),
+  );
+  rows.forEach((r, i) => {
+    const n = shown[i]!;
+    out.push(`    ${pad(r.label, 30)}${padLeft(n > 0 ? `${n}%` : "<1%", 4)}`);
+  });
+  out.push(`    ${dim("Each is taken from what the ones above leave, so nothing counts twice.")}`);
+  return out;
+}
+
+/** Whole numbers that add up to `total`: the largest remainders get the leftover points. */
+function roundedTo(values: number[], total: number): number[] {
+  const floors = values.map(Math.floor);
+  let left = total - floors.reduce((s, v) => s + v, 0);
+  const order = values.map((v, i) => [v - Math.floor(v), i] as const).sort((a, b) => b[0] - a[0]);
+  for (const [, i] of order) {
+    if (left <= 0) break;
+    floors[i]! += 1;
+    left -= 1;
+  }
+  return floors;
+}
+
+/** The money first: each tier on its own line, exact, and never added up. */
+function savingsFound(p: Profile): string[] {
+  const out: string[] = [];
+  const fact = (rule: string) => p.habits.find((h) => h.rule === rule)?.note;
+  const tried = p.opportunities.filter((r) => r.tier === "try");
+  const money = (label: string, value: string, note: string) =>
+    out.push(`    ${dim(pad(label, 20))}${padLeft(value, 13)}  ${dim(note)}`);
+  out.push(`  ${bold("Savings found")}`);
+  money(
+    "Clear waste",
+    bold(green(`${usd(p.savingsMonthlyUsd)}/mo`)),
+    p.savingsMonthlyUsd > 0.005
+      ? `${usd(p.savingsAnnualUsd)}/yr · fix it, nothing to lose`
+      : "none worth fixing",
+  );
+  if (p.likelyMonthlyUsd > 0.005) {
+    money(
+      "Likely, if you try",
+      yellow(`+${usd(p.likelyMonthlyUsd)}/mo`),
+      tried.map((r) => ruleLabel(r.rule).toLowerCase()).join(", "),
+    );
+  }
+  p.levers.forEach((r, i) => {
+    const why = fact(r.rule);
+    money(
+      i === 0 ? "Up to, if you test" : "",
+      blue(`${usd(r.savings.monthlyUsd)}/mo`),
+      `${ruleLabel(r.rule).toLowerCase()}${why ? ` · ${why}` : ""}`,
+    );
+  });
+  return out;
+}
+
+/** Plan, budget and the next step: the end of the profile. */
+function finishProfile(p: Profile, out: string[], win: Profile["biggestWin"]): string {
   if (p.plan || p.codex || p.budget) {
     out.push(rule());
     out.push("");
@@ -966,6 +1037,19 @@ function verdictLine(r: ChangeResult): string {
     }
     case "worse":
       return `${red("Not working:")} ${perUnit(r)} than ${base}.`;
+    case "unclear": {
+      const g = r.range;
+      const pct = (x: number) => `${Math.round(Math.abs(x) * 100)}%`;
+      const size =
+        g && g.low < 0 !== g.high < 0
+          ? `from ${pct(g.low)} less to ${pct(g.high)} more per ${r.measure} than the ${g.shortest} to ${days(g.longest)} before, depending on the baseline`
+          : both
+            ? `${perUnit(r)} than ${base}, and ${both[0]}% is within the usual swing`
+            : `${perUnit(r)} than ${base}, at the edge of the usual swing`;
+      const costs = r.rows.filter((x) => x.worse).map((x) => x.label);
+      const extra = r.withCost ? ` The trade-offs are clearer: ${listed(costs)} went up.` : "";
+      return `${yellow("Not clear yet:")} ${size}.${extra}`;
+    }
     default:
       return `${bold("No clear effect yet:")} ${perUnit(r)} than ${base}, within the usual swing.`;
   }
@@ -1073,6 +1157,8 @@ function appliedState(r: ChangeResult): string {
       return green(`${perUnit(r)} so far`);
     case "worse":
       return red(`${perUnit(r)} so far`);
+    case "unclear":
+      return yellow(`not clear yet (${perUnit(r)})`);
     default:
       return `no clear effect yet (${perUnit(r)})`;
   }
@@ -1549,7 +1635,7 @@ export function renderPlan(v: PlanView): string[] {
     row(
       "Your session limit",
       bold(`~${usd(v.limit.usd)}`),
-      dim(`learned from ${v.limit.hits} recorded hit${v.limit.hits === 1 ? "" : "s"}`),
+      dim(`learned from ${v.limit.hits} time${v.limit.hits === 1 ? "" : "s"} you hit it`),
     );
   } else if (!v.windows?.fiveHour) {
     // Claude Code's own meter makes a learned limit unnecessary.

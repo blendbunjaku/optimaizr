@@ -67,6 +67,14 @@ test("the limit is what the session had used when a hit was recorded, median ove
   assert.equal(v.current.limitShare, 4 / 4.5);
 });
 
+test("a hit with its reset counts from the real start, not the rebuilt one", () => {
+  // The rebuilt block opens at 14:00 on call d; Claude Code says the window
+  // resets at 18:00, so it opened at 13:00 and call c at 13:59 counts too.
+  const hit = { ts: "2026-09-20T15:00:00.000Z", resetsAt: "2026-09-20T18:00:00.000Z" };
+  assert.equal(sessionBlocks(DAY1, [], [hit.ts])[1].usdAtLimit, 4);
+  assert.equal(sessionBlocks(DAY1, [], [hit])[1].usdAtLimit, 9);
+});
+
 test("a hit with no calls in its session teaches nothing", () => {
   const v = planView(DAY1, [], {
     plan: "pro",

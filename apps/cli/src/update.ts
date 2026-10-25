@@ -30,6 +30,13 @@ const WHATS_NEW: Record<string, string[]> = {
     "live shows its work: a status line, context warnings, and Y to compact earlier.",
     "Detection is stricter, so figures are lower than 0.8 and hold up when checked.",
   ],
+  "0.12.1": [
+    "The profile opens with all it found, never counted twice, as more work per 5-hour window.",
+    "Your 5-hour limit is learned from Claude Code's transcripts, nothing to set up.",
+    "Guard warns once a window when the last hour's pace runs the limit out before it resets.",
+    'Holds say their share of your 5-hour limit, and a bare "continue" goes through.',
+    "The weekly line counts your stops at the limit, against the week before.",
+  ],
 };
 
 export function updatePath(): string {

@@ -6,6 +6,7 @@ import {
   buildProfile,
   cardData,
   claudeConfigDir,
+  type Dataset,
   dim,
   green,
   guardSaved,
@@ -30,8 +31,11 @@ import {
 import { appliedChanges, latestClaudeWindows, optimaizrDir, readReceipts } from "@optimaizr/local";
 import type { Args } from "../args.js";
 import { budgetOf, planNote, resolvePlan } from "../config.js";
+import { shareRate } from "../share.js";
+import { offerGuard } from "./guard.js";
 import {
   emptyNotice,
+  limitHits,
   limitsPath,
   load,
   loadForBudget,
@@ -43,7 +47,9 @@ import {
 /**
  * `optimaizr limit`: record that Claude just said the session limit was hit.
  * The limit isn't published, so it's learned as the median of what sessions
- * had used at each hit. `--at` records one after the fact; `undo` removes the last.
+ * had used at each hit. Claude Code's transcripts record most hits already;
+ * this is for the ones they miss. `--at` records one after the fact; `undo`
+ * removes the last.
  */
 export async function cmdLimit(args: Args): Promise<void> {
   const file = limitsPath();
@@ -83,7 +89,7 @@ export async function cmdLimit(args: Args): Promise<void> {
   const session = sessionBlocks(data.events, [], [at.toISOString()]).find(
     (s) => s.usdAtLimit !== undefined,
   );
-  const learned = planView(data.events, [], { plan: "pro", limitHits: hits }).limit;
+  const learned = planView(data.events, [], { plan: "pro", limitHits: limitHits(data) }).limit;
 
   console.log("");
   console.log(
@@ -124,8 +130,8 @@ export function seeLimitCommand(args: Args): string {
   return `optimaizr profile --plan ${flag ?? "pro"}`;
 }
 
-/** Plan options for `buildProfile`: the plan, where it came from, recorded hits and live meters. */
-function planOptions(args: Args) {
+/** Plan options for `buildProfile`: the plan, where it came from, limit hits and live meters. */
+function planOptions(args: Args, data: Pick<Dataset, "limitHits">) {
   const choice = resolvePlan(args);
   return {
     choice,
@@ -135,7 +141,7 @@ function planOptions(args: Args) {
         : {
             plan: choice.plan,
             source: choice.source ?? undefined,
-            limitHits: readLimitHits(),
+            limitHits: limitHits(data),
             windows: latestClaudeWindows(),
             dir: path.join(claudeConfigDir(), "projects"),
           },
@@ -160,7 +166,7 @@ export async function cmdCard(args: Args): Promise<void> {
     summarize(data, dayOpts),
     findings,
     undefined,
-    planOptions(args).options,
+    planOptions(args, data).options,
     { changes, results: measureResults(data, changes).results },
   );
   const recent = args.flags.days
@@ -203,7 +209,7 @@ export async function cmdProfile(args: Args): Promise<void> {
   const summary = summarize(data, dayOpts);
   const { findings, errors } = analyze(data);
   const limitUsd = budgetOf(args);
-  const plan = planOptions(args);
+  const plan = planOptions(args, data);
   // Without --days the profile already holds every day the results need.
   const changes = appliedChanges();
   const history =
@@ -225,6 +231,8 @@ export async function cmdProfile(args: Args): Promise<void> {
     plan.options,
     { changes, results },
   );
+  // Saved for guard's holds and the mod, which can't work it out themselves.
+  if (profile.plan) shareRate(data.events, { limitUsd: profile.plan.limit?.usd });
 
   if (args.flags.json) {
     console.log(
@@ -234,7 +242,10 @@ export async function cmdProfile(args: Args): Promise<void> {
   }
 
   // Fewer days loaded than two weeks leaves nothing to compare the week with.
-  const week = Number(args.flags.days ?? 30) < 14 ? null : weekCompare(data.events);
+  const week =
+    Number(args.flags.days ?? 30) < 14
+      ? null
+      : weekCompare(data.events, Date.now(), limitHits(data));
   console.log(
     renderProfile(profile, {
       week: week ? weekText(week) : null,
@@ -252,4 +263,6 @@ export async function cmdProfile(args: Args): Promise<void> {
   if (unread.length) console.log("");
   for (const e of errors) console.log(`  ${red(`warning: ${ruleErrorWarning(e)}`)}`);
   if (errors.length) console.log("");
+  // The first report with no --days covers the 30 days the offer counts.
+  if (!args.flags.days) await offerGuard(data.events, { onPlan: Boolean(profile.plan) });
 }

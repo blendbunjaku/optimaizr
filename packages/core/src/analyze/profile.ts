@@ -14,7 +14,13 @@ import { priceFor } from "../pricing.js";
 import { codexPlanView, type CodexPlanView } from "./codex-plan.js";
 import { coveredRules, type AppliedChange, type ChangeResult } from "./results.js";
 import { toRecommendations } from "../recommend/recommendations.js";
-import type { Dataset, OptimizationFinding, Recommendation, UsageEvent } from "../domain/types.js";
+import type {
+  Dataset,
+  FindingTier,
+  OptimizationFinding,
+  Recommendation,
+  UsageEvent,
+} from "../domain/types.js";
 import type { Summary } from "./summary.js";
 
 /**
@@ -48,10 +54,12 @@ export interface Profile {
   opportunities: Recommendation[];
   /** The first of them, or null when nothing recoverable was found. */
   bottleneck: Recommendation | null;
-  /** `test` levers, each an "up to" on its own. Never added to anything. */
+  /** `test` levers, each an "up to" on its own. */
   levers: Recommendation[];
   /** The single largest opportunity in any tier, for the top of the screen. */
   biggestWin: BiggestWin | null;
+  /** Every saving at once, in every tier, without counting a call twice. */
+  allIn: AllIn | null;
   /** The measured facts behind the savings, each linked to the finding that saves on it. */
   habits: Habit[];
   /** What the spend went on, as shares of it. */
@@ -91,6 +99,19 @@ export interface BiggestWin {
    * cutting a share s of usage leaves room for 1 / (1 - s) as much.
    */
   moreWork: number;
+}
+
+export interface AllIn {
+  /** The share of monthly spend saved with every step taken. */
+  share: number;
+  monthlyUsd: number;
+  /** On a plan, how much more work each 5-hour window and week holds: 1 / (1 - share). */
+  moreWork: number;
+  /**
+   * Largest first, each one's share of spend taken from what the ones before it
+   * leave, so the parts add up to `share`.
+   */
+  parts: Array<{ rule: string; tier: FindingTier; share: number }>;
 }
 
 export interface Habit {
@@ -270,6 +291,7 @@ export function buildProfile(
     bottleneck,
     levers: recs.filter((r) => r.tier === "test"),
     biggestWin,
+    allIn: allInOf(recs, summary.perMonth, savingsMonthlyUsd + likelyMonthly(findings)),
     habits: habitsOf(data.events, share(savingsMonthlyUsd), bottleneck),
     breakdown,
     nextCommand,
@@ -321,6 +343,41 @@ function firstLookOf(
     return { fact, command: `optimaizr apply ${win.recommendation.rule}`, why: "the biggest win" };
   }
   return { fact, command: "optimaizr sessions", why: "where in a conversation it happens" };
+}
+
+/**
+ * All the savings together. Clear waste and likely savings already count each
+ * call once, so their parts are scaled to that total; each part is then taken
+ * from what the larger ones leave, so two changes never save the same dollar.
+ */
+function allInOf(recs: Recommendation[], perMonth: number, countedOnceUsd: number): AllIn | null {
+  if (perMonth <= 0) return null;
+  const share = (usd: number) => usd / perMonth;
+  const found = recs.filter((r) => r.savings.monthlyUsd > 0);
+  const raw = found.filter((r) => r.tier !== "test").reduce((s, r) => s + r.savings.monthlyUsd, 0);
+  const scale = raw > countedOnceUsd ? countedOnceUsd / raw : 1;
+  const sized = found
+    .map((r) => ({
+      rule: r.rule,
+      tier: r.tier,
+      share: Math.min(0.95, share(r.savings.monthlyUsd) * (r.tier === "test" ? 1 : scale)),
+    }))
+    .sort((a, b) => b.share - a.share);
+  if (sized.length === 0) return null;
+
+  let left = 1;
+  const parts = sized.map((p) => {
+    const taken = p.share * left;
+    left -= taken;
+    return { ...p, share: taken };
+  });
+  const total = Math.min(0.95, 1 - left);
+  return {
+    share: total,
+    monthlyUsd: total * perMonth,
+    moreWork: 1 / (1 - total),
+    parts,
+  };
 }
 
 /** The largest opportunity of any tier; clear waste wins a tie. */

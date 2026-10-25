@@ -14,6 +14,7 @@ export type {
   Evidence,
   EvidenceClass,
   Impact,
+  LimitHitRecord,
   OptimizationFinding,
   Organization,
   Project,

@@ -219,7 +219,8 @@ test("results: caveats name a project shift, a shorter baseline and another chan
     now: AT + 8 * DAY,
     others: [compact200, other],
   });
-  assert.equal(r.verdict, "working");
+  // 8% against the 3 days before is inside the swing, so it isn't a saving yet.
+  assert.equal(r.verdict, "unclear");
   const text = r.caveats.join("\n");
   assert.match(text, /Against just the 3 days before the change it is 8% less instead of/);
   assert.match(text, /different projects: other went from 0% to 100%/);
@@ -228,8 +229,28 @@ test("results: caveats name a project shift, a shorter baseline and another chan
   assert.ok(r.range.low < -0.39 && r.range.high > -0.09);
   assert.equal(r.range.shortest, 3);
   assert.match(
-    renderResults(measureResults({ events }, [compact200], { now: AT + 8 * DAY })),
-    /Working:.*8% to 40% less per prompt than the 3 to 14 days before/,
+    renderResults(measureResults({ events }, [compact200], { now: AT + 8 * DAY })).replace(
+      /\s+/g,
+      " ",
+    ),
+    /Not clear yet: 8% to 40% less per prompt than the 3 to 14 days before, and 8% is within the usual swing\./,
+  );
+});
+
+test("results: baselines that disagree on the direction are not clear yet", () => {
+  const events = [
+    ...days(-14, -3, 30, { perPrompt: 1 }),
+    ...days(-3, 0, 30, { perPrompt: 0.5 }),
+    ...days(0, 8, 30, { perPrompt: 0.6 }),
+  ];
+  const r = measureChange({ events }, compact200, { now: AT + 8 * DAY });
+  assert.equal(r.verdict, "unclear");
+  assert.match(
+    renderResults(measureResults({ events }, [compact200], { now: AT + 8 * DAY })).replace(
+      /\s+/g,
+      " ",
+    ),
+    /Not clear yet: from 33% less to 20% more per prompt than the 3 to 14 days before, depending on the baseline\./,
   );
 });
 

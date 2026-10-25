@@ -186,7 +186,6 @@ test("the rendered profile answers usage, waste and what next", async () => {
   const text = renderProfile(profile);
 
   for (const heading of [
-    "Savings found",
     "Biggest win",
     "What happened",
     "Why it matters",
@@ -197,6 +196,8 @@ test("the rendered profile answers usage, waste and what next", async () => {
   ]) {
     assert.ok(text.includes(heading), `missing section: ${heading}`);
   }
+  // Everything together leads when it is worth a line, else each tier on its own.
+  assert.ok(text.includes(profile.allIn?.share >= 0.05 ? "comes from" : "Savings found"));
   assert.ok(text.includes(profile.nextCommand));
 });
 
@@ -230,7 +231,7 @@ test("a change still in place drops out of the savings and the biggest win", asy
   const text = renderProfile(after);
   assert.match(text, /Applied/);
   assert.match(text, /optimaizr results/);
-  assert.ok(text.indexOf("Applied") < text.indexOf("Savings found"));
+  assert.ok(text.indexOf("Applied") < text.indexOf("Next step"));
 });
 
 test("an undone change, or one for another project, still leaves the finding", async () => {

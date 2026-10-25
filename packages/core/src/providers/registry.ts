@@ -4,6 +4,7 @@ import type {
   AdapterSource,
   CompactionRecord,
   Dataset,
+  LimitHitRecord,
   Provider,
   ProviderAdapter,
   UsageEvent,
@@ -67,6 +68,7 @@ export async function ingest(sources: AdapterSource[]): Promise<Dataset> {
   const failures: string[] = [];
   const compactions: CompactionRecord[] = [];
   const titles: Record<string, string> = {};
+  const limitHits: LimitHitRecord[] = [];
 
   for (const source of sources) {
     for (const adapter of adapters) {
@@ -85,10 +87,12 @@ export async function ingest(sources: AdapterSource[]): Promise<Dataset> {
       for (const w of result.warnings) warnings.push(w);
       for (const c of result.compactions ?? []) compactions.push(c);
       Object.assign(titles, result.titles);
+      for (const h of result.limitHits ?? []) limitHits.push(h);
     }
   }
 
   events.sort((a, b) => a.ts.localeCompare(b.ts));
+  limitHits.sort((a, b) => a.ts.localeCompare(b.ts));
 
   const from = events[0]?.ts ?? "";
   const to = events[events.length - 1]?.ts ?? "";
@@ -103,6 +107,7 @@ export async function ingest(sources: AdapterSource[]): Promise<Dataset> {
     failures,
     compactions,
     titles,
+    limitHits,
   };
 }
 

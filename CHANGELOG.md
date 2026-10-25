@@ -1,5 +1,68 @@
 # Changelog
 
+## 0.12.1
+
+- **Everything it found, in one figure.** The profile now opens with every
+  saving together: "Up to 30% of it can be saved: about 1.4x the work per
+  5-hour window and per week" on mine, then where the 30% comes from. The
+  largest saving counts first and each one after it only on what the ones
+  before it leave, so two changes never save the same dollar: a plain sum of
+  mine would have said 33%. Off a plan it is dollars a month, and under 5% in
+  all the profile shows the tiers on their own lines, as before.
+- **Your 5-hour limit, learned with nothing to set up.** Claude Code writes
+  each request it refused because the 5-hour window ran out into the
+  transcript, with the time the window resets. optimAIzr now reads those, so
+  the profile, `live` and `sessions` know your limit in the terminal and in VS
+  Code alike, where until now it needed `optimaizr limit` by hand or the
+  status line. What a window had used is counted from its real start: mine, 7
+  hits in four weeks, all between $33.50 and $42.06. A retry before the reset
+  is the same hit, and `optimaizr limit` stays for the ones the transcripts
+  miss.
+- **Guard holds say what they cost your plan.** On a Claude plan, a held
+  message now leads with its share of the 5-hour limit, like "about 3% of
+  your 5-hour limit ($1.30 at API prices, Opus 5.5)", and the cheaper model's
+  line says the same. The rate is the one `sessions` and `live` already learn,
+  and the profile and guard's weekly run now keep it fresh.
+- **Guard no longer holds a forced wait.** A conversation the 5-hour limit
+  stopped mid-task had its cache expire while you were locked out, so the
+  message after the reset goes through, and so does a bare "continue" (or
+  "go on", "keep going"), which asks for the work `/clear` would lose. On my
+  machine the one hold of that kind was sent again in 3 seconds. The
+  refusal is also no longer taken for Claude's last reply in the handoff
+  note.
+- **The compact nudge comes in time.** Claude Code compacts under its
+  setting: with 200K set, my 76 automatic compactions since Oct 7 were at
+  168K on the median. A nudge from 75% of 200K had only 150K to 168K to
+  fire in, and a turn ended there before 13 of them. Guard now learns where
+  it really compacts (the last 10 times under your setting, once there are 3) and nudges from 75% of that, 126K on mine: 25 of the 76. Another 35 came
+  inside one long turn, where no end-of-turn nudge can reach.
+- **`results` says "Not clear yet" when the baselines disagree.** My own
+  compaction change read "Working: 4% to 22% less per prompt": 22% against
+  the 16 days before, 4% against the 5 days before, which is inside the 10%
+  swing. A verdict of Working or Not working now needs every baseline past
+  10%; otherwise it is Not clear yet, with the trade-offs that did move.
+- **`optimaizr` offers guard once, with your own numbers.** The first report
+  that finds $5 or more of messages guard would have held in the last 30 days
+  says how many and what they cost, and asks "Turn guard on? [Y/n]". Mine
+  would have read 40 messages after a break, $90.26 to write their
+  conversations into the cache again where a warm cache would have read them
+  for $2.26. Under $5 it waits for a later run. It asks once, only in a
+  terminal, and never if guard was ever on.
+- **The weekly line counts your stops at the 5-hour limit.** Next to
+  re-reading and cold returns, against the week before: mine reads "1 stop at
+  the 5-hour limit (was 1)". Retries before the reset are one stop. It shows
+  only when either week had one, and guard's catches now say the week
+  before's too.
+- **Guard warns before the 5-hour limit stops you.** Once half the window is
+  used, guard works out in the background whether the last hour's pace runs
+  it out before the reset, and says so once, at the end of a turn: "your
+  5-hour limit runs out around 14:09, 51 minutes before it resets at 15:00",
+  with `/model sonnet` when you are on Opus. Tried on my last 51 windows, it
+  came before all 7 stops, 19 minutes to 2h 44m ahead (67 on the median), and
+  in 10 of the 44 windows without one, 4 of which still ended at 80% of the
+  limit or more. It needs your limit learned: from the status line, Claude
+  Desktop or a stop in the transcripts.
+
 ## 0.12.0
 
 **Guard: the expensive moments, held before they are paid.**

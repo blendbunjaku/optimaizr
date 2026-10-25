@@ -4,6 +4,7 @@ import path from "node:path";
 import {
   BIG_READ_BYTES,
   bigReadReason,
+  carriesOn,
   cheaperRewrite,
   COLD_MIN_CONTEXT,
   coldHoldReason,
@@ -15,6 +16,8 @@ import {
   handoffContext,
   handoffNote,
   HOLD_MIN_USD,
+  type Pace,
+  paceText,
   priceFor,
   readTokens,
   RETRY_LIMIT,
@@ -72,6 +75,9 @@ function paths(opts: GuardPaths) {
     receipts: path.join(dir, "receipts.jsonl"),
     handoffs: path.join(dir, "handoffs"),
     week: path.join(dir, "week.json"),
+    point: path.join(dir, "compact-point.json"),
+    offered: path.join(dir, "offered.json"),
+    pace: path.join(dir, "pace.json"),
   };
 }
 
@@ -360,8 +366,12 @@ export interface GuardHookOptions extends GuardPaths {
   now?: number;
   /** Where Claude Code compacts, when set. Unset falls back to the model's window. */
   compactAt?: number | null;
+  /** What 1% of the 5-hour window costs, on a Claude plan; holds then say their share. */
+  usdPerPercent?: number | null;
   /** Starts working out the week's line in the background, so no hook waits on it. */
   weekRun?: () => void;
+  /** The same for the 5-hour pace, on a Claude plan. */
+  paceRun?: () => void;
 }
 
 /**
@@ -377,7 +387,7 @@ export function guardHook(
   try {
     switch (input.hook_event_name) {
       case "UserPromptSubmit":
-        return onPrompt(input, p, now);
+        return onPrompt(input, p, now, opts.usdPerPercent ?? null);
       case "PreToolUse":
         if (input.agent_id) return null;
         if (input.tool_name === "Read") return onRead(input, p, now);
@@ -388,7 +398,11 @@ export function guardHook(
       case "SessionEnd":
         return onEnd(input, p, now);
       case "Stop":
-        return onStop(input, p, now, opts.compactAt ?? null) ?? onWeek(input, p, now, opts.weekRun);
+        return (
+          onStop(input, p, now, opts.compactAt ?? null) ??
+          onPace(input, p, now, opts.paceRun) ??
+          onWeek(input, p, now, opts.weekRun)
+        );
       default:
         return null;
     }
@@ -406,7 +420,7 @@ const deny = (reason: string) => ({
 });
 
 /** A message to a conversation whose cache expired: hold it once, with a way out. */
-function onPrompt(input: HookInput, p: Paths, now: number) {
+function onPrompt(input: HookInput, p: Paths, now: number, usdPerPercent: number | null) {
   const file = input.transcript_path;
   const session = input.session_id;
   if (!file || !session) return null;
@@ -415,8 +429,9 @@ function onPrompt(input: HookInput, p: Paths, now: number) {
   const s = cacheStateOf(lines, file);
   if (!s || s.expiresAt === null || now < s.expiresAt) return null;
   if (s.context < COLD_MIN_CONTEXT || s.rewriteUsd < HOLD_MIN_USD) return null;
+  const tail = transcriptFacts(lines);
   // Nobody is there to send a held message again in a headless run.
-  if (transcriptFacts(lines).entrypoint?.startsWith("sdk")) return null;
+  if (tail.entrypoint?.startsWith("sdk")) return null;
 
   const at = new Date(now).toISOString();
   const key = `cold|${session}|${s.event.id}`;
@@ -428,6 +443,9 @@ function onPrompt(input: HookInput, p: Paths, now: number) {
     receipt(p, { at, session, kind: "cold-sent", usd: s.rewriteUsd, tokens: s.context });
     return null;
   }
+  // Locked out until the reset, the wait was not a choice; and "continue" asks for
+  // the work in hand, which /clear would lose. Both were sent again within seconds.
+  if (tail.limited || carriesOn(input.prompt)) return null;
   mark(p, key, now);
   // The note looks further back, for the files changed before the last few calls.
   const facts = transcriptFacts(transcriptTail(file, NOTE_BYTES) ?? lines);
@@ -456,7 +474,11 @@ function onPrompt(input: HookInput, p: Paths, now: number) {
   });
   return {
     decision: "block",
-    reason: coldHoldReason(s, now, { handoff: note !== null, cheaper: cheaperRewrite(s) }),
+    reason: coldHoldReason(s, now, {
+      handoff: note !== null,
+      cheaper: cheaperRewrite(s),
+      usdPerPercent,
+    }),
   };
 }
 
@@ -594,13 +616,99 @@ function onStop(input: HookInput, p: Paths, now: number, compactAt: number | nul
   if (!lines) return null;
   const s = cacheStateOf(lines, file);
   if (!s) return null;
-  const at = compactAt ?? priceFor(s.event.model)?.contextTokens ?? null;
+  const seen = savedPoint(p, compactAt);
+  const at = seen ?? compactAt ?? priceFor(s.event.model)?.contextTokens ?? null;
   if (!at || s.context < at * COMPACT_NUDGE_SHARE || s.context >= at) return null;
   const key = `compact|${session}|${s.event.contextEpoch ?? 0}`;
   if (readMarks(p)[key]) return null;
   mark(p, key, now);
   receipt(p, { at: new Date(now).toISOString(), session, kind: "compact", tokens: s.context });
-  return { systemMessage: compactNudge(s.context, at) };
+  return { systemMessage: compactNudge(s.context, at, seen !== null) };
+}
+
+/** Where Claude Code compacted, learned from its transcripts, with the setting it ran under. */
+export interface CompactPoint {
+  tokens: number;
+  /** How many compactions it is the median of. */
+  from: number;
+  setting: number;
+}
+
+/** Whether guard was offered here before, or has been on: its folder is there either way. */
+export function guardOffered(opts: GuardPaths = {}): boolean {
+  return fs.existsSync(paths(opts).dir);
+}
+
+export function markGuardOffered(opts: GuardPaths = {}): void {
+  const p = paths(opts);
+  fs.mkdirSync(p.dir, { recursive: true });
+  fs.writeFileSync(p.offered, `${JSON.stringify({ at: new Date().toISOString() })}\n`);
+}
+
+/** Saved by `optimaizr guard week`, since the Stop hook can't read every transcript. */
+export function saveCompactPoint(point: CompactPoint, opts: GuardPaths = {}): void {
+  const p = paths(opts);
+  fs.mkdirSync(p.dir, { recursive: true });
+  fs.writeFileSync(p.point, `${JSON.stringify({ ...point, at: new Date().toISOString() })}\n`);
+}
+
+// Learned under another setting it says nothing about this one.
+function savedPoint(p: Paths, setting: number | null): number | null {
+  if (!setting) return null;
+  try {
+    const r = JSON.parse(fs.readFileSync(p.point, "utf8"));
+    return r?.setting === setting && r.tokens > 0 && r.tokens <= setting ? r.tokens : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Worked out at most this often, as turns end. */
+const PACE_EVERY_MS = 10 * 60_000;
+/** An answer older than this is from a pace that may have changed. */
+const PACE_FRESH_MS = 15 * 60_000;
+
+/** Saved by `optimaizr guard pace`, null when there is nothing to warn about. */
+export function savePace(pace: Pace | null, opts: GuardPaths & { now?: number } = {}): void {
+  const p = paths(opts);
+  fs.mkdirSync(p.dir, { recursive: true });
+  const at = new Date(opts.now ?? Date.now()).toISOString();
+  fs.writeFileSync(p.pace, `${JSON.stringify({ ...pace, at })}\n`);
+}
+
+/**
+ * Once a 5-hour window, at the end of a turn: when the last hour's pace runs
+ * the limit out before the reset. Working it out reads the day's transcripts,
+ * so it runs in the background and a later turn shows it.
+ */
+function onPace(input: HookInput, p: Paths, now: number, run?: () => void) {
+  if (!run || !input.transcript_path) return null;
+  let saved: Partial<Pace> & { at?: string } = {};
+  try {
+    saved = JSON.parse(fs.readFileSync(p.pace, "utf8"));
+  } catch {
+    // Not worked out yet.
+  }
+  const { runsOutAt, resetsAt, used, lighter } = saved;
+  const live = resetsAt !== undefined && Date.parse(resetsAt) > now;
+  const marks = readMarks(p);
+  // Said once, nothing more to work out until the window resets.
+  if (live && marks[`pace|${resetsAt}`]) return null;
+  const fresh = now - Date.parse(saved.at ?? "") <= PACE_FRESH_MS;
+  const due = now - (marks["pace-run"] ?? 0) >= PACE_EVERY_MS;
+  // A run-out time already gone by says nothing true any more: work it out again.
+  const ahead = runsOutAt !== undefined && Date.parse(runsOutAt) > now;
+  const warn = live && fresh && ahead && typeof used === "number";
+  if (!warn && !due) return null;
+  const lines = transcriptTail(input.transcript_path);
+  if (!lines || transcriptFacts(lines).entrypoint?.startsWith("sdk")) return null;
+  if (warn && resetsAt && runsOutAt && typeof used === "number") {
+    mark(p, `pace|${resetsAt}`, now);
+    return { systemMessage: paceText({ runsOutAt, resetsAt, used, lighter }) };
+  }
+  mark(p, "pace-run", now);
+  run();
+  return null;
 }
 
 /** The Monday of `now`'s week, as a local YYYY-MM-DD. */
@@ -640,7 +748,10 @@ function onWeek(input: HookInput, p: Paths, now: number, run?: () => void) {
   }
   if (saved.week === week && typeof saved.text === "string") {
     mark(p, `week|${week}`, now);
-    const kept = savedText(guardSaved(readReceipts(now - 7 * 86_400_000, { dir: p.dir })));
+    const split = now - 7 * 86_400_000;
+    const receipts = readReceipts(split - 7 * 86_400_000, { dir: p.dir });
+    const before = guardSaved(receipts.filter((r) => Date.parse(r.at) < split)).catches;
+    const kept = savedText(guardSaved(receipts.filter((r) => Date.parse(r.at) >= split)), before);
     return {
       systemMessage: `optimAIzr, your last 7 days: ${saved.text}.${kept ? ` Guard: ${kept}.` : ""}`,
     };

@@ -98,6 +98,7 @@ export interface AdapterResult {
   compactions?: CompactionRecord[];
   /** Conversation titles by session id. */
   titles?: Record<string, string>;
+  limitHits?: LimitHitRecord[];
 }
 
 /* ------------------------------------------------------------------ *
@@ -258,7 +259,8 @@ export type Impact = "none" | "low" | "medium" | "high";
  * - `fix`: clear waste; removing it leaves the work as it was. The headline.
  * - `try`: likely fine, but it changes what the model does.
  * - `test`: a trade-off sized from your own usage (compact earlier, a smaller
- *   default model). Shown as "up to", never added to anything.
+ *   default model). Shown as "up to", and only in the all-in figure, where
+ *   each saving is taken from what the others leave.
  */
 export type FindingTier = "fix" | "try" | "test";
 
@@ -479,6 +481,18 @@ export interface CompactionRecord {
   midTask: boolean;
 }
 
+/** A plan limit the agent ran into, as its transcript records it. */
+export interface LimitHitRecord {
+  source: string;
+  /** When the refused request was made. */
+  ts: string;
+  sessionId: string;
+  /** "five_hour" or "seven_day" as the agent names it, "unknown" when it doesn't say. */
+  window: string;
+  /** When the window opens again, where the record says. */
+  resetsAt?: string;
+}
+
 export interface Dataset {
   events: UsageEvent[];
   window: Window;
@@ -493,6 +507,8 @@ export interface Dataset {
   compactions?: CompactionRecord[];
   /** Conversation titles by session id, where the agent writes one (Claude Code does). */
   titles?: Record<string, string>;
+  /** Plan limits the agent was refused at, one per window (Claude Code records them). */
+  limitHits?: LimitHitRecord[];
 }
 
 /** A detector that threw. Reported so a crashed rule never looks like a clean $0. */
