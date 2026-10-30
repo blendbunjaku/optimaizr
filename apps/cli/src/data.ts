@@ -8,6 +8,7 @@ import {
   dim,
   ingest,
   type LimitHit,
+  OPENCODE_READ_FAILED,
   OPENCODE_SQLITE_WARNING,
   OPENCODE_V2_WARNING,
   opencodeDbPath,
@@ -111,10 +112,15 @@ export function summaryOptions(args: Args): SummaryOptions {
   return { timeZone };
 }
 
-/** opencode history that is there but left out: on Node 20, or written by opencode 2.0. */
+/** opencode history that is there but left out: on Node 20, written by opencode 2.0, or unreadable. */
 export function opencodeUnread(data: Dataset): string[] {
   if (!fs.existsSync(opencodeDbPath())) return [];
-  return data.warnings.filter((w) => w === OPENCODE_SQLITE_WARNING || w === OPENCODE_V2_WARNING);
+  return data.warnings.filter(
+    (w) =>
+      w === OPENCODE_SQLITE_WARNING ||
+      w === OPENCODE_V2_WARNING ||
+      w.startsWith(OPENCODE_READ_FAILED),
+  );
 }
 
 export function emptyNotice(data?: Dataset): void {

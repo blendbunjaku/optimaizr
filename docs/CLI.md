@@ -366,7 +366,7 @@ to an Applied block, with how each change is doing so far:
 ```
   Applied
     Compact earlier: Claude Code at 200K since Oct 7 · 28% less per prompt so far
-    Model mismatch: Opus 5.5 -> Sonnet 5.5 in eatmaxxing since Oct 2
+    Model mismatch: Opus 5.5 -> Sonnet 5.5 in shop-api since Oct 2
       too early to tell
     Before against after, for each: optimaizr results
 ```
@@ -1064,9 +1064,11 @@ Claude Code's PATH can't break it. A status line you already have is never
 replaced: `statusline on` says so and changes nothing. `apply statusline` and
 `undo statusline` do the same as `on` and `off`.
 
-Claude Code draws status lines in a terminal. The VS Code extension's chat panel
-doesn't show one, so there run `optimaizr live` in the editor's terminal for the
-same countdown.
+Claude Code draws status lines in a terminal. Its VS Code chat panel doesn't
+show one, so there
+[optimAIzr for VS Code](https://marketplace.visualstudio.com/items?itemName=optimAIzr.optimaizr-vscode)
+puts the same countdown in VS Code's status bar, or run `optimaizr live` in the
+editor's terminal.
 
 ---
 

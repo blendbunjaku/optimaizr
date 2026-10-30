@@ -1,5 +1,44 @@
 # Changelog
 
+## 0.13.0
+
+- **optimAIzr for VS Code.** Most of my Claude Code runs in VS Code, where the
+  chat panel draws no status line, so the cache countdown was out of sight.
+  The new extension puts the conversation in the folder you have open in VS
+  Code's status bar: `143K · 54:51 · 5h 56%` is 143K of context, 54 minutes
+  51 seconds left on its cache and 56% of the 5-hour window used. It turns
+  yellow in the cache's last five minutes and red past 90% of the window.
+  Search optimAIzr in Extensions, or
+  `code --install-extension optimAIzr.optimaizr-vscode`.
+- **A heads-up before an expensive cache expires.** About 5 minutes before a
+  long conversation's cache runs out, when coming back after it would cost
+  $0.50 or more: "Reply before then to skip a $1.14 rewrite." on mine.
+- **The savings, guard and every fix in a sidebar.** It leads with what is
+  left to save, up to 13% on mine, about 1.1x the work per 5-hour window, with
+  compaction at 200K already applied. Guard is one switch: 51 returns to an
+  expired cache wrote 8.9M tokens again in my last 30 days, $56.02/mo. The
+  fixes come biggest money first, 4 on mine for $60.48/mo, and habits get an
+  I did this button so `results` can measure them. Compaction at 200K and its
+  undo are one click each, and the full report opens in an editor tab.
+- **A done alert.** A desktop notification when a turn of 45 seconds or more
+  finishes while VS Code is in the background, on macOS and Linux.
+- The status bar, heads-up, guard and done alert watch Claude Code; the
+  savings also read Codex and opencode. Everything is worked out on your
+  machine. Guard uses this CLI, and the extension offers to install it. It
+  needs VS Code 1.90 or newer.
+- **Big opencode histories are read again** (#20). With 500 busy sessions the
+  parts query returned about 120k rows, and passing them on in one call
+  overflowed Node's stack, so the opencode history was left out without a
+  word. Rows now go one at a time, and a database that fails to read is named
+  in the profile. The same fix covers a Codex rollout with 100k+ calls, which
+  dropped all Codex history, and `results` over a baseline that long.
+- **No console windows on Windows.** Guard's background refresh started
+  through a shell, and Windows opened a console window for every run. It now
+  starts Node directly and hidden, and so does the daily update check.
+- **Big logs, measured.** My 434 MB of Claude Code history reads in 1.9 s at
+  228 MB of memory, and a 537 MB Codex rollout with 120k calls in 3.0 s at
+  242 MB.
+
 ## 0.12.1
 
 - **Everything it found, in one figure.** The profile now opens with every

@@ -90,4 +90,4 @@ claude plugin validate mods/optimaizr
 claude plugin test mods/optimaizr
 ```
 
-The tests were last run on Claude Code 2.1.296.
+The tests were last run on Claude Code 2.1.312.

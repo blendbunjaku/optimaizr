@@ -16,7 +16,8 @@ but paid again and again (41% of my last 30 days), and writing it into the cache
 again after a break, at up to twice the input price: 58 of those cost me $98.83
 in the same 30 days, where a warm cache would have read it for $2.48. optimAIzr
 shows where your tokens go, holds the expensive message before it is paid, and
-fixes what it can in one command. For Claude Code, Codex and opencode.
+fixes what it can in one command. For Claude Code, Codex and opencode, in a
+terminal or in VS Code.
 
 ```bash
 npx optimaizr
@@ -47,6 +48,30 @@ read or after 30 minutes. More under Privacy below.
     Loading context into cache     34%  ███████░░░░░░░░░░░░░
     Answers, code and thinking     25%  █████░░░░░░░░░░░░░░░
 ```
+
+## In VS Code
+
+[![optimAIzr for VS Code: the savings sidebar beside the editor. Click to watch the 28-second reel.](https://raw.githubusercontent.com/blendbunjaku/optimaizr/main/docs/vscode.jpg)](https://optimaizr.com/vscode)
+
+Most of my Claude Code runs in VS Code, where the chat panel draws no status
+line. [optimAIzr for VS Code](https://marketplace.visualstudio.com/items?itemName=optimAIzr.optimaizr-vscode)
+puts the conversation's context, its cache countdown and your 5-hour window in
+the status bar, and gives a heads-up 5 minutes before an expensive cache
+expires: on mine, "Reply before then to skip a $1.14 rewrite." The savings,
+guard, compaction at 200K and every fix sit in a sidebar, one click each.
+
+```
+143K · 54:51 · 5h 56%
+```
+
+Search **optimAIzr** in Extensions, or:
+
+```bash
+code --install-extension optimAIzr.optimaizr-vscode
+```
+
+The reel is my own run on Oct 29, with compaction at 200K already applied, so
+its sidebar shows less left to save (up to 13%) than the first run above.
 
 ## Catch the expensive moments
 
@@ -187,12 +212,19 @@ set) and needs Node 22.13 or later. History from opencode 2.0 isn't read yet.
 Reports, `live` and the steps in `apply` cover all three;
 `apply context-compaction` changes Claude Code and Codex only.
 
+In VS Code, the extension's status bar, heads-up, guard and done alert watch
+Claude Code; its savings read all three.
+
 Your Claude plan (Pro, Max, Team) and ChatGPT plan are detected. Your own app
 with one line, `optimaizr.wrap(new Anthropic())` or `new OpenAI()`, and CSV or
 JSON usage exports. Node 20.11 or later.
 
 ## Recent releases
 
+- **0.13** (Oct 30, 2026): optimAIzr for VS Code. The cache countdown, context
+  and 5-hour window in VS Code's status bar, a heads-up 5 minutes before a cache
+  expires ($1.14 to skip on mine), and the savings, guard and every fix in a
+  sidebar. Search optimAIzr in Extensions.
 - **0.12** (Oct 20, 2026): guard. The message that would write an expired cache
   all over again is held once, with its price (58 of those cost me $98.83 in my
   last 30 days), and `/clear` starts fresh from a short note of where it stood.

@@ -382,8 +382,9 @@ export async function ingestCodex(opts: CodexIngestOptions = {}): Promise<Datase
       warnings.push(`${path.basename(file)}: ${err instanceof Error ? err.message : String(err)}`);
       continue;
     }
-    events.push(...parsed.events.filter(kept));
-    compactions.push(...parsed.compactions.filter(kept));
+    // One by one: a single huge rollout can hold more calls than a spread can pass.
+    for (const e of parsed.events) if (kept(e)) events.push(e);
+    for (const c of parsed.compactions) if (kept(c)) compactions.push(c);
   }
 
   events.sort((a, b) => a.ts.localeCompare(b.ts));

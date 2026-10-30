@@ -107,9 +107,22 @@ async function guardWeek(args: Args): Promise<void> {
   if (process.stdout.isTTY) console.log(`\n  ${dim("Last 7 days:")} ${text}\n`);
 }
 
+// This node runs the script itself, hidden. Through a shell, Windows opened a
+// console window for every run.
 function inBackground(what: string): void {
-  const cmd = ownCommand(what);
-  if (cmd) spawn(cmd, { shell: true, detached: true, stdio: "ignore" }).unref();
+  const script = process.argv[1];
+  if (!script) return;
+  try {
+    const child = spawn(process.execPath, [script, ...what.split(" ")], {
+      detached: true,
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    child.on("error", () => {});
+    child.unref();
+  } catch {
+    // The hook's answer matters more than a background refresh.
+  }
 }
 
 /**
