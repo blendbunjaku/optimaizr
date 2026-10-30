@@ -18,6 +18,7 @@ import {
   ingestOpencode,
   loadSqlite,
   mapOpencodeRows,
+  OPENCODE_READ_FAILED,
   OPENCODE_SQLITE_WARNING,
   OPENCODE_V2_WARNING,
   opencodeDbPath,
@@ -893,7 +894,29 @@ test("mapper errors become an ingestion warning", { skip: noSqlite }, async (t) 
     },
   });
   assert.equal(data.events.length, 0);
-  assert.deepEqual(data.warnings, ["opencode.db: mapper failed"]);
+  assert.deepEqual(data.warnings, [`${OPENCODE_READ_FAILED} (opencode.db: mapper failed)`]);
+});
+
+test("reader keeps more parts than one call can take as arguments", () => {
+  // 500 busy sessions can return 120k parts in one chunk; push(...parts) overflowed.
+  const parts = Array.from({ length: 200_000 }, (_, i) => ({ id: `prt_${i}` }));
+  const read = readOpencodeRows(
+    {
+      prepare(sql) {
+        return {
+          all() {
+            if (sql.includes("count(*)")) return [{ bad: 0 }];
+            if (sql.includes("FROM part")) return parts;
+            if (sql.includes("FROM session")) return [{ id: "ses_a" }];
+            return [];
+          },
+        };
+      },
+      close() {},
+    },
+    { sessionIds: ["ses_a"] },
+  );
+  assert.equal(read.parts.length, parts.length);
 });
 
 test("a missing database warns before checking SQLite availability", async () => {
@@ -918,7 +941,8 @@ test("no opencode at the default path adds no note", async (t) => {
   assert.deepEqual(data.warnings, []);
 });
 
-test("the profile says when opencode history was left out", (t) => {
+/** The profile over one Claude Code call, beside the opencode database `write` leaves. */
+function profileBeside(t, write) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "opencode-profile-"));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const projects = path.join(dir, ".claude", "projects", "-home-someone-project");
@@ -938,15 +962,7 @@ test("the profile says when opencode history was left out", (t) => {
   fs.writeFileSync(path.join(projects, "s1.jsonl"), JSON.stringify(call) + "\n");
   const xdg = path.join(dir, ".local", "share");
   fs.mkdirSync(path.join(xdg, "opencode"), { recursive: true });
-  const file = path.join(xdg, "opencode", "opencode.db");
-  // Left out on every Node: too old for node:sqlite, or only opencode 2.0 history.
-  if (sqlite) {
-    const db = new sqlite.DatabaseSync(file);
-    db.exec("CREATE TABLE session_v2 (id text PRIMARY KEY); INSERT INTO session_v2 VALUES ('v2');");
-    db.close();
-  } else {
-    fs.writeFileSync(file, "not sqlite");
-  }
+  write(path.join(xdg, "opencode", "opencode.db"));
   const result = spawnSync(
     process.execPath,
     [fileURLToPath(new URL("../dist/cli.js", import.meta.url))],
@@ -967,10 +983,36 @@ test("the profile says when opencode history was left out", (t) => {
   );
   assert.equal(result.status, 0, result.stderr);
   assert.doesNotMatch(result.stdout, /nothing to analyse yet/);
+  return result.stdout;
+}
+
+test("the profile says when opencode history was left out", (t) => {
+  // Left out on every Node: too old for node:sqlite, or only opencode 2.0 history.
+  const stdout = profileBeside(t, (file) => {
+    if (sqlite) {
+      const db = new sqlite.DatabaseSync(file);
+      db.exec(
+        "CREATE TABLE session_v2 (id text PRIMARY KEY); INSERT INTO session_v2 VALUES ('v2');",
+      );
+      db.close();
+    } else {
+      fs.writeFileSync(file, "not sqlite");
+    }
+  });
   assert.ok(
-    result.stdout.includes(`note: ${sqlite ? OPENCODE_V2_WARNING : OPENCODE_SQLITE_WARNING}`),
-    result.stdout,
+    stdout.includes(`note: ${sqlite ? OPENCODE_V2_WARNING : OPENCODE_SQLITE_WARNING}`),
+    stdout,
   );
+});
+
+test("the profile says when opencode history failed to read", { skip: noSqlite }, (t) => {
+  // A 1.x database the reader's queries fail on.
+  const stdout = profileBeside(t, (file) => {
+    const db = new sqlite.DatabaseSync(file);
+    db.exec("CREATE TABLE session (id text PRIMARY KEY)");
+    db.close();
+  });
+  assert.ok(stdout.includes(`note: ${OPENCODE_READ_FAILED} (opencode.db: `), stdout);
 });
 
 test("an existing non-database file warns, including when SQLite is unavailable", async (t) => {

@@ -37,6 +37,12 @@ const WHATS_NEW: Record<string, string[]> = {
     'Holds say their share of your 5-hour limit, and a bare "continue" goes through.',
     "The weekly line counts your stops at the limit, against the week before.",
   ],
+  "0.13.0": [
+    "optimAIzr for VS Code: the cache countdown, context and 5-hour window in its status bar.",
+    "Search optimAIzr in VS Code's Extensions, or: code --install-extension optimAIzr.optimaizr-vscode",
+    "Big opencode and Codex histories, 100k+ calls, are read again instead of left out.",
+    "On Windows, guard and the update check no longer open a console window.",
+  ],
 };
 
 export function updatePath(): string {
@@ -146,6 +152,7 @@ export function afterCommand(cliPath: string, file = updatePath(), now = Date.no
     const child = spawn(process.execPath, [cliPath, "__update-check"], {
       detached: true,
       stdio: "ignore",
+      windowsHide: true,
     });
     child.unref();
   } catch {

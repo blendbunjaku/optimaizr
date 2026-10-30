@@ -817,8 +817,10 @@ function caveats(
     );
   }
 
-  // Logs that start well after the baseline was meant to.
-  const first = before.length ? Math.min(...before.map((e) => Date.parse(e.ts))) : null;
+  // Logs that start well after the baseline was meant to. A loop, not
+  // Math.min(...): a long baseline can pass 100k calls and overflow the stack.
+  let first: number | null = null;
+  for (const e of before) first = Math.min(first ?? Infinity, Date.parse(e.ts));
   const wanted = Math.min(BASELINE_MIN_DAYS, b.days);
   if (first !== null && (at - first) / DAY < wanted - 2) {
     const kept =

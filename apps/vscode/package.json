@@ -1,0 +1,203 @@
+{
+  "name": "optimaizr-vscode",
+  "displayName": "optimAIzr: Claude Code savings",
+  "description": "Spend fewer tokens on the same work. Your Claude Code cache countdown, context size and 5-hour window at a glance, a heads-up before a cache expires, and one-click fixes. Everything stays on your machine.",
+  "version": "0.1.0",
+  "private": true,
+  "publisher": "optimAIzr",
+  "license": "MIT",
+  "icon": "media/icon.png",
+  "galleryBanner": {
+    "color": "#111110",
+    "theme": "dark"
+  },
+  "homepage": "https://optimaizr.com",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/blendbunjaku/optimaizr",
+    "directory": "apps/vscode"
+  },
+  "bugs": {
+    "url": "https://github.com/blendbunjaku/optimaizr/issues"
+  },
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "AI",
+    "Visualization",
+    "Other"
+  ],
+  "keywords": [
+    "claude",
+    "claude code",
+    "anthropic",
+    "tokens",
+    "cost",
+    "prompt cache",
+    "usage",
+    "rate limit",
+    "codex",
+    "savings"
+  ],
+  "pricing": "Free",
+  "extensionKind": [
+    "workspace"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": true
+    },
+    "virtualWorkspaces": false
+  },
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "optimaizr",
+          "title": "optimAIzr",
+          "icon": "media/activity.svg"
+        }
+      ]
+    },
+    "views": {
+      "optimaizr": [
+        {
+          "type": "webview",
+          "id": "optimaizr.home",
+          "name": "Savings",
+          "icon": "media/activity.svg",
+          "contextualTitle": "optimAIzr"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "optimaizr.focus",
+        "title": "Show savings",
+        "category": "optimAIzr"
+      },
+      {
+        "command": "optimaizr.refresh",
+        "title": "Refresh",
+        "category": "optimAIzr",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "optimaizr.openReport",
+        "title": "Open full report",
+        "category": "optimAIzr",
+        "icon": "$(graph)"
+      },
+      {
+        "command": "optimaizr.guardOn",
+        "title": "Turn guard on",
+        "category": "optimAIzr"
+      },
+      {
+        "command": "optimaizr.guardOff",
+        "title": "Turn guard off",
+        "category": "optimAIzr"
+      },
+      {
+        "command": "optimaizr.compactOn",
+        "title": "Compact Claude Code earlier, at 200K",
+        "category": "optimAIzr"
+      },
+      {
+        "command": "optimaizr.compactOff",
+        "title": "Undo earlier compaction",
+        "category": "optimAIzr"
+      },
+      {
+        "command": "optimaizr.openSettings",
+        "title": "Settings",
+        "category": "optimAIzr",
+        "icon": "$(gear)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "optimaizr.refresh",
+          "when": "view == optimaizr.home",
+          "group": "navigation@1"
+        },
+        {
+          "command": "optimaizr.openReport",
+          "when": "view == optimaizr.home",
+          "group": "navigation@2"
+        },
+        {
+          "command": "optimaizr.openSettings",
+          "when": "view == optimaizr.home",
+          "group": "overflow"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "optimAIzr",
+      "properties": {
+        "optimaizr.statusBar.enabled": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Show the context size, cache countdown and 5-hour window of this folder's Claude Code conversation in the status bar."
+        },
+        "optimaizr.alerts.cacheExpiring": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "A heads-up about 5 minutes before a long conversation's cache expires, when coming back after would cost at least $0.50."
+        },
+        "optimaizr.alerts.coldCache": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Say what it cost when a conversation came back after its cache expired."
+        },
+        "optimaizr.alerts.longConversation": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Say once when a conversation grows past 200K tokens, where compacting starts to pay."
+        },
+        "optimaizr.alerts.guard": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Say when guard holds a message, a read or a retry."
+        },
+        "optimaizr.alerts.claudeDone": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "A desktop notification when a turn of 45 seconds or more finishes while VS Code is in the background (macOS and Linux)."
+        },
+        "optimaizr.days": {
+          "type": "number",
+          "default": 30,
+          "minimum": 7,
+          "maximum": 90,
+          "markdownDescription": "Days of history the savings are worked out over."
+        },
+        "optimaizr.cliPath": {
+          "type": "string",
+          "default": "",
+          "markdownDescription": "Path to the `optimaizr` CLI, which turns guard on and off. Empty looks for it on your PATH."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "node scripts/bundle.mjs",
+    "typecheck": "tsc --noEmit",
+    "pretest": "npm run build --prefix ../../packages/core && npm run build --prefix ../../packages/local && node scripts/bundle.mjs",
+    "test": "node --test",
+    "package": "node scripts/bundle.mjs && npx --yes @vscode/vsce@3 package --no-dependencies"
+  },
+  "devDependencies": {
+    "@optimaizr/core": "*",
+    "@optimaizr/local": "*",
+    "@types/vscode": "1.90.0",
+    "esbuild": "^0.28.2"
+  }
+}

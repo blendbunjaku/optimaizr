@@ -11,6 +11,9 @@ optimaizr-report.html
 optimaizr-change.md
 optimaizr.config.json
 
+# The packaged VS Code extension
+*.vsix
+
 .idea/
 .vscode/
 .DS_Store

@@ -406,26 +406,26 @@ export function readOpencodeRows(db: SqliteDb, opts: OpencodeReadOptions = {}): 
   for (let start = 0; start < selected.length; start += 500) {
     const chunk = selected.slice(start, start + 500);
     const placeholders = chunk.map(() => "?").join(", ");
-    rows.messages.push(
-      ...(db
-        .prepare(
-          `SELECT m.id, m.session_id, m.time_created, m.data FROM message m
+    const messages = db
+      .prepare(
+        `SELECT m.id, m.session_id, m.time_created, m.data FROM message m
        WHERE m.session_id IN (${placeholders}) AND json_valid(m.data)
          AND json_extract(m.data, '$.role') = 'assistant'`,
-        )
-        .all(...chunk) as OpencodeMessageRow[]),
-    );
-    rows.parts.push(
-      ...(db
-        .prepare(
-          `SELECT p.id, p.message_id, p.session_id, p.time_created,
+      )
+      .all(...chunk) as OpencodeMessageRow[];
+    const parts = db
+      .prepare(
+        `SELECT p.id, p.message_id, p.session_id, p.time_created,
          json_remove(p.data, '$.state.output', '$.state.metadata') AS data,
          length(json_extract(p.data, '$.state.output')) AS output_chars
        FROM part p WHERE p.session_id IN (${placeholders}) AND json_valid(p.data)
          AND json_extract(p.data, '$.type') IN ('tool', 'step-finish')`,
-        )
-        .all(...chunk) as OpencodePartRow[]),
-    );
+      )
+      .all(...chunk) as OpencodePartRow[];
+    // Never `push(...parts)`: 500 busy sessions can hold 100k+ parts, and the
+    // spread overflows V8's call stack.
+    for (const m of messages) rows.messages.push(m);
+    for (const p of parts) rows.parts.push(p);
     const [count] = db
       .prepare(
         `SELECT
@@ -454,6 +454,9 @@ export const OPENCODE_V2_WARNING =
 
 // Names the Node in use and the way out, so the note says what to do.
 export const OPENCODE_SQLITE_WARNING = `opencode history skipped: it needs Node 22.13 or later, and this is Node ${process.versions.node} (nvm install 22, or update Node)`;
+
+/** A database that is there but failed to read; the reason follows in brackets. */
+export const OPENCODE_READ_FAILED = "opencode history skipped: it couldn't be read";
 
 /**
  * opencode 2.0 writes `session_v2` and `session_message` and stops writing
@@ -505,7 +508,7 @@ export async function ingestOpencode(opts: OpencodeIngestOptions = {}): Promise<
     return { events, window: { from, to, days }, sources: [file], warnings, compactions, titles };
   } catch (err) {
     return emptyDataset([
-      `${path.basename(file)}: ${err instanceof Error ? err.message : String(err)}`,
+      `${OPENCODE_READ_FAILED} (${path.basename(file)}: ${err instanceof Error ? err.message : String(err)})`,
     ]);
   }
 }
