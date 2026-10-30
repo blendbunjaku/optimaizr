@@ -123,7 +123,7 @@ test("the empty-history notice says why an opencode database wasn't read", (t) =
   assert.match(result.stdout, /nothing to analyse yet/);
   assert.match(
     result.stdout,
-    /warning: opencode(?: history skipped: it needs Node 22\.13 or later|\.db: )/,
+    /warning: opencode history skipped: it (?:needs Node 22\.13 or later|couldn't be read \(opencode\.db: )/,
   );
 });
 
