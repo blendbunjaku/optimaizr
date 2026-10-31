@@ -8,7 +8,7 @@ import { ingestClaudeCode } from "@optimaizr/core";
 import { lib, sandbox, snapshot, transcript, writeTranscript } from "./helpers.mjs";
 
 const home = sandbox("live");
-const { createLiveWatch, DONE_ALERT_MS } = lib;
+const { createLiveWatch, DONE_ALERT_MS, expiringMinutes } = lib;
 const MIN = 60_000;
 
 /**
@@ -72,6 +72,44 @@ test("a long turn says done, and a return after the cache expired says cold", as
   assert.ok(s.convo.expiresAt > now && s.convo.expiresAt - now < 5 * MIN);
   assert.deepEqual(s.cold, { count: 1, usd: cold.rewriteUsd });
   assert.equal(s.lastTurn?.title, "app");
+  assert.equal(s.lastTurn?.sessionId, "s1");
+});
+
+test("the heads-up comes as early as the setting says", async () => {
+  const now = Date.now();
+  const cwd = path.join(home, "work", "late");
+  fs.mkdirSync(cwd, { recursive: true });
+  // A root of its own, so the morning's tests never see this conversation.
+  const root = path.join(home, "late-projects");
+  // A 200K write a minute and a half ago: about three minutes left on its cache.
+  const recs = transcript(
+    "s2",
+    cwd,
+    [{ prompt: "keep going" }, { after: 5, read: 0, write: 200_000 }],
+    now - 105_000,
+  );
+  writeTranscript(root, cwd, "s2", recs);
+  const { events } = await ingestClaudeCode({ root });
+  const said = (minutes) => {
+    const notices = [];
+    const w = createLiveWatch({
+      folders: () => [cwd],
+      onNotice: (n) => notices.push(n),
+      onChange: () => {},
+      expiringMs: () => expiringMinutes(minutes) * MIN,
+    });
+    for (const e of events.filter((x) => x.sessionId === "s2")) w.push(e);
+    w.tick();
+    return notices.filter((n) => n.kind === "expiring");
+  };
+  assert.equal(said(5).length, 1);
+  assert.deepEqual(said(1), [], "inside five minutes, not yet inside one");
+
+  assert.equal(expiringMinutes(undefined), 5);
+  assert.equal(expiringMinutes(Number.NaN), 5);
+  assert.equal(expiringMinutes(0), 1);
+  assert.equal(expiringMinutes(30), 10);
+  assert.equal(expiringMinutes(2), 2);
 });
 
 test("a call seen in the snapshot is not news again", async () => {

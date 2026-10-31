@@ -1,8 +1,8 @@
 {
   "name": "optimaizr-vscode",
-  "displayName": "optimAIzr: Claude Code savings",
-  "description": "Spend fewer tokens on the same work. Your Claude Code cache countdown, context size and 5-hour window at a glance, a heads-up before a cache expires, and one-click fixes. Everything stays on your machine.",
-  "version": "0.1.0",
+  "displayName": "optimAIzr: Claude Code, Codex & opencode savings",
+  "description": "Spend fewer tokens on the same work. What Claude Code, Codex and opencode cost you and what you could save, plus Claude Code's cache countdown, context size and 5-hour window at a glance, a heads-up before a cache expires, and one-click fixes. Everything stays on your machine.",
+  "version": "0.1.1",
   "private": true,
   "publisher": "optimAIzr",
   "license": "MIT",
@@ -38,6 +38,9 @@
     "usage",
     "rate limit",
     "codex",
+    "openai",
+    "opencode",
+    "ai coding",
     "savings"
   ],
   "pricing": "Free",
@@ -150,7 +153,14 @@
         "optimaizr.alerts.cacheExpiring": {
           "type": "boolean",
           "default": true,
-          "markdownDescription": "A heads-up about 5 minutes before a long conversation's cache expires, when coming back after would cost at least $0.50."
+          "markdownDescription": "A heads-up before a long conversation's cache expires, when coming back after would cost at least $0.50. `#optimaizr.alerts.cacheExpiringMinutes#` sets how early."
+        },
+        "optimaizr.alerts.cacheExpiringMinutes": {
+          "type": "number",
+          "default": 5,
+          "minimum": 1,
+          "maximum": 10,
+          "markdownDescription": "How many minutes before a cache expires its heads-up comes, 1 to 10. At 1 you decide at the last minute whether to send something or let it go."
         },
         "optimaizr.alerts.coldCache": {
           "type": "boolean",

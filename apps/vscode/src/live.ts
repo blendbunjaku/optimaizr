@@ -22,6 +22,12 @@ import type { LiveConvo, LiveState, Snapshot } from "./types.js";
 
 /** A turn this long is worth a "Claude is done", as in `live --notify`. */
 export const DONE_ALERT_MS = 45_000;
+/** The heads-up setting in minutes, kept between 1 and 10; anything else is 5. */
+export function expiringMinutes(v: unknown): number {
+  if (typeof v !== "number" || !Number.isFinite(v)) return 5;
+  return Math.min(10, Math.max(1, v));
+}
+
 /** A conversation older than this is history, not "right now". */
 const STALE_MS = 12 * 3_600_000;
 
@@ -43,6 +49,8 @@ export interface LiveOptions {
   folders: () => readonly string[];
   onNotice: (n: LiveNotice) => void;
   onChange: () => void;
+  /** How long before a cache expires its heads-up comes, read on every check. */
+  expiringMs?: () => number;
   /** For tests: where transcripts and guard's log are. */
   roots?: string[];
   guard?: GuardPaths;
@@ -124,6 +132,7 @@ export function createLiveWatch(opts: LiveOptions) {
       const percent = rate ? costUsd / rate : null;
       if (costUsd >= 0.005) {
         lastTurn = {
+          sessionId: e.sessionId,
           title: titleOf(e.sessionId, e.project),
           workMs: ms,
           costUsd,
@@ -140,7 +149,7 @@ export function createLiveWatch(opts: LiveOptions) {
 
   const checkExpiring = (): void => {
     const now = Date.now();
-    for (const s of cache.expiring(now)) {
+    for (const s of cache.expiring(now, opts.expiringMs?.())) {
       const e = s.event;
       opts.onNotice({
         kind: "expiring",
@@ -186,6 +195,7 @@ export function createLiveWatch(opts: LiveOptions) {
     title: titleOf(s.event.sessionId, s.event.project),
     project: s.event.project,
     model: s.event.model,
+    effort: s.event.effort ?? null,
     context: s.context,
     expiresAt: s.expiresAt,
     rewriteUsd: s.rewriteUsd,

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.1
+
+- The cache heads-up can come 1 to 10 minutes before it expires, not only 5: `optimaizr.alerts.cacheExpiringMinutes`
+- Hovering the status bar names the model and effort, and says what the last reply cost and its share of your 5-hour window
+- Open savings in the hover says how many fixes are open and what they are worth a month
+- The listing and the welcome name every tool the savings cover: Claude Code, Codex and opencode
+
 ## 0.1.0
 
 The first release.

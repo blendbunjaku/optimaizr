@@ -61,8 +61,11 @@ export function longText(title: string, context: number, rereadUsd: number): str
   return `${quoted(title)} passed ${tokens(context)} tokens. Every message now re-reads all of it${per}, so compacting between tasks pays.`;
 }
 
+/** ", 3% of your 5h window", or nothing under half a percent or without a rate. */
+export function windowShare(percent: number | null): string {
+  return percent !== null && percent >= 0.5 ? `, ${Math.round(percent)}% of your 5h window` : "";
+}
+
 export function doneText(workMs: number, costUsd: number, percent: number | null): string {
-  const share =
-    percent !== null && percent >= 0.5 ? `, ${Math.round(percent)}% of your 5h window` : "";
-  return `Worked ${duration(workMs)}, ${money(costUsd)}${share}.`;
+  return `Worked ${duration(workMs)}, ${money(costUsd)}${windowShare(percent)}.`;
 }

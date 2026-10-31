@@ -1,8 +1,9 @@
 # optimAIzr for VS Code
 
-**Spend fewer tokens on the same work.** The Claude Code cache countdown, your context size and
-your 5-hour window, right in the status bar. A heads-up before an expensive moment, and fixes you
-apply in one click. Everything stays on your machine.
+**Spend fewer tokens on the same work.** See what Claude Code, Codex and opencode cost you, and
+what you could save. For Claude Code there is more: the cache countdown, your context size and your
+5-hour window right in the status bar, a heads-up before an expensive moment, and fixes you apply
+in one click. Everything stays on your machine.
 
 [![optimAIzr for VS Code in 28 seconds. Click to watch.](https://raw.githubusercontent.com/blendbunjaku/optimaizr/main/docs/vscode.jpg)](https://optimaizr.com/vscode)
 
@@ -33,10 +34,12 @@ Your numbers show up the moment the extension opens.
 
 **A status bar that watches the cache.** Context size, the cache countdown and the 5-hour window
 for the conversation in the folder you have open. It turns yellow in the last five minutes and red
-past 90% of the window. Hover for the details, click to open the sidebar.
+past 90% of the window. Hover for the details: the model and effort, what the last reply cost, and
+what your open fixes are worth. Click to open the sidebar.
 
 **A heads-up before the cache expires.** About 5 minutes before a long conversation's cache runs
 out, when coming back after would cost at least $0.50. Reply now, or know what the break costs.
+Set it anywhere from 1 to 10 minutes.
 
 **Guard, one switch.** Guard holds the next message to an expired cache once and tells you what it
 would cost to send. Send it again and it goes through, or `/clear` and start from a short note of
@@ -58,12 +61,19 @@ is in the background, so you can stop watching it work.
 
 ![The full optimAIzr report](https://raw.githubusercontent.com/blendbunjaku/optimaizr/main/apps/vscode/media/screens/report.png)
 
+## Works with
+
+|                                      | Claude Code | Codex | opencode |
+| ------------------------------------ | ----------- | ----- | -------- |
+| Savings, fixes, results, full report | yes         | yes   | yes      |
+| Status bar, heads-ups, done alert    | yes         |       |          |
+| Guard and one-click compaction       | yes         |       |          |
+
 ## Private by design
 
-optimAIzr reads the logs Claude Code already keeps in `~/.claude` (and Codex and opencode, for the
-savings) and works everything out on your machine. No account, no upload, no telemetry. It reads
-token counts and the titles Claude Code gives conversations, never your prompts or Claude's
-answers. Guard, once you turn it on, keeps a short note from your last prompt for `/clear`, deleted
+optimAIzr reads the logs Claude Code, Codex and opencode already keep on your machine and works
+everything out there. No account, no upload, no telemetry. It reads token counts and conversation
+titles, never your prompts or the answers. Guard, once you turn it on, keeps a short note from your last prompt for `/clear`, deleted
 once read or after 30 minutes.
 
 ## Guard and the CLI
@@ -88,21 +98,22 @@ Open the Command Palette and type **optimAIzr**.
 
 ## Settings
 
-| Setting                             | Default | What it does                                                 |
-| ----------------------------------- | ------- | ------------------------------------------------------------ |
-| `optimaizr.statusBar.enabled`       | on      | Context, cache countdown and 5-hour window in the status bar |
-| `optimaizr.alerts.cacheExpiring`    | on      | Heads-up about 5 minutes before a cache expires              |
-| `optimaizr.alerts.coldCache`        | on      | What a return to an expired cache cost                       |
-| `optimaizr.alerts.longConversation` | on      | Once, when a conversation grows past 200K                    |
-| `optimaizr.alerts.guard`            | on      | When guard holds a message, a read or a retry                |
-| `optimaizr.alerts.claudeDone`       | on      | Desktop alert when a long turn finishes (macOS and Linux)    |
-| `optimaizr.days`                    | 30      | Days of history the savings are worked out over (7 to 90)    |
-| `optimaizr.cliPath`                 | empty   | Where the `optimaizr` CLI is; empty looks on your PATH       |
+| Setting                                 | Default | What it does                                                    |
+| --------------------------------------- | ------- | --------------------------------------------------------------- |
+| `optimaizr.statusBar.enabled`           | on      | Context, cache countdown and 5-hour window in the status bar    |
+| `optimaizr.alerts.cacheExpiring`        | on      | Heads-up before a cache expires                                 |
+| `optimaizr.alerts.cacheExpiringMinutes` | 5       | How many minutes before it expires the heads-up comes (1 to 10) |
+| `optimaizr.alerts.coldCache`            | on      | What a return to an expired cache cost                          |
+| `optimaizr.alerts.longConversation`     | on      | Once, when a conversation grows past 200K                       |
+| `optimaizr.alerts.guard`                | on      | When guard holds a message, a read or a retry                   |
+| `optimaizr.alerts.claudeDone`           | on      | Desktop alert when a long turn finishes (macOS and Linux)       |
+| `optimaizr.days`                        | 30      | Days of history the savings are worked out over (7 to 90)       |
+| `optimaizr.cliPath`                     | empty   | Where the `optimaizr` CLI is; empty looks on your PATH          |
 
 ## Requirements
 
 - VS Code 1.90 or newer, or a fork that runs VS Code extensions
-- Claude Code, with some history in `~/.claude`
+- Claude Code, Codex or opencode, with some history on this machine
 - For guard only: Node.js 20 or newer
 
 ## More

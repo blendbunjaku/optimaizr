@@ -1,5 +1,7 @@
-import { clock, countdown, money, multiple, tokens } from "./format.js";
-import type { LiveState, Snapshot } from "./types.js";
+import { modelLabel } from "@optimaizr/core";
+import { clip, clock, countdown, duration, money, multiple, tokens } from "./format.js";
+import { windowShare } from "./notices.js";
+import type { LiveConvo, LiveState, Snapshot } from "./types.js";
 
 // What the status bar item says. Plain strings with codicons, worked out
 // apart from the editor so it can be tested.
@@ -57,7 +59,8 @@ export function tooltip(live: LiveState, s: Snapshot | null): string {
   const lines: string[] = [];
   const c = live.convo;
   if (c) {
-    lines.push(`**optimAIzr** · ${escape(c.title)}`);
+    const choice = choiceOf(c);
+    lines.push(`**optimAIzr** · ${escape(c.title)}${choice ? ` · ${escape(choice)}` : ""}`);
     const ctx =
       c.context >= COMPACT_AT
         ? "past 200K, compact between tasks"
@@ -69,6 +72,12 @@ export function tooltip(live: LiveState, s: Snapshot | null): string {
         left > 0
           ? `$(watch) Cache warm for about **${Math.max(1, Math.round(left / 60_000))} min**. Replying in time costs ${money(c.readUsd)}, after costs ${money(c.rewriteUsd)}.`
           : `$(watch) Cache expired. The next message writes it again for ${money(c.rewriteUsd)}.`,
+      );
+    }
+    const turn = live.lastTurn;
+    if (turn && turn.sessionId === c.sessionId) {
+      lines.push(
+        `$(history) Last reply cost **${money(turn.costUsd)}** over ${duration(turn.workMs)}${windowShare(turn.percent)}.`,
       );
     }
   } else {
@@ -97,8 +106,22 @@ export function tooltip(live: LiveState, s: Snapshot | null): string {
         `$(check) Guard is on${s.guard.savedUsd >= 0.01 ? `, kept ${money(s.guard.savedUsd)} this week` : ""}.`,
       );
   }
-  lines.push("[Open savings](command:optimaizr.focus)");
+  // The fixes and what they are worth, as the sidebar's fixes card totals them.
+  const open = s && !s.empty ? s.fixes.filter((f) => !f.doneAt) : [];
+  const worth = open.reduce((t, f) => t + f.monthlyUsd, 0);
+  const what =
+    open.length && worth >= 0.01
+      ? `: ${open.length} ${open.length === 1 ? "fix" : "fixes"}, ${money(worth)}/mo`
+      : "";
+  lines.push(`[Open savings${what}](command:optimaizr.focus)`);
   return lines.join("\n\n");
+}
+
+/** "Opus 5.5 xhigh", as `live` prints it, so a forgotten effort shows. */
+function choiceOf(c: LiveConvo): string {
+  if (!c.model) return "";
+  const effort = c.effort && /^[a-z]{1,8}$/i.test(c.effort) ? ` ${c.effort}` : "";
+  return `${clip(modelLabel(c.model), 20)}${effort}`;
 }
 
 function escape(s: string): string {

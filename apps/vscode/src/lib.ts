@@ -15,5 +15,5 @@ export {
   withLocalState,
 } from "./actions.js";
 export { buildSnapshot, emptySnapshot, guardNow } from "./snapshot.js";
-export { createLiveWatch, DONE_ALERT_MS } from "./live.js";
+export { createLiveWatch, DONE_ALERT_MS, expiringMinutes } from "./live.js";
 export { convoState, esc, render } from "../webview/render.js";

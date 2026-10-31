@@ -13,7 +13,7 @@ import {
   withLocalState,
 } from "./actions.js";
 import { clip } from "./format.js";
-import { createLiveWatch, type LiveNotice, type LiveWatch } from "./live.js";
+import { createLiveWatch, expiringMinutes, type LiveNotice, type LiveWatch } from "./live.js";
 import { coldText, doneText, expiringText, guardCatchText, longText } from "./notices.js";
 import {
   claim,
@@ -60,6 +60,7 @@ class Hub implements Host {
       folders,
       onNotice: (n) => this.notice(n),
       onChange: () => this.liveSoon(),
+      expiringMs: () => expiringMinutes(cfg().get("alerts.cacheExpiringMinutes", 5)) * 60_000,
     });
     this.cli = findCli(cfg().get("cliPath", "")) ? "found" : "missing";
   }
@@ -143,10 +144,10 @@ class Hub implements Host {
     await this.context.globalState.update("optimaizr.welcomed", true);
     const pitch =
       s.allIn && s.allIn.share >= 0.05
-        ? `Up to ${Math.round(s.allIn.share * 100)}% of your Claude Code usage can be saved.`
+        ? `Up to ${Math.round(s.allIn.share * 100)}% of your AI coding usage can be saved.`
         : s.plan
           ? `Your ${s.plan.label} did ${Math.round(s.plan.multiple * 10) / 10}x its price in work this month.`
-          : "Your Claude Code savings are ready.";
+          : "Your savings are ready.";
     const pick = await vscode.window.showInformationMessage(
       `${pitch} Read on this machine, nothing uploaded.`,
       "Show me",

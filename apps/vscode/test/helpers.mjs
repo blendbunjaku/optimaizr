@@ -112,6 +112,7 @@ export function convo(over = {}, now = Date.now()) {
     title: "Fix the login bug",
     project: "/work/app",
     model: OPUS,
+    effort: null,
     context: 142_000,
     expiresAt: now + 4 * MIN,
     rewriteUsd: 1.78,

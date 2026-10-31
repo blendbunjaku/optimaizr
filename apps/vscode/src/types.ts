@@ -88,6 +88,8 @@ export interface LiveConvo {
   title: string;
   project: string;
   model: string;
+  /** Claude Code's effort on its latest call, when the transcript says. */
+  effort: string | null;
   context: number;
   /** Epoch ms the cache is gone; null when nobody knows. */
   expiresAt: number | null;
@@ -104,6 +106,7 @@ export interface LiveState {
   warm: LiveConvo[];
   fiveHour: { percent: number; resetsAt: string | null; basis: "claude" | "estimate" } | null;
   lastTurn: {
+    sessionId: string;
     title: string;
     workMs: number;
     costUsd: number;
