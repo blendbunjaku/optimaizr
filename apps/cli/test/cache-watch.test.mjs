@@ -129,6 +129,16 @@ test("the expiry warning comes once, in the last five minutes, priced at the 1-h
   assert.deepEqual(watch.expiring(last + 56 * MIN), [], "nothing once it has gone");
 });
 
+test("a shorter lead, as the VS Code setting asks, waits for its last minute", async () => {
+  const data = await load({ s1: transcript("s1", comeback()) });
+  const watch = createCacheWatch();
+  for (const e of data.events) watch.push(e);
+  const last = Date.parse(data.events.at(-1).ts);
+  assert.deepEqual(watch.expiring(last + 51 * MIN, MIN), [], "4 minutes left is not yet");
+  assert.equal(watch.expiring(last + 54.5 * MIN, MIN).length, 1);
+  assert.deepEqual(watch.expiring(last + 54.6 * MIN, MIN), [], "said once");
+});
+
 test("warm lists long conversations soonest to expire first, and skips short and subagent ones", async () => {
   const a = await load({ a: transcript("a", comeback()) });
   const b = await load({ b: transcript("b", comeback({ gap: 120 })) });

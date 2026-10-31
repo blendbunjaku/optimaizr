@@ -110,14 +110,17 @@ export function createCacheWatch(
       return cold;
     },
 
-    /** Long conversations whose cache expires within the warning window, each once. */
-    expiring(now: number): CacheState[] {
+    /**
+     * Long conversations whose cache expires within the warning window, each once.
+     * `within` overrides the window per check, for a setting that can change.
+     */
+    expiring(now: number, within = warnMs): CacheState[] {
       const out: CacheState[] = [];
       for (const c of conversations.values()) {
         const s = c.state;
         if (c.warned || s.expiresAt === null || s.context < minContext) continue;
         const left = s.expiresAt - now;
-        if (left <= 0 || left > warnMs || s.rewriteUsd < warnUsd) continue;
+        if (left <= 0 || left > within || s.rewriteUsd < warnUsd) continue;
         c.warned = true;
         out.push(s);
       }
