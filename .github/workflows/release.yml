@@ -1,7 +1,7 @@
 name: Release
 
-# Pushing a tag like v0.13.1 builds, tests and publishes the CLI from here, so
-# the package on npm carries provenance: a signed link to this commit and run.
+# Pushing a tag like v0.13.1 builds, tests and stages the CLI on npm from here,
+# with provenance. It goes live only when a maintainer approves it with 2FA.
 on:
   push:
     tags: ["v*"]
@@ -30,7 +30,7 @@ jobs:
           node-version: "24"
           registry-url: https://registry.npmjs.org
           cache: npm
-      # Trusted publishing needs npm 11.5.1 or later.
+      # Staged publishing needs npm 11.15.0 or later.
       - run: npm install -g npm@11
       - run: npm ci
 
@@ -42,7 +42,8 @@ jobs:
 
       - run: npm run build
       - run: npm test
-      - run: npm publish --provenance --access public
+      # A stolen tag or workflow can only stage a version, never ship one.
+      - run: npm stage publish --provenance --access public
         working-directory: apps/cli
 
   vsix:
