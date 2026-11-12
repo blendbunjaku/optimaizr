@@ -36,6 +36,11 @@ export interface Config {
   plan?: string;
   /** false turns off the once-a-day check for a newer version. */
   updateCheck?: boolean;
+  /**
+   * false keeps optimAIzr out of Claude Code's and Codex's settings: it prints
+   * what to add instead. Read by `settingsManaged`, from the home config only.
+   */
+  manageSettings?: boolean;
   path: string | null;
 }
 

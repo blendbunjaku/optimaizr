@@ -259,8 +259,13 @@ work it also reads what each tool call was given (a file path, a command, the
 first 200 characters of anything else) and keeps that in memory only, since
 commands can hold secrets. A report you export names the file or command a
 finding is about. Guard, when you turn it on, logs what it held in
-`~/.optimaizr/guard/`, and a held message leaves a short note from your last
-prompt and Claude's last reply, deleted once read or after 30 minutes.
+`~/.optimaizr/guard/` for 30 days, a command as a hash and its first 80
+characters with secrets masked. A held message leaves a short note from your
+last prompt and Claude's last reply, deleted once read or after 30 minutes.
+
+`optimaizr guard print` shows the hooks before anything is written, and
+`"manageSettings": false` in `~/.optimaizr/config.json` keeps optimAIzr out of
+Claude Code's and Codex's settings for good: it says what to add by hand.
 
 The only network calls are `verify` (to your own provider, with your own key),
 the optional Jev second opinion, and a daily version check against npm that

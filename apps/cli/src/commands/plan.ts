@@ -3,11 +3,13 @@ import path from "node:path";
 import {
   analyze,
   bold,
+  borrowedGap,
   buildProfile,
   cardData,
   claudeConfigDir,
   type Dataset,
   dim,
+  fableStop,
   green,
   guardSaved,
   localTime,
@@ -27,6 +29,7 @@ import {
   weekCompare,
   weekText,
   wrap as wrapText,
+  yellow,
 } from "@optimaizr/core";
 import { appliedChanges, latestClaudeWindows, optimaizrDir, readReceipts } from "@optimaizr/local";
 import type { Args } from "../args.js";
@@ -35,6 +38,7 @@ import { shareRate } from "../share.js";
 import { offerGuard } from "./guard.js";
 import {
   emptyNotice,
+  fableLine,
   limitHits,
   limitsPath,
   load,
@@ -236,7 +240,16 @@ export async function cmdProfile(args: Args): Promise<void> {
 
   if (args.flags.json) {
     console.log(
-      JSON.stringify({ ...profile, detectedPlan: plan.choice.detected, errors }, null, 2),
+      JSON.stringify(
+        {
+          ...profile,
+          detectedPlan: plan.choice.detected,
+          fableLimit: fableStop(data.limitHits ?? []),
+          errors,
+        },
+        null,
+        2,
+      ),
     );
     return;
   }
@@ -252,6 +265,10 @@ export async function cmdProfile(args: Args): Promise<void> {
       kept: savedText(guardSaved(readReceipts(Date.now() - 7 * 86_400_000))),
     }),
   );
+  const fable = fableLine(data);
+  if (fable) console.log(`  ${yellow(fable)}\n`);
+  const borrowed = borrowedGap(summary);
+  if (borrowed.length) console.log(`${borrowed.join("\n")}\n`);
   const note = planNote(plan.choice, data.events);
   if (note) {
     for (const line of note) console.log(`  ${line}`);

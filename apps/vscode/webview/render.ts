@@ -224,6 +224,11 @@ function now(live: LiveState, s: Snapshot | null): string {
         <p class="cap">${five.resetsAt ? `Resets ${esc(clock(five.resetsAt))}` : "Used so far"}${five.basis === "estimate" ? ' · <span class="chip" title="Worked out from what your 5-hour windows have held before. Install the optimAIzr mod for Claude\'s own reading.">estimate</span>' : ""}</p>
       </div>`
     : "";
+  // Only Claude Code writes this stop, so Codex and opencode never show it.
+  const fable =
+    s?.fable && Date.parse(s.fable.resetsAt) > t
+      ? `<p class="cap fable"><b class="warn">Claude Code hit the Fable limit.</b> Fable is back ${esc(day(s.fable.resetsAt))}, ${esc(clock(s.fable.resetsAt))}; other models still run.</p>`
+      : "";
   const last = live.lastTurn
     ? `<p class="cap last">Last turn <b>${duration(live.lastTurn.workMs)}</b> · <b>${money(live.lastTurn.costUsd)}</b>${live.lastTurn.percent !== null && live.lastTurn.percent >= 0.5 ? ` · ${Math.round(live.lastTurn.percent)}% of 5h` : ""}</p>`
     : "";
@@ -240,7 +245,7 @@ function now(live: LiveState, s: Snapshot | null): string {
     return `<section class="card now" aria-label="Right now">
       <h3 class="card-h"><span class="pulse off"></span>Right now</h3>
       <p class="muted">Nothing running in this folder. Start Claude Code here and the cache countdown shows up.</p>
-      ${fiveRow}${warm}
+      ${fiveRow}${fable}${warm}
     </section>`;
   }
   const state = convoState(c, t);
@@ -254,7 +259,7 @@ function now(live: LiveState, s: Snapshot | null): string {
       <div class="bar ctx ${over ? "hot" : c.context >= 100_000 ? "warm" : ""}"><i data-w="${w(Math.min(1, c.context / COMPACT_AT))}"></i><span class="mark" title="200K: where compacting starts to pay"></span></div>
       <p class="cap">${contextLine(c.context)}</p>
     </div>
-    ${fiveRow}${last}${warm}
+    ${fiveRow}${fable}${last}${warm}
   </section>`;
 }
 
@@ -263,7 +268,11 @@ function now(live: LiveState, s: Snapshot | null): string {
 function guard(v: ViewState, ui: Ui): string {
   const g = v.snapshot?.guard ?? { on: false, catches: 0, savedUsd: 0, recent: [] };
   const busy = v.busy === "guard";
-  const toggle = `<button class="switch${g.on ? " on" : ""}${busy ? " busy" : ""}" role="switch" aria-checked="${g.on}" data-action="guard" data-on="${!g.on}" ${busy ? "disabled" : ""} aria-label="Guard"><i></i></button>`;
+  // Settings kept by hand: guard shows what it did, with no switch to write them.
+  const toggle = v.managed
+    ? `<button class="switch${g.on ? " on" : ""}${busy ? " busy" : ""}" role="switch" aria-checked="${g.on}" data-action="guard" data-on="${!g.on}" ${busy ? "disabled" : ""} aria-label="Guard"><i></i></button>`
+    : "";
+  const byHand = `<p class="cap">${icons.bolt}You keep Claude Code's settings yourself. <code>optimaizr guard print</code> in a terminal shows the hooks to add.</p>`;
   // Saved counts only holds that were not sent anyway; the list shows every hold.
   const held = Math.max(g.catches, g.recent.length);
   const catches = `${held} ${held === 1 ? "catch" : "catches"}`;
@@ -274,9 +283,11 @@ function guard(v: ViewState, ui: Ui): string {
         ? `<p class="kept"><b class="good">${catches}</b> this week</p>`
         : `<p class="muted">On and watching. Nothing needed holding this week.</p>`
     : `<p class="muted">Holds the one message that would rewrite an expired cache, a whole read of a huge file, and a third try of a failing command. Send it again and it goes through.</p>${
-        v.cli === "missing"
-          ? `<p class="cap">${icons.bolt}Runs through the optimAIzr CLI. Turning it on offers to install it.</p>`
-          : ""
+        !v.managed
+          ? byHand
+          : v.cli === "missing"
+            ? `<p class="cap">${icons.bolt}Runs through the optimAIzr CLI. Turning it on offers to install it.</p>`
+            : ""
       }`;
   const list = g.recent.slice(0, ui.mode === "report" ? 5 : 3);
   const recent =
@@ -296,18 +307,23 @@ function guard(v: ViewState, ui: Ui): string {
 
 /* Fixes */
 
-function fixAction(f: FixItem, s: Snapshot, busy: string | null): string {
+function fixAction(f: FixItem, s: Snapshot, busy: string | null, managed: boolean): string {
   if (f.kind === "compaction") {
     const at = s.compaction.at;
     if (at) {
       return `<span class="chip ok">${icons.check}On at ${Math.round(at / 1000)}K</span>`;
     }
+    if (!managed) return "";
     return `<button class="btn sm primary" data-action="compact" data-on="true" ${busy === "compact" ? "disabled" : ""}>${busy === "compact" ? "Applying…" : "Apply"}</button>`;
   }
   return f.doneAt ? `<span class="chip ok">${icons.check}Done</span>` : "";
 }
 
-function fixUndo(f: FixItem, s: Snapshot, busy: string | null): string {
+function fixUndo(f: FixItem, s: Snapshot, busy: string | null, managed: boolean): string {
+  if (f.kind === "compaction" && !managed) {
+    if (s.compaction.at) return "";
+    return `<p class="cap">You keep Claude Code's settings yourself. Set <code>CLAUDE_CODE_AUTO_COMPACT_WINDOW</code> to <code>${COMPACT_AT}</code> under <code>env</code> in its settings.</p>`;
+  }
   if (f.kind === "compaction" && s.compaction.at) {
     return `<button class="link" data-action="compact" data-on="false">${icons.undo}Undo, compact where Claude Code did before</button>`;
   }
@@ -321,7 +337,7 @@ function fixUndo(f: FixItem, s: Snapshot, busy: string | null): string {
   return `<p class="cap">One click writes the setting to Claude Code. Undo puts it back.</p>`;
 }
 
-function fixRow(f: FixItem, s: Snapshot, ui: Ui, busy: string | null): string {
+function fixRow(f: FixItem, s: Snapshot, ui: Ui, busy: string | null, managed: boolean): string {
   const open = ui.mode === "report" || ui.open.includes(f.rule);
   const amount =
     f.tier === "test" ? `up to ${money(f.monthlyUsd)}/mo` : `${money(f.monthlyUsd)}/mo`;
@@ -330,14 +346,14 @@ function fixRow(f: FixItem, s: Snapshot, ui: Ui, busy: string | null): string {
     <summary>
       <span class="tier ${f.tier}">${TIER_NAME[f.tier]}</span>
       <span class="fix-t"><b>${esc(f.label)}</b><span class="muted small">${amount}${share}</span></span>
-      <span class="fix-a">${fixAction(f, s, busy)}</span>
+      <span class="fix-a">${fixAction(f, s, busy, managed)}</span>
       ${icons.chevron}
     </summary>
     <div class="fix-b">
       ${f.happened ? `<p><span class="label">What happened</span>${esc(f.happened)}</p>` : ""}
       ${f.fix ? `<p><span class="label">The fix</span>${esc(f.fix)}</p>` : ""}
       ${ui.mode === "report" && f.why ? `<p><span class="label">Why it works</span>${esc(f.why)}</p>` : ""}
-      <div class="fix-u">${fixUndo(f, s, busy)}</div>
+      <div class="fix-u">${fixUndo(f, s, busy, managed)}</div>
     </div>
   </details>`;
 }
@@ -364,7 +380,7 @@ function fixes(v: ViewState, s: Snapshot, ui: Ui): string {
   return `<section class="card fixes" aria-label="Fixes">
     <h3 class="card-h">${icons.bolt}Your fixes<span class="muted small right">${s.fixes.length} · ${money(total)}/mo</span></h3>
     <div class="fix-list">${byMoney(s.fixes)
-      .map((f) => fixRow(f, s, ui, v.busy))
+      .map((f) => fixRow(f, s, ui, v.busy, v.managed))
       .join("")}</div>
     ${smaller}
   </section>`;

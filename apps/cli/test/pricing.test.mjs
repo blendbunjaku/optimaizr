@@ -2,7 +2,9 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  borrowedPrice,
   costOf,
+  modelLabel,
   priceFor,
   ratesFor,
   registerModels,
@@ -83,9 +85,11 @@ test("catalogue rates match Anthropic's published list prices", () => {
     "claude-opus-5-5": [4, 20],
     "claude-fable-5-1": [10, 50],
     "claude-mythos-5-1": [10, 50],
+    "claude-fable-5-2": [8, 40],
+    "claude-mythos-5-2": [8, 40],
   };
   for (const [id, [input, output]] of Object.entries(published)) {
-    const r = ratesFor(priceFor(id), { at: "2026-09-14T12:00:00Z" });
+    const r = ratesFor(priceFor(id), { at: "2026-11-12T12:00:00Z" });
     assert.equal(r.inputPerM, input, `${id} input rate`);
     assert.equal(r.outputPerM, output, `${id} output rate`);
   }
@@ -114,6 +118,45 @@ test("Opus 5.5 and Fable 5.1 bill cache reads at their published rates", () => {
   // Writes keep Anthropic's multipliers on the input rate.
   const writes = costOf({ cache_creation_input_tokens: 1_000_000 }, "claude-opus-5-5");
   assert.equal(writes.cacheWrite, 4 * CACHE_MULTIPLIER.write5m);
+});
+
+// Third time a new id fell back to its predecessor: Fable 5.2 matched Fable 5,
+// billed at $10/$50 with cache reads at $1.00 instead of $8/$40 and $0.20.
+test("Fable 5.2 and the GPT-6.1 models resolve to their own cards", () => {
+  assert.equal(priceFor("claude-fable-5-2").id, "claude-fable-5-2");
+  assert.equal(priceFor("claude-mythos-5-2").id, "claude-mythos-5-2");
+  assert.equal(priceFor("claude-fable-5-2").label, "Fable 5.2");
+  assert.equal(priceFor("gpt-6.1-sol").id, "gpt-6.1-sol");
+  assert.equal(priceFor("gpt-6.1-terra").id, "gpt-6.1-terra");
+  assert.equal(priceFor("gpt-5.3-codex").id, "gpt-5.3-codex");
+  assert.equal(costOf({ cache_read_input_tokens: 1_000_000 }, "claude-fable-5-2").cacheRead, 0.2);
+  // Fast mode doubles it, as on Opus 5.5.
+  const fast = ratesFor(priceFor("claude-fable-5-2"), { speed: "fast" });
+  assert.deepEqual([fast.inputPerM, fast.outputPerM, fast.cachedInputPerM], [16, 80, 0.4]);
+  const sol = ratesFor(priceFor("gpt-6.1-sol"));
+  assert.deepEqual([sol.inputPerM, sol.cachedInputPerM, sol.outputPerM], [2, 0.1, 10]);
+});
+
+test("a newer version with no card is priced as the nearest older one, and says so", () => {
+  // Fable 5.2 was read as Fable 5 without a word. The next one borrows 5.2's card.
+  assert.equal(priceFor("claude-fable-5-3").id, "claude-fable-5-2");
+  assert.equal(priceFor("claude-fable-5-3-20261201").id, "claude-fable-5-2");
+  assert.equal(borrowedPrice("claude-fable-5-3").label, "Fable 5.2");
+  assert.equal(modelLabel("claude-fable-5-3"), "claude-fable-5-3");
+  assert.equal(borrowedPrice("claude-opus-5-6").id, "claude-opus-5-5");
+  // A Codex version borrows from the last Codex card, not the plain model.
+  assert.equal(borrowedPrice("gpt-5.9-codex").id, "gpt-5.3-codex");
+  // Dates and a model's own card are not borrowing.
+  for (const id of [
+    "claude-fable-5-2",
+    "claude-opus-5-5",
+    "gpt-4o-2024-08-06",
+    "o3-2025-04-16",
+    "gpt-5-2025-08-07",
+  ]) {
+    assert.equal(borrowedPrice(id), null, id);
+  }
+  assert.equal(modelLabel("claude-fable-5-2"), "Fable 5.2");
 });
 
 test("Opus 5.5 fast mode doubles every rate, including its explicit cache rate", () => {

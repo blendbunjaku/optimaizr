@@ -1,0 +1,79 @@
+@use "sass:list";
+@use "tools" as *;
+
+// The stacked bars, their legends and the swatches that match them.
+
+.stack {
+  display: flex;
+  height: 10px;
+  border-radius: 99px;
+  overflow: hidden;
+  background: var(--track);
+  gap: 2px;
+
+  &.thin {
+    height: 8px;
+  }
+}
+
+.seg {
+  display: block;
+  height: 100%;
+  width: 0;
+  transition: width 0.7s $ease-out;
+}
+
+// Spend by kind (.seg-N) and by place (.where-N), in the order they are drawn.
+$kinds: var(--accent), var(--save), var(--violet), var(--warn), var(--rose), tint(var(--fg), 35%);
+$places: var(--accent), var(--violet), var(--warn), var(--save), tint(var(--fg), 35%);
+
+@for $i from 1 through list.length($kinds) {
+  .seg-#{$i - 1},
+  .sw.seg-#{$i - 1} {
+    background: list.nth($kinds, $i);
+  }
+}
+
+@for $i from 1 through list.length($places) {
+  .where-#{$i - 1} {
+    background: list.nth($places, $i);
+  }
+}
+
+.legend {
+  @include bare-list;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  font-size: 0.88em;
+
+  li {
+    @include row(6px);
+    min-width: 0;
+
+    span {
+      color: var(--muted);
+    }
+  }
+
+  b {
+    font-family: var(--mono);
+    font-weight: 500;
+  }
+
+  &.col {
+    flex-direction: column;
+
+    li b {
+      margin-left: auto;
+    }
+  }
+}
+
+.sw {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  flex: none;
+  display: inline-block;
+}

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
+import { compile } from "sass";
 
 // One CommonJS file per entry, with core and local inlined: the extension host
 // loads it as is, so nothing has to be installed next to it.
@@ -36,5 +37,11 @@ await Promise.all([
     outfile: "dist/webview.js",
   }),
 ]);
-fs.copyFileSync("webview/style.css", "dist/webview.css");
+
+// The webview's one stylesheet, from the SCSS partials in webview/styles.
+const css = compile("webview/style.scss", { style: "expanded", sourceMap: sourcemap });
+const map = css.sourceMap
+  ? `\n/*# sourceMappingURL=data:application/json;base64,${Buffer.from(JSON.stringify(css.sourceMap)).toString("base64")} */`
+  : "";
+fs.writeFileSync("dist/webview.css", `${css.css}${map}\n`);
 console.log(`optimaizr-vscode ${pkg.version} bundled to dist/`);

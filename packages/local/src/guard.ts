@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
@@ -26,6 +27,7 @@ import {
   transcriptFacts,
   writeUsd,
 } from "@optimaizr/core";
+import { HANDS_OFF, settingsManaged, writeFileAtomic } from "./files.js";
 import { optimaizrDir } from "./ledger.js";
 import { claudeSettingsPath } from "./rewriters.js";
 import { cacheStateOf, readSettings, transcriptTail, writeSettings } from "./statusline.js";
@@ -48,6 +50,8 @@ export const GUARD_HOOKS: ReadonlyArray<{ event: string; matcher?: string }> = [
 const TIMEOUT_SECONDS = 10;
 /** Marks older than this are dropped: no conversation is held for its whole life. */
 const MARK_TTL_MS = 7 * 86_400_000;
+/** Receipts older than this are dropped; every reader looks back 7 days, sessions 30. */
+const RECEIPT_TTL_MS = 30 * 86_400_000;
 /** Claude Code's Read stops after this many lines, so more is never sent. */
 const READ_LINES = 2000;
 /** How much of the transcript the handoff note reads: a long turn's worth. */
@@ -113,6 +117,21 @@ export function guardApplied(opts: GuardPaths = {}): boolean {
   });
 }
 
+/** One hook entry as Claude Code's settings hold it. */
+function entry(command: string, matcher?: string): Group {
+  return {
+    ...(matcher ? { matcher } : {}),
+    hooks: [{ type: "command", command, timeout: TIMEOUT_SECONDS }],
+  };
+}
+
+/** The `hooks` guard adds, for `optimaizr guard print` to show and someone to paste. */
+export function guardHooks(command: string): Record<string, Group[]> {
+  const out: Record<string, Group[]> = {};
+  for (const { event, matcher } of GUARD_HOOKS) out[event] = [entry(command, matcher)];
+  return out;
+}
+
 export function applyGuard(command: string | null, opts: GuardPaths = {}): GuardResult {
   const p = paths(opts);
   if (command === null) {
@@ -159,18 +178,23 @@ export function applyGuard(command: string | null, opts: GuardPaths = {}): Guard
       return out;
     });
     if (!found) {
-      updated.push({
-        ...(matcher ? { matcher } : {}),
-        hooks: [{ type: "command", command, timeout: TIMEOUT_SECONDS }],
-      });
+      updated.push(entry(command, matcher));
       changed = true;
     }
     next[event] = updated;
   }
   if (!changed)
     return { ok: true, changed: false, detail: `guard's hooks are set in ${p.settings}.` };
+  if (!settingsManaged()) {
+    return {
+      ok: false,
+      changed: false,
+      detail: `${HANDS_OFF}. optimaizr guard print shows the hooks to add to ${p.settings}.`,
+    };
+  }
 
-  writeSettings(p.settings, { ...settings, hooks: next });
+  const error = writeSettings(p.settings, { ...settings, hooks: next });
+  if (error) return { ok: false, changed: false, detail: error };
   fs.mkdirSync(p.dir, { recursive: true });
   fs.writeFileSync(
     p.record,
@@ -190,7 +214,6 @@ export function applyGuard(command: string | null, opts: GuardPaths = {}): Guard
 /** Take guard's hooks out again, and only those. Null when none were set. */
 export function undoGuard(opts: GuardPaths = {}): GuardResult | null {
   const p = paths(opts);
-  fs.rmSync(p.record, { force: true });
   const settings = readSettings(p.settings);
   if (typeof settings === "string") return { ok: false, changed: false, detail: settings };
   const hooks = hooksOf(settings, p.settings);
@@ -215,11 +238,25 @@ export function undoGuard(opts: GuardPaths = {}): GuardResult | null {
     }
     if (kept.length > 0) next[event] = kept;
   }
-  if (!removed) return null;
+  if (!removed) {
+    fs.rmSync(p.record, { force: true });
+    return null;
+  }
+  if (!settingsManaged()) {
+    return {
+      ok: false,
+      changed: false,
+      detail: `${HANDS_OFF}. Take the hooks whose command ends in "guard hook" out of ${p.settings} yourself.`,
+    };
+  }
   const out = { ...settings };
   if (Object.keys(next).length > 0) out.hooks = next;
   else delete out.hooks;
-  writeSettings(p.settings, out);
+  const error = writeSettings(p.settings, out);
+  if (error) return { ok: false, changed: false, detail: error };
+  fs.rmSync(p.record, { force: true });
+  // With guard off nothing would read a note left behind.
+  fs.rmSync(p.handoffs, { recursive: true, force: true });
   return { ok: true, changed: true, detail: `guard's hooks removed from ${p.settings}.` };
 }
 
@@ -236,22 +273,78 @@ function readMarks(p: Paths): Record<string, number> {
   }
 }
 
+/** Commands can carry secrets, so a mark keeps a hash of one: enough to know it again. */
+const digest = (text: string) => createHash("sha256").update(text).digest("hex").slice(0, 16);
+// Before 0.13.1 a retry mark held the command itself.
+const plainRetry = (key: string) =>
+  key.startsWith("retry|") && !/\|[0-9a-f]{16}(\|sent)?$/.test(key);
+
 /** Notes that this was held, so the same step comes through the next time. */
 function mark(p: Paths, key: string, now: number): void {
   const marks = readMarks(p);
   const kept: Record<string, number> = {};
-  for (const [k, at] of Object.entries(marks)) if (now - at < MARK_TTL_MS) kept[k] = at;
+  for (const [k, at] of Object.entries(marks)) {
+    if (now - at < MARK_TTL_MS && !plainRetry(k)) kept[k] = at;
+  }
   kept[key] = now;
   fs.mkdirSync(p.dir, { recursive: true });
   // Another session's hook can run at the same moment: write whole, then swap.
-  const tmp = `${p.marks}.${process.pid}`;
-  fs.writeFileSync(tmp, JSON.stringify(kept));
-  fs.renameSync(tmp, p.marks);
+  writeFileAtomic(p.marks, JSON.stringify(kept));
 }
 
 function receipt(p: Paths, r: GuardReceipt): void {
   fs.mkdirSync(p.dir, { recursive: true });
   fs.appendFileSync(p.receipts, JSON.stringify(r) + "\n");
+}
+
+/** How a held command shows in a receipt: its start, with what looks like a secret hidden. */
+export function shownCommand(cmd: string): string {
+  const hidden = cmd
+    .replace(
+      /\b([A-Za-z_]*(?:pass|passwd|password|token|secret|key|auth)[A-Za-z_]*=)("[^"]*"|'[^']*'|\S+)/gi,
+      "$1***",
+    )
+    .replace(/(--?(?:password|passwd|token|secret|api-?key)\s+)("[^"]*"|'[^']*'|\S+)/gi, "$1***")
+    .replace(/\b(Bearer|Basic|token)\s+[A-Za-z0-9._~+/=-]{8,}/gi, "$1 ***")
+    .replace(/(:\/\/[^/\s:@]+:)[^@\s/]+@/g, "$1***@");
+  return hidden.length > 80 ? `${hidden.slice(0, 77)}...` : hidden;
+}
+
+/**
+ * Drop receipts past RECEIPT_TTL_MS. The oldest is first, so one short read
+ * says whether there is anything to drop; mostly there is not.
+ */
+function pruneReceipts(p: Paths, now: number): void {
+  let head = "";
+  const fd = fs.openSync(p.receipts, "r");
+  try {
+    const buf = Buffer.alloc(512);
+    head = buf.toString("utf8", 0, fs.readSync(fd, buf, 0, buf.length, 0));
+  } finally {
+    fs.closeSync(fd);
+  }
+  const first = /"at":"([^"]+)"/.exec(head)?.[1];
+  if (!first || now - Date.parse(first) < RECEIPT_TTL_MS) return;
+  const text = fs.readFileSync(p.receipts, "utf8");
+  const kept = text
+    .split("\n")
+    .filter((line) => {
+      const at = /"at":"([^"]+)"/.exec(line)?.[1];
+      return at !== undefined && now - Date.parse(at) < RECEIPT_TTL_MS;
+    })
+    .map((line) => `${line}\n`)
+    .join("");
+  writeFileAtomic(p.receipts, kept);
+}
+
+/** What guard keeps is kept no longer than it says: run as hooks come in. */
+function tidy(p: Paths, now: number): void {
+  try {
+    if (fs.existsSync(p.handoffs)) pruneHandoffs(p, now);
+    if (fs.existsSync(p.receipts)) pruneReceipts(p, now);
+  } catch {
+    // The next hook tries again.
+  }
 }
 
 function parseReceipts(text: string): GuardReceipt[] {
@@ -384,6 +477,8 @@ export function guardHook(
 ): Record<string, unknown> | null {
   const p = paths(opts);
   const now = opts.now ?? Date.now();
+  // Read and Bash calls come often and keep nothing for long.
+  if (input.hook_event_name !== "PreToolUse") tidy(p, now);
   try {
     switch (input.hook_event_name) {
       case "UserPromptSubmit":
@@ -547,8 +642,8 @@ function onBash(input: HookInput, p: Paths, now: number) {
   const cmd = command.trim();
   if ((facts.failing.get(cmd) ?? 0) < RETRY_LIMIT) return null;
   // One hold per streak: a change that works starts a new one.
-  const key = `retry|${session}|${facts.lastChange ?? "start"}|${cmd}`;
-  const detail = cmd.length > 120 ? `${cmd.slice(0, 117)}...` : cmd;
+  const key = `retry|${session}|${facts.lastChange ?? "start"}|${digest(cmd)}`;
+  const detail = shownCommand(cmd);
   const marks = readMarks(p);
   if (marks[key]) {
     if (!marks[`${key}|sent`]) {

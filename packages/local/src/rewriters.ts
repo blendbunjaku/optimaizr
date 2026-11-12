@@ -3,6 +3,7 @@ import path from "node:path";
 
 import { claudeConfigDir, priceFor } from "@optimaizr/core";
 import type { OptimizationFinding, ProposedChange, RequestRewriter } from "@optimaizr/core";
+import { HANDS_OFF, settingsManaged, writeError, writeFileAtomic } from "./files.js";
 
 /**
  * Applying a recommendation to Claude Code without the optimAIzr mod. `live`
@@ -122,15 +123,14 @@ export function claudeSettingsRewriter(opts: ClaudeSettingsRewriterOptions = {})
 
       // Merge rather than replace: this file is the user's, and it holds far
       // more than a model.
+      if (!settingsManaged()) {
+        return { ok: false, detail: `${HANDS_OFF}. Add to ${file}: "model": "${alias}"`, now };
+      }
       const next = { ...settings, model: alias };
       try {
-        fs.mkdirSync(path.dirname(file), { recursive: true });
-        fs.writeFileSync(file, JSON.stringify(next, null, 2) + "\n");
+        writeFileAtomic(file, JSON.stringify(next, null, 2) + "\n");
       } catch (err) {
-        return {
-          ok: false,
-          detail: `could not write ${file}: ${err instanceof Error ? err.message : String(err)}`,
-        };
+        return { ok: false, detail: writeError(file, err) };
       }
 
       const undo = previous

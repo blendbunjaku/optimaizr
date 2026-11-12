@@ -6,8 +6,11 @@ import {
   bold,
   type Dataset,
   dim,
+  fableStop,
   ingest,
   type LimitHit,
+  localDay,
+  localTime,
   OPENCODE_READ_FAILED,
   OPENCODE_SQLITE_WARNING,
   OPENCODE_V2_WARNING,
@@ -52,6 +55,17 @@ export function limitHits(data?: Pick<Dataset, "limitHits"> | null): LimitHit[] 
     .filter((h) => h.window === "five_hour")
     .map((h) => ({ ts: h.ts, ...(h.resetsAt ? { resetsAt: h.resetsAt } : {}) }));
   return [...recorded, ...readLimitHits()];
+}
+
+/** "Claude Code hit the Fable limit Nov 11 22:10. Fable is back Nov 16 09:00 ...", while it holds. */
+export function fableLine(
+  data?: Pick<Dataset, "limitHits"> | null,
+  now = Date.now(),
+): string | null {
+  const stop = fableStop(data?.limitHits ?? [], now);
+  if (!stop) return null;
+  const at = (iso: string) => `${localDay(iso)} ${localTime(iso)}`;
+  return `Claude Code hit the Fable limit ${at(stop.ts)}. Fable is back ${at(stop.resetsAt)}; other models still run.`;
 }
 
 /**

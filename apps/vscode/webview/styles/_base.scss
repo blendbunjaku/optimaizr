@@ -1,0 +1,92 @@
+@use "tools" as *;
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--vscode-font-family);
+  font-size: var(--vscode-font-size, 13px);
+  line-height: 1.45;
+  padding: 10px 12px 18px;
+  -webkit-font-smoothing: antialiased;
+
+  &.report {
+    background: var(--vscode-editor-background);
+    padding: 28px clamp(16px, 4vw, 48px) 40px;
+  }
+}
+
+#app {
+  @include stack(10px);
+  max-width: 1080px;
+  margin: 0 auto;
+}
+
+p {
+  margin: 0;
+}
+
+b {
+  font-weight: 600;
+}
+
+code {
+  font-family: var(--mono);
+  font-size: 0.92em;
+  background: var(--card-hi);
+  border-radius: 4px;
+  padding: 0 4px;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+.small {
+  font-size: 0.88em;
+}
+
+.num,
+.big-num,
+.ring-t,
+.chip.num {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.accent {
+  color: var(--accent);
+}
+
+.good {
+  color: var(--save);
+}
+
+.bad {
+  color: var(--waste) !important;
+}
+
+.warn {
+  color: var(--warn);
+}
+
+.ellipsis {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.ico {
+  flex: none;
+  vertical-align: -3px;
+}

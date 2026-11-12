@@ -1,4 +1,4 @@
-import type { UsageEvent } from "../domain/types.js";
+import type { LimitHitRecord, UsageEvent } from "../domain/types.js";
 import { coldResumes } from "./cold.js";
 import type { LimitHit } from "./plan.js";
 
@@ -65,6 +65,25 @@ export function weekCompare(
     stopsBefore: before.length > 0 ? stopsIn(hits, now - 14 * DAY, now - 7 * DAY) : null,
     spendUsd: spend(week),
   };
+}
+
+/** Claude Code's name for the Fable limit, a weekly Fable allowance on Max and Ultra. */
+export const FABLE_LIMIT = "seven_day_overage_included";
+
+/**
+ * The latest Fable limit stop whose reset is still ahead: when Claude Code
+ * refused Fable and when it comes back. Null when none is, or the reset is unknown.
+ */
+export function fableStop(
+  hits: readonly LimitHitRecord[],
+  now = Date.now(),
+): { ts: string; resetsAt: string } | null {
+  let last: { ts: string; resetsAt: string } | null = null;
+  for (const h of hits) {
+    if (h.window !== FABLE_LIMIT || !h.resetsAt || Date.parse(h.resetsAt) <= now) continue;
+    if (!last || h.ts > last.ts) last = { ts: h.ts, resetsAt: h.resetsAt };
+  }
+  return last;
 }
 
 /**

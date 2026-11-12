@@ -1,6 +1,7 @@
 import { bold, dim, green, wrap as wrapText, yellow } from "@optimaizr/core";
 import { activeModSessions, readModSessions, readOverrides } from "@optimaizr/local";
 import { Args } from "../args.js";
+import { VERSION } from "../version.js";
 import { describeOverride } from "./live.js";
 
 /** What to type in Claude Code to install the mod from this repo's marketplace. */
@@ -9,6 +10,11 @@ export const MOD_INSTALL = [
   "/plugin install optimaizr@optimaizr",
   "/reload-plugins",
 ];
+
+/** The first install line pinned to this release's tag, or null in a dev build. */
+export function modPinned(version = VERSION): string | null {
+  return /^\d+\.\d+\.\d+$/.test(version) ? `${MOD_INSTALL[0]}#v${version}` : null;
+}
 
 function ago(iso: string, now: Date): string {
   const s = Math.max(0, Math.round((now.getTime() - Date.parse(iso)) / 1000));
@@ -27,7 +33,13 @@ export function cmdMod(args: Args): void {
   if (args.flags.json) {
     console.log(
       JSON.stringify(
-        { running: active, lastSeen: last?.seenAt ?? null, switches, install: MOD_INSTALL },
+        {
+          running: active,
+          lastSeen: last?.seenAt ?? null,
+          switches,
+          install: MOD_INSTALL,
+          pinned: modPinned(),
+        },
         null,
         2,
       ),
@@ -52,6 +64,8 @@ export function cmdMod(args: Args): void {
   console.log("");
   console.log(`  ${bold("Install")} ${dim("in a Claude Code session:")}`);
   for (const line of MOD_INSTALL) console.log(`    ${line}`);
+  const pinned = modPinned();
+  if (pinned) console.log(`  ${dim(`To stay on this release: ${pinned}`)}`);
   console.log("");
   console.log(
     `  ${dim("Optional: the CLI needs none of it. Without the mod, optimaizr statusline on")}`,

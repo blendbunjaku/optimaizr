@@ -487,7 +487,10 @@ export interface LimitHitRecord {
   /** When the refused request was made. */
   ts: string;
   sessionId: string;
-  /** "five_hour" or "seven_day" as the agent names it, "unknown" when it doesn't say. */
+  /**
+   * As the agent names it: "five_hour", "seven_day", "seven_day_overage_included"
+   * (the Fable limit), or "unknown" when it doesn't say.
+   */
   window: string;
   /** When the window opens again, where the record says. */
   resetsAt?: string;

@@ -10,7 +10,8 @@ saved.
 /plugin install optimaizr@optimaizr
 ```
 
-Needs Claude Code 2.1.287 or later.
+Needs Claude Code 2.1.287 or later. To stay on one release, pin the
+marketplace to its tag: `/plugin marketplace add blendbunjaku/optimaizr#v0.13.1`.
 
 ## What it adds
 

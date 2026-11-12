@@ -6,6 +6,7 @@ export * from "./notices.js";
 export * from "./shared.js";
 export * from "./status.js";
 export {
+  CLI_VERSION,
   compactOff,
   compactOn,
   findCli,

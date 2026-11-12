@@ -1,0 +1,41 @@
+@use "tools" as *;
+
+// Built on the editor's own theme colors, with the brand's blue, green and red
+// laid on top, so it looks at home in any theme.
+:root {
+  --fg: var(--vscode-foreground);
+  --muted: var(--vscode-descriptionForeground);
+  --bg: var(--vscode-sideBar-background, var(--vscode-editor-background));
+  --card: color-mix(in srgb, var(--fg) 4.5%, transparent);
+  --card-hi: color-mix(in srgb, var(--fg) 7%, transparent);
+  --line: color-mix(in srgb, var(--fg) 11%, transparent);
+  --track: color-mix(in srgb, var(--fg) 10%, transparent);
+  --focus: var(--vscode-focusBorder);
+  --mono: var(--vscode-editor-font-family, "JetBrains Mono", ui-monospace, monospace);
+  --radius: 10px;
+
+  --accent: #{$baby-blue};
+  --save: #9cd59d;
+  --waste: #fdaba2;
+  --warn: #f2c97d;
+  --violet: #c5b3ff;
+  --rose: #f7a8d8;
+  --on-accent: #{$ink};
+}
+
+body.vscode-light {
+  --accent: #1c67c0;
+  --save: #197426;
+  --waste: #b13933;
+  --warn: #8a5a00;
+  --violet: #6a4fc9;
+  --rose: #a8327a;
+  --on-accent: #ffffff;
+}
+
+body.vscode-high-contrast,
+body.vscode-high-contrast-light {
+  --card: transparent;
+  --card-hi: transparent;
+  --line: var(--vscode-contrastBorder, var(--fg));
+}

@@ -99,7 +99,7 @@ import {
 } from "@optimaizr/local";
 import { Args, num } from "../args.js";
 import { budgetOf, planNote, resolvePlan } from "../config.js";
-import { limitHits, load, summaryOptions } from "../data.js";
+import { fableLine, limitHits, load, summaryOptions } from "../data.js";
 import { createLivePrompt } from "../live-prompt.js";
 import {
   createStatusLine,
@@ -830,6 +830,8 @@ export async function cmdLive(args: Args): Promise<void> {
     if (watchesAgents) {
       const week = weekCompare(seed, Date.now(), limitHits(seedData));
       if (week) console.log(`  ${dim(`Last 7 days: ${weekText(week)}.`)}`);
+      const fable = fableLine(seedData);
+      if (fable) console.log(`  ${yellow(fable)}`);
       const kept = savedText(guardSaved(readReceipts(Date.now() - 7 * 86_400_000)));
       console.log(
         guardApplied()

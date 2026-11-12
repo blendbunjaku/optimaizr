@@ -98,6 +98,7 @@ export function snapshot(over = {}, now = Date.now()) {
       },
     ],
     week: "Last 7 days: 12% less per prompt than the week before.",
+    fable: null,
     rate: { usdPerPercent: 0.41, basis: "limit hits" },
     titles: {},
     recent: [],
@@ -142,6 +143,7 @@ export function view(over = {}, now = Date.now()) {
     error: null,
     busy: null,
     cli: "found",
+    managed: true,
     ...over,
   };
 }

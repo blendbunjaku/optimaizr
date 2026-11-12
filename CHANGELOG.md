@@ -1,5 +1,60 @@
 # Changelog
 
+## 0.13.1
+
+- **`optimaizr guard print`** (#23). Prints the hooks `guard on` would add to
+  `~/.claude/settings.json`, as JSON and nothing else, so you can read them
+  first or paste them into settings you keep yourself.
+- **`"manageSettings": false`** (#23). With that in `~/.optimaizr/config.json`,
+  optimAIzr never writes Claude Code's or Codex's settings: not for guard, the
+  status line, compaction or a model switch, from the CLI or the VS Code
+  extension. Each one says what to add by hand instead, and hooks you added
+  yourself count as guard being on. For settings kept in a dotfiles repo or
+  built by Nix.
+- **Settings are written in one step** (#23). A settings file is written to a
+  temp file next to it and renamed over it, so a crash or a full disk leaves
+  the old file, never half of the new one. A symlinked settings file stays a
+  symlink and keeps its mode. A write that fails, on a read-only store say, is
+  reported with the file's name, and nothing is recorded as installed.
+- **Guard keeps less** (#26). A held command is remembered as a hash, not as
+  text, and its receipt keeps only the first 80 characters with passwords,
+  tokens and keys masked. Receipts older than 30 days are dropped. A handoff
+  note nobody read is deleted at the next prompt or turn end after its 30
+  minutes, not only at the next hold, and `guard off` removes any that are
+  left. Marks from older versions, which held the command as text, are dropped
+  on the first run.
+- **The update notice names the version** (#25): `npm i -g optimaizr@0.13.1`,
+  and only when what the registry sent back has the shape of a version.
+- **Releases are built by CI** (#25). A tag builds and tests the CLI on GitHub
+  Actions and publishes it to npm with provenance, so the package on npm links
+  to the commit and the run that built it. The VS Code extension's `.vsix` is
+  attached to the GitHub release.
+- **Fable 5.2 and the newest Codex models priced.** Fable 5.2 and Mythos 5.2
+  ($8/$40, cache reads $0.20/M, fast mode $16/$80) had no entry of their own,
+  so they were read as Fable 5: named "Fable 5" and billed at $10/$50 with
+  cache reads at $1.00/M. My 88 Fable 5.2 calls showed $24.12; at its real
+  price they cost $13.71. GPT-6.1 Sol and GPT-6.1 Terra, what Codex offers
+  now, were unpriced, and gpt-5.3-codex was billed as gpt-5.
+- **A model with no price here yet says so.** Fable 5.2 was priced and named
+  as Fable 5 without a word, because it had no entry of its own. A newer
+  version now keeps its own name, is priced as the nearest older version that
+  has a price (a Fable 5.3 as Fable 5.2, not Fable 5), and `profile` and `scan`
+  say how many calls that was and which model they were priced as.
+- **The Fable limit.** On Max and Ultra, Fable has its own weekly allowance.
+  When it runs out, Claude Code's message says to switch models, not when
+  Fable comes back. optimAIzr reads that stop from the transcript, and
+  `profile`, `live` and the VS Code extension say when Fable is back, until it is:
+  `Claude Code hit the Fable limit Nov 11 22:10. Fable is back Nov 16 09:00; other models still run.`
+  It is not counted as a stop at the 5-hour limit. Only Claude Code writes it,
+  so with Codex or opencode alone it never shows.
+- **A security fix in the VS Code extension, 0.1.2** (#27).
+  `optimaizr.cliPath` is run as a program when guard is turned on, and it was
+  read from workspace settings too, so a folder's `.vscode/settings.json` could
+  point it at a file of its own. It is now read from your user settings only,
+  has to be a full path to a file on this machine, and is ignored in a
+  workspace you have not trusted. Update the extension to 0.1.2. Thanks to
+  @vargamolnarbertalan for the report and the four issues above.
+
 ## 0.13.0
 
 - **optimAIzr for VS Code.** Most of my Claude Code runs in VS Code, where the

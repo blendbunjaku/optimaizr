@@ -1,4 +1,4 @@
-import { priceFor, usd } from "../pricing.js";
+import { modelLabel, priceFor, usd } from "../pricing.js";
 import { verificationModeOf } from "../verify/state.js";
 import { TIER_RANK } from "../domain/types.js";
 import type {
@@ -20,7 +20,7 @@ function actionFor(f: OptimizationFinding): string {
   const c = f.candidate;
   if (f.rule === "model-default") return leverAction(f);
   if (c?.kind === "swap-model" && c.to) {
-    const from = f.affected.models.map((m) => priceFor(m)?.label ?? m).join(" / ");
+    const from = f.affected.models.map(modelLabel).join(" / ");
     const to = priceFor(c.to)?.label ?? c.to;
     return `Switch eligible requests from ${from} to ${to}`;
   }

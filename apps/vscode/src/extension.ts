@@ -1,8 +1,9 @@
 import path from "node:path";
-import { canNotify, guardApplied, notify } from "@optimaizr/local";
+import { canNotify, guardApplied, notify, settingsManaged } from "@optimaizr/local";
 import * as vscode from "vscode";
 import {
   type ActionResult,
+  CLI_VERSION,
   compactOff,
   compactOn,
   findCli,
@@ -35,6 +36,11 @@ const OWNER_WAIT_MS = 2_500;
 
 const cfg = () => vscode.workspace.getConfiguration("optimaizr");
 const folders = () => (vscode.workspace.workspaceFolders ?? []).map((f) => f.uri.fsPath);
+// The path is run as a program, so only the user's own settings may name it:
+// a folder's .vscode/settings.json is somebody else's file.
+const cliPath = () => cfg().inspect<string>("cliPath")?.globalValue ?? "";
+const BY_HAND =
+  "optimAIzr leaves Claude Code's settings to you (manageSettings is false). Run optimaizr guard print in a terminal for what to add.";
 
 const ALERT: Record<LiveNotice["kind"], string> = {
   expiring: "alerts.cacheExpiring",
@@ -62,7 +68,7 @@ class Hub implements Host {
       onChange: () => this.liveSoon(),
       expiringMs: () => expiringMinutes(cfg().get("alerts.cacheExpiringMinutes", 5)) * 60_000,
     });
-    this.cli = findCli(cfg().get("cliPath", "")) ? "found" : "missing";
+    this.cli = findCli(cliPath()) ? "found" : "missing";
   }
 
   get root(): vscode.Uri {
@@ -77,6 +83,7 @@ class Hub implements Host {
       error: this.error,
       busy: this.busy,
       cli: this.cli,
+      managed: settingsManaged(),
     };
   }
 
@@ -166,10 +173,10 @@ class Hub implements Host {
         void this.analyze(true);
         break;
       case "guard":
-        void (m.on ? this.guardOn(true) : this.run(true, "guard", guardOff));
+        void (m.on ? this.guardOn(true) : this.change(true, "guard", guardOff));
         break;
       case "compact":
-        void this.run(true, "compact", m.on ? () => compactOn() : compactOff);
+        void this.change(true, "compact", m.on ? () => compactOn() : compactOff);
         break;
       case "done": {
         const fix = this.snapshot?.fixes.find((f) => f.rule === m.rule);
@@ -214,6 +221,22 @@ class Hub implements Host {
     this.say(fromView, r);
   }
 
+  /** A change to Claude Code's settings, which someone may keep by hand. */
+  change(
+    fromView: boolean,
+    what: string,
+    act: () => ActionResult | Promise<ActionResult>,
+  ): Promise<void> {
+    if (settingsManaged()) return this.run(fromView, what, act);
+    this.byHand(fromView);
+    return Promise.resolve();
+  }
+
+  private byHand(fromView: boolean): void {
+    this.postState();
+    this.say(fromView, { ok: false, message: BY_HAND });
+  }
+
   private say(fromView: boolean, r: ActionResult): void {
     if (fromView && this.views.size > 0) this.send({ type: "toast", ok: r.ok, text: r.message });
     else if (r.ok) void vscode.window.showInformationMessage(r.message);
@@ -222,21 +245,23 @@ class Hub implements Host {
 
   /** Guard's hooks run the CLI, so without it the first step is installing it. */
   async guardOn(fromView: boolean): Promise<void> {
-    const bin = findCli(cfg().get("cliPath", ""));
+    if (!settingsManaged()) return this.byHand(fromView);
+    const bin = findCli(cliPath());
     this.cli = bin ? "found" : "missing";
     if (bin) return this.run(fromView, "guard", () => setGuard(bin, true));
     this.busy = null;
     this.postState();
     const install = "Install and turn on";
     const pick = await vscode.window.showInformationMessage(
-      "Guard runs through the optimAIzr CLI, which is not on this machine yet. Install it with npm and turn guard on?",
+      `Guard runs through the optimAIzr CLI, which is not on this machine yet. Install optimaizr ${CLI_VERSION} with npm and turn guard on?`,
       install,
       "Not now",
     );
     if (pick !== install) return;
     const term = vscode.window.createTerminal({ name: "optimAIzr" });
     term.show();
-    term.sendText("npm i -g optimaizr && optimaizr guard on");
+    // The version this extension was built and tested with, not whatever is newest.
+    term.sendText(`npm i -g optimaizr@${CLI_VERSION} && optimaizr guard on`);
     this.waitForGuard(fromView);
   }
 
@@ -292,7 +317,8 @@ class Hub implements Host {
       }
       case "cold": {
         const on = "Turn on guard";
-        const guarded = guardApplied();
+        // Nothing to offer where the settings are kept by hand.
+        const guarded = guardApplied() || !settingsManaged();
         const text =
           coldText(n.title, n.rewriteTokens, n.rewriteUsd) +
           (guarded ? "" : " Guard can hold that message next time.");
@@ -306,12 +332,12 @@ class Hub implements Host {
       }
       case "long": {
         const compact = "Compact at 200K";
-        const set = Boolean(this.snapshot?.compaction.at);
+        const set = Boolean(this.snapshot?.compaction.at) || !settingsManaged();
         const pick = await vscode.window.showInformationMessage(
           longText(n.title, n.context, n.rereadUsd),
           ...(set ? [open] : [compact, open]),
         );
-        if (pick === compact) await this.run(false, "compact", () => compactOn());
+        if (pick === compact) await this.change(false, "compact", () => compactOn());
         if (pick === open) this.focus();
         return;
       }
@@ -401,12 +427,14 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.commands.registerCommand("optimaizr.refresh", () => hub.analyze(true)),
     vscode.commands.registerCommand("optimaizr.openReport", () => openReport(hub.root, hub)),
     vscode.commands.registerCommand("optimaizr.guardOn", () => hub.guardOn(false)),
-    vscode.commands.registerCommand("optimaizr.guardOff", () => hub.run(false, "guard", guardOff)),
+    vscode.commands.registerCommand("optimaizr.guardOff", () =>
+      hub.change(false, "guard", guardOff),
+    ),
     vscode.commands.registerCommand("optimaizr.compactOn", () =>
-      hub.run(false, "compact", () => compactOn()),
+      hub.change(false, "compact", () => compactOn()),
     ),
     vscode.commands.registerCommand("optimaizr.compactOff", () =>
-      hub.run(false, "compact", compactOff),
+      hub.change(false, "compact", compactOff),
     ),
     vscode.commands.registerCommand("optimaizr.openSettings", () =>
       vscode.commands.executeCommand(
@@ -417,7 +445,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration("optimaizr.days")) void hub.analyze(true);
       if (e.affectsConfiguration("optimaizr.cliPath")) {
-        hub.cli = findCli(cfg().get("cliPath", "")) ? "found" : "missing";
+        hub.cli = findCli(cliPath()) ? "found" : "missing";
         hub.postState();
       }
     }),

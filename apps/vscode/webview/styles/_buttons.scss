@@ -1,0 +1,101 @@
+@use "tools" as *;
+
+button {
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px solid var(--vscode-button-border, transparent);
+  border-radius: 6px;
+  padding: 6px 12px;
+  cursor: pointer;
+  background: var(--vscode-button-secondaryBackground, var(--card-hi));
+  color: var(--vscode-button-secondaryForeground, var(--fg));
+  font-weight: 500;
+  white-space: nowrap;
+
+  &:hover:not(:disabled) {
+    background: var(--vscode-button-secondaryHoverBackground, var(--card-hi));
+  }
+
+  &.primary {
+    background: var(--vscode-button-background);
+    color: var(--vscode-button-foreground);
+
+    &:hover:not(:disabled) {
+      background: var(--vscode-button-hoverBackground);
+    }
+  }
+
+  &.sm {
+    padding: 3px 10px;
+    font-size: 0.9em;
+  }
+
+  &.wide {
+    width: 100%;
+    padding: 8px 12px;
+  }
+
+  &:disabled {
+    opacity: 0.6;
+    cursor: default;
+  }
+}
+
+.icon-btn {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+
+  &:hover {
+    background: var(--vscode-toolbar-hoverBackground, var(--card-hi));
+    color: var(--fg);
+  }
+
+  &.spinning .ico {
+    animation: spin 0.9s linear infinite;
+  }
+}
+
+.link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 0;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+  color: var(--vscode-textLink-foreground);
+  font-size: 0.92em;
+
+  &:hover {
+    color: var(--vscode-textLink-activeForeground);
+    text-decoration: underline;
+  }
+}
+
+.links {
+  display: flex;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 16px;
+}
+
+button:focus-visible,
+.switch:focus-visible {
+  outline: 1px solid var(--focus);
+  outline-offset: 2px;
+}

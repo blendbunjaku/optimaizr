@@ -43,6 +43,14 @@ const WHATS_NEW: Record<string, string[]> = {
     "Big opencode and Codex histories, 100k+ calls, are read again instead of left out.",
     "On Windows, guard and the update check no longer open a console window.",
   ],
+  "0.13.1": [
+    "Settings kept in a dotfiles repo: optimaizr guard print shows the hooks, nothing is written.",
+    '"manageSettings": false in ~/.optimaizr/config.json stops every write to Claude Code and Codex settings.',
+    "Settings are written in one step, and a symlinked settings file stays a symlink.",
+    "Guard keeps a hash of a held command, not its text, and drops receipts after 30 days.",
+    "Fable 5.2 and GPT-6.1 priced, and a model with no price yet says so.",
+    "Claude Code's Fable limit: profile and live say when Fable is back.",
+  ],
 };
 
 export function updatePath(): string {
@@ -68,6 +76,8 @@ function writeUpdateState(file: string, state: UpdateState): void {
 }
 
 /** True when `a` is a later release than `b` (x.y.z, pre-release tags ignored). */
+const VERSION_SHAPE = /^\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?$/;
+
 export function newer(a: string, b: string): boolean {
   const parts = (v: string) =>
     v
@@ -115,13 +125,15 @@ export function updateLines(
     out.push(`     ${dim("Everything that changed:")} ${blue("optimaizr changelog")}`);
   }
   const due = !state.noticedAt || now - Date.parse(state.noticedAt) > DAY;
-  if (state.latest && newer(state.latest, version) && due) {
+  // The number came over the network and ends up in a command someone pastes.
+  const latest = state.latest && VERSION_SHAPE.test(state.latest) ? state.latest : null;
+  if (latest && newer(latest, version) && due) {
     if (out.length) out.push("");
     out.push(
-      `  ${yellow("✨")} ${bold(`optimAIzr ${state.latest} is available`)} ${dim(`· you have ${version}`)}`,
+      `  ${yellow("✨")} ${bold(`optimAIzr ${latest} is available`)} ${dim(`· you have ${version}`)}`,
     );
     out.push(
-      `     ${blue("npm i -g optimaizr@latest")} ${dim("· what's in it: optimaizr changelog")}`,
+      `     ${blue(`npm i -g optimaizr@${latest}`)} ${dim("· what's in it: optimaizr changelog")}`,
     );
   }
   return out;

@@ -1,0 +1,62 @@
+@use "tools" as *;
+
+.top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 2px 0 4px;
+}
+
+.brand {
+  @include row(8px);
+  min-width: 0;
+}
+
+// The logo keeps the brand's own colors in every theme.
+.logo {
+  .logo-tile {
+    fill: $ink;
+  }
+
+  .logo-chevron {
+    stroke: $paper;
+  }
+
+  .logo-cursor {
+    fill: $baby-blue;
+    animation: blink 1.1s steps(1) infinite;
+  }
+
+  body.vscode-dark & .logo-tile {
+    stroke: tint(var(--fg), 18%);
+    stroke-width: 2;
+  }
+}
+
+.word {
+  font-family: var(--mono);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  font-size: 1.05em;
+
+  b {
+    color: var(--accent);
+  }
+}
+
+.crumb {
+  font-size: 0.85em;
+  color: var(--muted);
+  border-left: 1px solid var(--line);
+  padding-left: 8px;
+}
+
+.top-r {
+  @include row(6px);
+  min-width: 0;
+
+  .small {
+    white-space: nowrap;
+  }
+}

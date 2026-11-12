@@ -3,6 +3,7 @@ import path from "node:path";
 
 import { codexHome, COMPACT_AT } from "@optimaizr/core";
 import { type ChangeEntry, recordChange, recordUndo } from "./changes.js";
+import { HANDS_OFF, settingsManaged, writeError, writeFileAtomic } from "./files.js";
 import { optimaizrDir } from "./ledger.js";
 import { claudeSettingsPath } from "./rewriters.js";
 
@@ -64,8 +65,7 @@ function readLedger(file: string): Change[] {
 }
 
 function writeLedger(file: string, changes: Change[]): void {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, JSON.stringify({ version: 1, changes }, null, 2) + "\n");
+  writeFileAtomic(file, JSON.stringify({ version: 1, changes }, null, 2) + "\n");
 }
 
 /* ------------------------------------------------------------------ *
@@ -93,8 +93,11 @@ function setClaudeEnv(file: string, value: string | null): string | null {
   else env[CLAUDE_ENV] = value;
   const next = { ...settings, env };
   if (Object.keys(env).length === 0) delete (next as Record<string, unknown>).env;
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, JSON.stringify(next, null, 2) + "\n");
+  try {
+    writeFileAtomic(file, JSON.stringify(next, null, 2) + "\n");
+  } catch (err) {
+    return writeError(file, err);
+  }
   return null;
 }
 
@@ -148,9 +151,24 @@ function setCodexKey(file: string, value: string | null): string | null {
     while (insert > 0 && lines[insert - 1]!.trim() === "") insert--;
     lines.splice(insert, 0, `${CODEX_KEY} = ${value}`);
   }
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, lines.join("\n").replace(/\n*$/, "\n"));
+  try {
+    writeFileAtomic(file, lines.join("\n").replace(/\n*$/, "\n"));
+  } catch (err) {
+    return writeError(file, err);
+  }
   return null;
+}
+
+/** The line to add by hand when optimAIzr may not write the file itself. */
+function byHand(agent: CompactAgent, file: string, value: string | null): string {
+  if (value === null) {
+    return agent === "claude-code"
+      ? `${HANDS_OFF}. Take env ${CLAUDE_ENV} out of ${file} yourself.`
+      : `${HANDS_OFF}. Take ${CODEX_KEY} out of ${file} yourself.`;
+  }
+  return agent === "claude-code"
+    ? `${HANDS_OFF}. Add to ${file}: "env": { "${CLAUDE_ENV}": "${value}" }`
+    : `${HANDS_OFF}. Add to the top of ${file}: ${CODEX_KEY} = ${value}`;
 }
 
 /* ------------------------------------------------------------------ *
@@ -179,6 +197,10 @@ export function applyCompaction(
     const current = agent === "claude-code" ? claudeValue(file) : codexValue(file);
     if (current === value) {
       results.push({ agent, ok: true, detail: `${file} already compacts at ${value}` });
+      continue;
+    }
+    if (!settingsManaged()) {
+      results.push({ agent, ok: false, detail: byHand(agent, file, value) });
       continue;
     }
     const error = agent === "claude-code" ? setClaudeEnv(file, value) : setCodexKey(file, value);
@@ -217,9 +239,11 @@ export function undoCompaction(opts: CompactionPaths = {}): CompactionResult[] {
   const p = paths(opts);
   const ledger = readLedger(p.ledger);
   const results: CompactionResult[] = [];
+  const managed = settingsManaged();
   for (const c of ledger) {
-    const error =
-      c.agent === "claude-code"
+    const error = !managed
+      ? byHand(c.agent, c.file, c.previous)
+      : c.agent === "claude-code"
         ? setClaudeEnv(c.file, c.previous)
         : setCodexKey(c.file, c.previous);
     results.push({
