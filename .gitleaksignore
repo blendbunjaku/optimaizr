@@ -1,0 +1,3 @@
+# The made-up bearer token in the receipt masking test, as first committed.
+# Later commits mark that line with gitleaks:allow instead.
+296e6183954449a2432430b9aedf6700608c5bdf:apps/cli/test/trust.test.mjs:curl-auth-header:254

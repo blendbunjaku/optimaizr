@@ -251,7 +251,8 @@ test("a held command is kept as a hash, and its receipt hides what looks like a 
 test("what a receipt shows of a command: its start, secrets starred out", () => {
   assert.equal(shownCommand("npm test"), "npm test");
   assert.equal(
-    shownCommand('curl -H "Authorization: Bearer sk-abc123def456ghi" https://api.example.com'),
+    // A made-up token, so the masking has something to star out.
+    shownCommand('curl -H "Authorization: Bearer sk-abc123def456ghi" https://api.example.com'), // gitleaks:allow
     'curl -H "Authorization: Bearer ***" https://api.example.com',
   );
   assert.equal(shownCommand("API_KEY='a b c' ./run.sh"), "API_KEY=*** ./run.sh");
