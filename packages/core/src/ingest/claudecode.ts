@@ -201,20 +201,32 @@ function isPrompt(rec: {
 }
 
 // Older Claude Code versions write the refusal as text only.
-const LIMIT_TEXT = /hit your (session|weekly) limit/i;
+const LIMIT_TEXT = /(?:hit|reached) your (session|weekly|Fable) limit/i;
+const TEXT_WINDOW: Record<string, string> = {
+  session: "five_hour",
+  weekly: "seven_day",
+  fable: "seven_day_overage_included",
+};
 
 /**
  * A request Claude Code was refused because the plan's window ran out. It is
  * written as a synthetic reply; newer versions add `quotaLimits` with the
- * window and its reset, older ones only the text.
+ * window and its reset, older ones only the text. A Fable limit refusal has
+ * no `quotaLimits`, only the `rate_limit_info` it was refused on.
  */
 function limitHitOf(rec: any, file: string): LimitHitRecord | null {
   if (!rec.isApiErrorMessage || typeof rec.timestamp !== "string") return null;
   if (typeof rec.error === "string" && rec.error !== "rate_limit") return null;
-  const q = rec.quotaLimits;
+  const info = rec.apiErrorParams?.rate_limit_info;
+  const q =
+    rec.quotaLimits?.status === "rejected"
+      ? rec.quotaLimits
+      : info?.status === "rejected" && typeof info.rateLimitType === "string"
+        ? info
+        : null;
   let window: string;
   let resetsAt: string | undefined;
-  if (q?.status === "rejected") {
+  if (q) {
     window = typeof q.rateLimitType === "string" ? q.rateLimitType : "unknown";
     if (typeof q.resetsAt === "number") resetsAt = new Date(q.resetsAt * 1000).toISOString();
   } else {
@@ -224,7 +236,7 @@ function limitHitOf(rec: any, file: string): LimitHitRecord | null {
       : String(content ?? "");
     const m = LIMIT_TEXT.exec(text);
     if (!m) return null;
-    window = m[1]!.toLowerCase() === "weekly" ? "seven_day" : "five_hour";
+    window = TEXT_WINDOW[m[1]!.toLowerCase()]!;
   }
   return {
     source: "claude-code",

@@ -14,6 +14,22 @@ export type Price = Rates & { label: string; above?: Rates & { tokens: number } 
 
 /** USD per million tokens, the rates in force when this file was written. */
 export const PRICES: Record<string, Price> = {
+  "claude-fable-5-2": {
+    label: "Fable 5.2",
+    input: 8,
+    output: 40,
+    cacheRead: 0.2,
+    cacheWrite: 10,
+    cacheWrite1h: 16,
+  },
+  "claude-mythos-5-2": {
+    label: "Mythos 5.2",
+    input: 8,
+    output: 40,
+    cacheRead: 0.2,
+    cacheWrite: 10,
+    cacheWrite1h: 16,
+  },
   "claude-fable-5-1": {
     label: "Fable 5.1",
     input: 10,

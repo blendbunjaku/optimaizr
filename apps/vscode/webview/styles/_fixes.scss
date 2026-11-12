@@ -1,0 +1,102 @@
+@use "tools" as *;
+
+.fix-list {
+  @include stack(6px);
+}
+
+.fix {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--card);
+  transition: border-color 0.15s;
+
+  &:hover {
+    border-color: tint(var(--fg), 22%);
+  }
+
+  &[open] {
+    background: var(--card-hi);
+  }
+
+  summary {
+    list-style: none;
+    @include row(8px);
+    padding: 8px 8px 8px 10px;
+    cursor: pointer;
+    border-radius: 8px;
+
+    &::-webkit-details-marker {
+      display: none;
+    }
+
+    &:focus-visible {
+      outline: 1px solid var(--focus);
+      outline-offset: -1px;
+    }
+  }
+
+  .chev {
+    color: var(--muted);
+    transition: transform 0.15s;
+  }
+
+  &[open] .chev {
+    transform: rotate(90deg);
+  }
+}
+
+.fix-t {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  flex: 1;
+
+  b {
+    overflow-wrap: anywhere;
+  }
+
+  .small {
+    font-family: var(--mono);
+  }
+}
+
+.fix-a {
+  flex: none;
+}
+
+.fix-b {
+  padding: 2px 12px 12px;
+  @include stack(8px);
+  font-size: 0.94em;
+}
+
+.fix-u {
+  @include dashed-top(10px);
+}
+
+.done-row {
+  @include row(10px);
+  flex-wrap: wrap;
+}
+
+.more {
+  padding-left: 2px;
+}
+
+.tier {
+  font-family: var(--mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 2px 6px;
+  border-radius: 5px;
+  flex: none;
+
+  @each $kind, $color in (fix: var(--save), try: var(--warn), test: var(--accent)) {
+    &.#{$kind} {
+      color: $color;
+      background: tint($color, 16%);
+    }
+  }
+}

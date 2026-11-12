@@ -1,0 +1,50 @@
+@use "tools" as *;
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  @include stack(9px);
+  min-width: 0;
+}
+
+.card-h {
+  @include row(7px);
+  margin: 0;
+  @include caps(0.82em, 0.06em);
+
+  .right {
+    margin-left: auto;
+    text-transform: none;
+    letter-spacing: 0;
+    font-weight: 400;
+  }
+}
+
+.eyebrow {
+  @include caps(0.78em, 0.08em);
+}
+
+.label {
+  display: block;
+  @include caps(0.78em, 0.05em);
+  margin-bottom: 2px;
+}
+
+.cap {
+  font-size: 0.88em;
+  color: var(--muted);
+
+  .ico {
+    margin-right: 5px;
+  }
+}
+
+.center {
+  text-align: center;
+}
+
+.lead {
+  font-size: 1em;
+}

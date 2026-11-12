@@ -1,0 +1,73 @@
+@use "tools" as *;
+
+// The footer, the loading placeholders and the toast for what a click did.
+
+.foot {
+  @include stack(10px);
+  padding-top: 4px;
+
+  .cap .ico {
+    margin-right: 4px;
+  }
+}
+
+.skel {
+  height: 12px;
+  border-radius: 6px;
+  background: linear-gradient(90deg, var(--track) 0%, tint(var(--fg), 18%) 50%, var(--track) 100%);
+  background-size: 200% 100%;
+  animation: shimmer 1.3s ease-in-out infinite;
+
+  &-big {
+    height: 44px;
+    width: 55%;
+    border-radius: 8px;
+  }
+
+  &.short {
+    width: 70%;
+  }
+}
+
+.toast {
+  position: fixed;
+  left: 12px;
+  right: 12px;
+  bottom: 12px;
+  z-index: 10;
+  padding: 9px 12px;
+  border-radius: 8px;
+  background: var(--vscode-notifications-background, var(--bg));
+  color: var(--vscode-notifications-foreground, var(--fg));
+  border: 1px solid var(--line);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.25);
+  font-size: 0.92em;
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  transform: translateY(8px);
+  opacity: 0;
+  transition:
+    opacity 0.2s,
+    transform 0.2s;
+  pointer-events: none;
+
+  &.show {
+    transform: none;
+    opacity: 1;
+  }
+
+  .ico {
+    color: var(--save);
+    margin-top: 1px;
+  }
+
+  &.bad .ico {
+    color: var(--waste);
+  }
+
+  body.report & {
+    left: auto;
+    width: 360px;
+  }
+}

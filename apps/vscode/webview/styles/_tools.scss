@@ -1,0 +1,52 @@
+// Helpers every partial can use. They expand where they are called, so the
+// rules come out in the order they are written.
+
+// The brand's fixed colors, for the logo and the dark theme's accent.
+$ink: #111110;
+$paper: #f1efe8;
+$baby-blue: #8ccbff;
+
+$ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+
+// A theme color at a strength, laid over transparent or over another color.
+@function tint($color, $amount, $over: transparent) {
+  @return color-mix(in srgb, $color $amount, $over);
+}
+
+@mixin row($gap) {
+  display: flex;
+  align-items: center;
+  gap: $gap;
+}
+
+@mixin stack($gap) {
+  display: flex;
+  flex-direction: column;
+  gap: $gap;
+}
+
+@mixin bare-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+@mixin circle($size) {
+  width: $size;
+  height: $size;
+  border-radius: 50%;
+}
+
+// The small uppercase labels: card titles, eyebrows and field labels.
+@mixin caps($size, $tracking) {
+  font-size: $size;
+  font-weight: 600;
+  letter-spacing: $tracking;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+@mixin dashed-top($space: 8px) {
+  border-top: 1px dashed var(--line);
+  padding-top: $space;
+}

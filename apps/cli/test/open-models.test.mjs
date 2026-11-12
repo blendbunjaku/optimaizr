@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 
 import {
   allModels,
+  borrowedGap,
   costOf,
   isPeak,
   normalizeUsage,
@@ -193,6 +194,33 @@ test("the summary counts calls with no price, and those priced from opencode's f
     pricingGaps({ unpriced: { calls: 0, models: [] }, stated: { calls: 0, usd: 0 } }),
     [],
   );
+});
+
+test("calls on a newer model priced as an older one are counted and named", () => {
+  const usage = { input_tokens: 1000, output_tokens: 100 };
+  const events = [
+    event("a", "claude-fable-5-3", costOf(usage, "claude-fable-5-3")),
+    event("b", "claude-fable-5-3", costOf(usage, "claude-fable-5-3")),
+    event("c", "claude-fable-5-2", costOf(usage, "claude-fable-5-2")),
+    event("d", "mystery-1", costOf(usage, "mystery-1")),
+  ];
+  const s = summarize({
+    events,
+    window: { from: events[0].ts, to: events[0].ts, days: 1 },
+    sources: [],
+    warnings: [],
+  });
+  assert.deepEqual(s.borrowed, {
+    calls: 2,
+    models: [{ model: "claude-fable-5-3", as: "Fable 5.2" }],
+  });
+  assert.equal(s.unpriced.calls, 1);
+  const lines = pricingGaps(s).join("\n");
+  assert.match(lines, /2 calls priced as an older model:/);
+  assert.match(lines, /claude-fable-5-3 as Fable 5\.2, no price of its own here yet\./);
+  assert.match(lines, /1 call counted as \$0/);
+  assert.deepEqual(borrowedGap({ borrowed: { calls: 0, models: [] } }), []);
+  assert.deepEqual(borrowedGap({}), []);
 });
 
 const CLI = fileURLToPath(new URL("../dist/cli.js", import.meta.url));

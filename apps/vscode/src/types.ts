@@ -75,6 +75,8 @@ export interface Snapshot {
   results: ResultItem[];
   /** "Last 7 days: ..." from weekCompare, or null without two weeks behind it. */
   week: string | null;
+  /** Claude Code's Fable limit while it holds: when Fable was refused and when it is back. */
+  fable: { ts: string; resetsAt: string } | null;
   rate: { usdPerPercent: number; basis: string } | null;
   /** Conversation titles by session id. */
   titles: Record<string, string>;
@@ -125,6 +127,8 @@ export interface ViewState {
   /** The action in flight, so its button can show it is working. */
   busy: string | null;
   cli: "found" | "missing" | "unknown";
+  /** False when the user keeps Claude Code's settings by hand: no button writes them. */
+  managed: boolean;
 }
 
 export type FromView =

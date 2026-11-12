@@ -1,4 +1,4 @@
-import { addCost, emptyCost, priceFor, ratesFor } from "../pricing.js";
+import { addCost, borrowedPrice, emptyCost, priceFor, ratesFor } from "../pricing.js";
 import type { CostBreakdown } from "../pricing.js";
 import type { CallEvent, Dataset } from "../types.js";
 
@@ -166,6 +166,8 @@ export interface Summary {
 
   /** Calls on models with no price card here, counted at $0, busiest model first. */
   unpriced: { calls: number; models: string[] };
+  /** Calls on a newer version with no card here, priced as the older one named, busiest first. */
+  borrowed: { calls: number; models: Array<{ model: string; as: string }> };
   /** Calls with no card here priced from the agent's own figure (opencode's). */
   stated: { calls: number; usd: number };
 }
@@ -243,6 +245,7 @@ export function summarize(data: Dataset, opts: SummaryOptions = {}): Summary {
   let thinkingCost = 0;
   const latencies: number[] = [];
   const unpricedBy = new Map<string, number>();
+  const borrowedBy = new Map<string, { as: string | null; calls: number }>();
   const stated = { calls: 0, usd: 0 };
 
   for (const e of data.events) {
@@ -261,6 +264,12 @@ export function summarize(data: Dataset, opts: SummaryOptions = {}): Summary {
     }
     if (typeof e.latencyMs === "number") latencies.push(e.latencyMs);
     if (e.cost.unpriced) unpricedBy.set(e.model, (unpricedBy.get(e.model) ?? 0) + 1);
+    else {
+      let b = borrowedBy.get(e.model);
+      if (!b)
+        borrowedBy.set(e.model, (b = { as: borrowedPrice(e.model)?.label ?? null, calls: 0 }));
+      b.calls++;
+    }
     if (e.cost.stated) {
       stated.calls++;
       stated.usd += e.cost.total;
@@ -357,5 +366,14 @@ export function summarize(data: Dataset, opts: SummaryOptions = {}): Summary {
       models: [...unpricedBy].sort((a, b) => b[1] - a[1]).map(([m]) => m),
     },
     stated,
+    borrowed: borrowedOf(borrowedBy),
+  };
+}
+
+function borrowedOf(by: Map<string, { as: string | null; calls: number }>): Summary["borrowed"] {
+  const rows = [...by].filter(([, b]) => b.as !== null).sort((a, b) => b[1].calls - a[1].calls);
+  return {
+    calls: rows.reduce((t, [, b]) => t + b.calls, 0),
+    models: rows.map(([model, b]) => ({ model, as: b.as! })),
   };
 }

@@ -2,12 +2,24 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { lib, sandbox, snapshot } from "./helpers.mjs";
 
 const home = sandbox("actions");
-const { compactOn, compactOff, markDone, undoDone, findCli, guardOff, guardNow, withLocalState } =
-  lib;
+const {
+  CLI_VERSION,
+  compactOn,
+  compactOff,
+  markDone,
+  undoDone,
+  findCli,
+  guardOff,
+  guardNow,
+  withLocalState,
+} = lib;
+const here = path.dirname(fileURLToPath(import.meta.url));
+const json = (...parts) => JSON.parse(fs.readFileSync(path.join(here, ...parts), "utf8"));
 const settings = () => {
   try {
     return JSON.parse(fs.readFileSync(path.join(home, ".claude", "settings.json"), "utf8"));
@@ -84,4 +96,50 @@ test("the CLI is found on PATH, or where the setting points", () => {
   assert.equal(findCli("", { PATH: bin }), file);
   assert.equal(findCli(file, {}), file);
   assert.equal(findCli(path.join(home, "missing"), { PATH: bin }), null);
+});
+
+test("the setting has to be a full path to a file on this machine", () => {
+  const bin = path.join(home, "bin");
+  const name = process.platform === "win32" ? "optimaizr.cmd" : "optimaizr";
+  // A relative path would be looked up from whatever folder is open.
+  assert.equal(findCli(`./${name}`, { PATH: bin }), null);
+  assert.equal(findCli(name, { PATH: bin }), null);
+  assert.equal(findCli(bin, {}), null);
+  assert.equal(findCli("\\\\server\\share\\optimaizr.cmd", { PATH: bin }), null);
+  assert.equal(findCli("//server/share/optimaizr", { PATH: bin }), null);
+});
+
+test("a workspace can never name the program the extension runs", () => {
+  const pkg = json("..", "package.json");
+  const prop = pkg.contributes.configuration.properties["optimaizr.cliPath"];
+  assert.equal(prop.scope, "machine");
+  const trust = pkg.capabilities.untrustedWorkspaces;
+  assert.equal(trust.supported, "limited");
+  assert.deepEqual(trust.restrictedConfigurations, ["optimaizr.cliPath"]);
+  // And the code reads the user's value, not the merged one a folder can set.
+  const src = fs.readFileSync(path.join(here, "..", "src", "extension.ts"), "utf8");
+  assert.doesNotMatch(src, /get\("cliPath"/);
+  assert.match(src, /inspect<string>\("cliPath"\)\?\.globalValue/);
+});
+
+test("the extension installs the CLI version it was built with", () => {
+  assert.equal(CLI_VERSION, json("..", "..", "cli", "package.json").version);
+  const src = fs.readFileSync(path.join(here, "..", "src", "extension.ts"), "utf8");
+  assert.match(src, /npm i -g optimaizr@\$\{CLI_VERSION\} && optimaizr guard on/);
+});
+
+test("with manageSettings false nothing here writes Claude Code's settings", () => {
+  const file = path.join(home, ".claude", "settings.json");
+  const config = path.join(home, ".optimaizr", "config.json");
+  fs.writeFileSync(file, JSON.stringify({ theme: "dark" }));
+  fs.writeFileSync(config, JSON.stringify({ manageSettings: false }));
+  try {
+    const on = compactOn();
+    assert.equal(on.ok, false);
+    assert.match(on.message, /manageSettings is false/);
+    assert.match(on.message, /CLAUDE_CODE_AUTO_COMPACT_WINDOW/);
+    assert.deepEqual(settings(), { theme: "dark" });
+  } finally {
+    fs.rmSync(config);
+  }
 });

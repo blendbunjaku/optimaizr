@@ -1,4 +1,4 @@
-import { priceFor } from "../pricing.js";
+import { modelLabel, priceFor } from "../pricing.js";
 import { setStatus } from "./recommendations.js";
 import { verificationModeOf } from "../verify/state.js";
 import type { OptimizationFinding, UsageEvent, VerifyCandidate } from "../domain/types.js";
@@ -101,7 +101,7 @@ export function proposedChange(f: OptimizationFinding, traffic?: Traffic): Propo
   // One target, or one per model (Opus to Sonnet, Sonnet to Haiku): a rewriter
   // asks `targetFor` for each slice either way.
   if (c?.kind === "swap-model" && (c.to || c.targetFor)) {
-    const from = f.affected.models.map((m) => priceFor(m)?.label ?? m).join(" / ");
+    const from = f.affected.models.map(modelLabel).join(" / ");
     const targets = c.to
       ? [c.to]
       : [...new Set(f.affected.models.map((m) => c.targetFor?.(m)).filter((m) => m !== undefined))];

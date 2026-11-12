@@ -4,7 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-import { ingestClaudeCode } from "@optimaizr/core";
+import { fableStop, ingestClaudeCode } from "@optimaizr/core";
 import { findWaste, RULE_COUNT } from "@optimaizr/core";
 import { classify } from "@optimaizr/core";
 import { buildDrillTree, drillTo } from "@optimaizr/core";
@@ -488,6 +488,56 @@ test("plan limit hits are read from the transcript, one per window", async () =>
       ["2026-09-25T18:00:00.000Z", "five_hour", undefined],
       ["2026-09-26T18:00:00.000Z", "seven_day", undefined],
     ],
+  );
+});
+
+test("a Fable limit stop is read from rate_limit_info, which has no quotaLimits", async () => {
+  // As Claude Code 2.1.322 writes it when the weekly Fable allowance runs out.
+  const fable = (ts, uuid) => ({
+    ...refusal({
+      ts,
+      uuid,
+      text: "You've reached your Fable limit. Switch to another model, or manage usage credits at claude.ai, to continue.",
+    }),
+    apiError: "model_requires_usage_credits",
+    apiErrorParams: {
+      rate_limit_info: {
+        status: "rejected",
+        isUsingOverage: false,
+        rateLimitType: "seven_day_overage_included",
+        resetsAt: 1794816000,
+      },
+    },
+  });
+  const records = [
+    assistant({ id: "m1", ts: "2026-11-11T21:50:00.000Z", content: bash(1) }),
+    fable("2026-11-11T22:10:00.000Z", "f1"),
+    fable("2026-11-11T22:12:00.000Z", "f2"),
+    // An older Claude Code writes the text only, with no reset.
+    refusal({
+      ts: "2026-11-04T10:00:00.000Z",
+      uuid: "f3",
+      text: "You've reached your Fable limit.",
+    }),
+  ];
+  const data = await ingestClaudeCode({ root: writeFixture(records) });
+
+  assert.deepEqual(
+    data.limitHits.map((h) => [h.ts, h.window, h.resetsAt]),
+    [
+      ["2026-11-04T10:00:00.000Z", "seven_day_overage_included", undefined],
+      ["2026-11-11T22:10:00.000Z", "seven_day_overage_included", "2026-11-16T08:00:00.000Z"],
+    ],
+  );
+  const now = Date.parse("2026-11-12T09:00:00Z");
+  assert.deepEqual(fableStop(data.limitHits, now), {
+    ts: "2026-11-11T22:10:00.000Z",
+    resetsAt: "2026-11-16T08:00:00.000Z",
+  });
+  assert.equal(
+    fableStop(data.limitHits, Date.parse("2026-11-16T08:00:01Z")),
+    null,
+    "after the reset",
   );
 });
 

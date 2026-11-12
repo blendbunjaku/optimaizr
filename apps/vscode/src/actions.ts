@@ -25,9 +25,27 @@ export interface ActionResult {
 
 const WINDOWS = process.platform === "win32";
 
-/** The optimaizr CLI: the setting when it points at a file, else the first one on PATH. */
+/** The CLI this extension was built with: what "Install and turn on" installs. */
+export const CLI_VERSION = "0.13.1";
+
+/** A Windows network path: a file there is someone else's to change. */
+const remote = (file: string) => /^[\\/]{2}/.test(file);
+
+/**
+ * The optimaizr CLI: the setting when it is a full path to a file on this
+ * machine, else the first one on PATH. The setting is run as a program, so the
+ * caller passes only what the user's own settings say, never a workspace's.
+ */
 export function findCli(setting = "", env: NodeJS.ProcessEnv = process.env): string | null {
-  if (setting.trim()) return fs.existsSync(setting.trim()) ? setting.trim() : null;
+  const set = setting.trim();
+  if (set) {
+    if (!path.isAbsolute(set) || remote(set)) return null;
+    try {
+      return fs.statSync(set).isFile() ? set : null;
+    } catch {
+      return null;
+    }
+  }
   const names = WINDOWS ? ["optimaizr.cmd", "optimaizr.exe", "optimaizr"] : ["optimaizr"];
   const dirs = (env.PATH ?? env.Path ?? "").split(path.delimiter).filter(Boolean);
   // An editor started from the Dock can miss the shell's PATH; npm's usual homes.

@@ -26,6 +26,7 @@ import {
   compactionStatus,
   guardApplied,
   guardHook,
+  guardHooks,
   guardOffered,
   type HookInput,
   markGuardOffered,
@@ -35,6 +36,7 @@ import {
   saveCompactPoint,
   savePace,
   saveWeekLine,
+  settingsManaged,
   undoGuard,
 } from "@optimaizr/local";
 import type { Args } from "../args.js";
@@ -62,9 +64,10 @@ export function cmdGuard(args: Args): void | Promise<void> {
   if (what === undefined || what === "status") return guardStatus();
   if (what === "week") return guardWeek(args);
   if (what === "pace") return guardPace(args);
+  if (what === "print") return guardPrint();
   console.log("");
   console.log(
-    `  ${red("usage:")} optimaizr guard ${dim("[")}on ${dim("|")} off ${dim("|")} week${dim("]")}`,
+    `  ${red("usage:")} optimaizr guard ${dim("[")}on ${dim("|")} off ${dim("|")} print ${dim("|")} week${dim("]")}`,
   );
   console.log("");
   process.exitCode = 1;
@@ -158,8 +161,31 @@ function learnCompactPoint(data: Pick<Dataset, "compactions">): void {
   if (point) saveCompactPoint({ ...point, setting });
 }
 
+/**
+ * `optimaizr guard print`: the hooks `guard on` would add, as JSON, for
+ * settings kept in a dotfiles repo. Nothing is written.
+ */
+function guardPrint(): void {
+  const command = ownCommand("guard hook");
+  if (!command) {
+    console.error(
+      `\n  ${red("Not printed")} ${dim("optimAIzr is running through npx. Install it first: npm i -g optimaizr")}\n`,
+    );
+    process.exitCode = 1;
+    return;
+  }
+  // Only the JSON goes to stdout, so it pipes straight into a file or jq.
+  if (process.stderr.isTTY) {
+    console.error(
+      `\n  ${dim("Merge this into ~/.claude/settings.json, next to your own hooks. The paths are this install's.")}\n`,
+    );
+  }
+  console.log(JSON.stringify({ hooks: guardHooks(command) }, null, 2));
+}
+
 /** `optimaizr guard on`, also reached as `apply guard`. */
 export function guardOn(): void {
+  if (!settingsManaged()) return guardPrint();
   const r = applyGuard(ownCommand("guard hook"));
   console.log("");
   const tag = !r.ok ? red("Not applied") : r.changed ? green("Applied") : green("Already on");
@@ -223,6 +249,12 @@ export async function offerGuard(
   console.log(`  ${bold(`Guard would have held ${plural(n, "message")}`)}`);
   for (const line of wrap(text, 78)) console.log(`  ${line}`);
   console.log("");
+  if (!settingsManaged()) {
+    // Settings kept by hand: show what to add, never ask to write it.
+    console.log(`  ${dim("The hooks to add to your settings:")} ${blue("optimaizr guard print")}`);
+    console.log("");
+    return;
+  }
   const more =
     "It adds optimAIzr's hooks to ~/.claude/settings.json, next to your own, and also holds a whole big file read and a third try of a failing command, once each.";
   for (const line of wrap(more, 78)) console.log(`  ${dim(line)}`);

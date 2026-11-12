@@ -10,7 +10,7 @@ import { budgetStatus, type BudgetOptions, type BudgetStatus } from "./budget.js
 import { sessionStats, type SessionStats } from "./sessions.js";
 import { planView, type PlanView } from "./plan.js";
 import { buildTasks, contextOf } from "./tasks.js";
-import { priceFor } from "../pricing.js";
+import { modelLabel, priceFor } from "../pricing.js";
 import { codexPlanView, type CodexPlanView } from "./codex-plan.js";
 import { coveredRules, type AppliedChange, type ChangeResult } from "./results.js";
 import { toRecommendations } from "../recommend/recommendations.js";
@@ -182,7 +182,7 @@ function habitsOf(
     const top = [...bySpend]
       .sort((a, b) => b[1] - a[1])
       .slice(0, 1)
-      .map(([m]) => priceFor(m)?.label ?? m)
+      .map(([m]) => modelLabel(m))
       .join("");
     habits.push({
       key: "model-fit",

@@ -8,6 +8,7 @@ import {
   createTranscriptState,
   takeSettled,
 } from "@optimaizr/core";
+import { HANDS_OFF, settingsManaged, writeError, writeFileAtomic } from "./files.js";
 import { optimaizrDir } from "./ledger.js";
 import { claudeProjectsRoot } from "./live.js";
 import { claudeSettingsPath } from "./rewriters.js";
@@ -117,9 +118,14 @@ export function readSettings(file: string): Record<string, unknown> | string {
   }
 }
 
-export function writeSettings(file: string, settings: Record<string, unknown>): void {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, JSON.stringify(settings, null, 2) + "\n");
+/** Write Claude Code's settings in one step. Null when written, else why not. */
+export function writeSettings(file: string, settings: Record<string, unknown>): string | null {
+  try {
+    writeFileAtomic(file, JSON.stringify(settings, null, 2) + "\n");
+    return null;
+  } catch (err) {
+    return writeError(file, err);
+  }
 }
 
 function commandOf(settings: Record<string, unknown>): string | null {
@@ -193,10 +199,16 @@ export function applyStatusline(
       detail: `Claude Code already runs your own status line (${current}); optimAIzr leaves it alone. To show both, print the output of \`optimaizr statusline\` from your script, passing it the same input.`,
     };
   }
-  writeSettings(p.settings, {
-    ...settings,
-    statusLine: { type: "command", command, refreshInterval: REFRESH_SECONDS },
-  });
+  const statusLine = { type: "command", command, refreshInterval: REFRESH_SECONDS };
+  if (!settingsManaged()) {
+    return {
+      ok: false,
+      changed: false,
+      detail: `${HANDS_OFF}. Add to ${p.settings}: "statusLine": ${JSON.stringify(statusLine)}`,
+    };
+  }
+  const error = writeSettings(p.settings, { ...settings, statusLine });
+  if (error) return { ok: false, changed: false, detail: error };
   fs.mkdirSync(path.dirname(p.record), { recursive: true });
   fs.writeFileSync(
     p.record,
@@ -216,12 +228,23 @@ export function applyStatusline(
 /** Take the status line out again. Null when optimAIzr had not set one. */
 export function undoStatusline(opts: StatuslinePaths = {}): StatuslineResult | null {
   const p = paths(opts);
-  fs.rmSync(p.record, { force: true });
   const settings = readSettings(p.settings);
   if (typeof settings === "string") return { ok: false, changed: false, detail: settings };
-  if (!isOurs(commandOf(settings))) return null;
+  if (!isOurs(commandOf(settings))) {
+    fs.rmSync(p.record, { force: true });
+    return null;
+  }
+  if (!settingsManaged()) {
+    return {
+      ok: false,
+      changed: false,
+      detail: `${HANDS_OFF}. Take "statusLine" out of ${p.settings} yourself.`,
+    };
+  }
   const next = { ...settings };
   delete next.statusLine;
-  writeSettings(p.settings, next);
+  const error = writeSettings(p.settings, next);
+  if (error) return { ok: false, changed: false, detail: error };
+  fs.rmSync(p.record, { force: true });
   return { ok: true, changed: true, detail: `statusLine removed from ${p.settings}.` };
 }

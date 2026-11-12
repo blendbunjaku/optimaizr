@@ -1,5 +1,5 @@
 import type { CompactionRecord, UsageEvent } from "../domain/types.js";
-import { allModels, priceFor, ratesFor } from "../pricing.js";
+import { allModels, modelLabel, priceFor, ratesFor } from "../pricing.js";
 import type { CacheState } from "./cache-watch.js";
 import { coldResumes } from "./cold.js";
 import { sessionBlocks } from "./plan.js";
@@ -367,7 +367,7 @@ export function coldHoldReason(
     usdPerPercent?: number | null;
   },
 ): string {
-  const label = priceFor(s.event.model)?.label ?? s.event.model;
+  const label = modelLabel(s.event.model);
   const rate = opts.usdPerPercent && opts.usdPerPercent > 0 ? opts.usdPerPercent : null;
   // On a plan the window is what runs out, so it leads and the dollars follow.
   const share = (usd: number) => {

@@ -1,0 +1,82 @@
+@use "tools" as *;
+
+.hero {
+  position: relative;
+  overflow: hidden;
+  padding: 16px 16px 14px;
+  gap: 8px;
+
+  &.glow::before {
+    content: "";
+    position: absolute;
+    inset: -40% -30% auto auto;
+    width: 220px;
+    height: 220px;
+    background: radial-gradient(closest-side, tint(var(--accent), 22%), transparent);
+    pointer-events: none;
+  }
+
+  > * {
+    position: relative;
+  }
+}
+
+.big {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-wrap: wrap;
+  line-height: 1;
+  margin: 2px 0 2px;
+}
+
+.big-pre,
+.big-post {
+  color: var(--muted);
+  font-size: 0.95em;
+}
+
+.big-num {
+  font-size: clamp(38px, 15vw, 56px);
+  font-weight: 700;
+  letter-spacing: -0.04em;
+  color: var(--accent);
+
+  body.report & {
+    font-size: 72px;
+  }
+}
+
+.hero h2 {
+  margin: 0;
+  font-size: 1.35em;
+  letter-spacing: -0.01em;
+}
+
+.hero-foot {
+  display: flex;
+  gap: 7px;
+  align-items: flex-start;
+  font-size: 0.9em;
+  color: var(--muted);
+  border-top: 1px solid var(--line);
+  padding-top: 9px;
+  margin-top: 2px;
+
+  b {
+    color: var(--fg);
+
+    &.accent {
+      color: var(--accent);
+    }
+  }
+
+  .ico {
+    margin-top: 2px;
+    color: var(--accent);
+  }
+
+  &.good .ico {
+    color: var(--save);
+  }
+}

@@ -2,7 +2,7 @@
   "name": "optimaizr-vscode",
   "displayName": "optimAIzr: Claude Code, Codex & opencode savings",
   "description": "Spend fewer tokens on the same work. What Claude Code, Codex and opencode cost you and what you could save, plus Claude Code's cache countdown, context size and 5-hour window at a glance, a heads-up before a cache expires, and one-click fixes. Everything stays on your machine.",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "private": true,
   "publisher": "optimAIzr",
   "license": "MIT",
@@ -49,7 +49,11 @@
   ],
   "capabilities": {
     "untrustedWorkspaces": {
-      "supported": true
+      "supported": "limited",
+      "restrictedConfigurations": [
+        "optimaizr.cliPath"
+      ],
+      "description": "In a workspace you have not trusted, optimAIzr reads your usage as usual but only runs the optimaizr CLI found on your PATH or set in your user settings."
     },
     "virtualWorkspaces": false
   },
@@ -192,7 +196,8 @@
         "optimaizr.cliPath": {
           "type": "string",
           "default": "",
-          "markdownDescription": "Path to the `optimaizr` CLI, which turns guard on and off. Empty looks for it on your PATH."
+          "scope": "machine",
+          "markdownDescription": "Absolute path to the `optimaizr` CLI, which turns guard on and off. Empty looks for it on your PATH. Only your user settings can set it, never a workspace."
         }
       }
     }
@@ -208,6 +213,7 @@
     "@optimaizr/core": "*",
     "@optimaizr/local": "*",
     "@types/vscode": "1.90.0",
-    "esbuild": "^0.28.2"
+    "esbuild": "^0.28.2",
+    "sass": "~1.107.1"
   }
 }

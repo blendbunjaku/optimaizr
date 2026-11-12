@@ -180,9 +180,29 @@ function tierLines(totals: { fix: number; try: number }, levers: OptimizationFin
 
 const plural = (n: number, word: string) => `${n.toLocaleString()} ${word}${n === 1 ? "" : "s"}`;
 
+/**
+ * Calls on a newer model priced as an older one, until it has a price here:
+ * "93 calls priced as an older model: claude-fable-5-3 as Fable 5.2".
+ */
+export function borrowedGap(s: Partial<Pick<Summary, "borrowed">>): string[] {
+  const b = s.borrowed;
+  if (!b || b.calls === 0) return [];
+  const shown = b.models
+    .slice(0, 2)
+    .map((m) => `${m.model} as ${m.as}`)
+    .join(", ");
+  const more = b.models.length > 2 ? ` and ${b.models.length - 2} more` : "";
+  return [
+    `  ${yellow(`${plural(b.calls, "call")} priced as an older model:`)} ${dim(`${shown}${more}, no price of its own here yet.`)}`,
+    `  ${dim("A newer optimAIzr may have it, or add it in ~/.optimaizr/models.json.")}`,
+  ];
+}
+
 /** What the total leaves out or took from elsewhere: models with no price here. */
-export function pricingGaps(s: Pick<Summary, "unpriced" | "stated">): string[] {
-  const out: string[] = [];
+export function pricingGaps(
+  s: Pick<Summary, "unpriced" | "stated"> & Partial<Pick<Summary, "borrowed">>,
+): string[] {
+  const out: string[] = [...borrowedGap(s)];
   if (s.unpriced.calls > 0) {
     const shown = s.unpriced.models.slice(0, 2).join(", ");
     const more = s.unpriced.models.length > 2 ? ` and ${s.unpriced.models.length - 2} more` : "";

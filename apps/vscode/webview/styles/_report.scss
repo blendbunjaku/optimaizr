@@ -1,0 +1,63 @@
+@use "tools" as *;
+
+// What only the report page shows, and the results it shares with the sidebar.
+
+.parts {
+  @include stack(6px);
+}
+
+.part {
+  display: grid;
+  grid-template-columns: 1fr auto 48px;
+  align-items: center;
+  gap: 10px;
+
+  .sw {
+    margin-right: 8px;
+  }
+
+  b {
+    text-align: right;
+  }
+}
+
+.win {
+  border-color: tint(var(--accent), 45%, var(--line));
+  background: tint(var(--accent), 6%, var(--card));
+}
+
+.win-t {
+  @include row(8px);
+  margin: 0;
+  font-size: 1.2em;
+}
+
+.results {
+  @include bare-list;
+  @include stack(8px);
+
+  li {
+    @include stack(2px);
+  }
+}
+
+.verdict {
+  font-size: 0.9em;
+  color: var(--muted);
+
+  &.working {
+    color: var(--save);
+  }
+
+  &.worse {
+    color: var(--waste);
+  }
+}
+
+.week {
+  @include dashed-top;
+}
+
+.fable {
+  margin-top: 8px;
+}

@@ -517,7 +517,7 @@ test("an uncatalogued model takes opencode's own cost, and $0 stays unpriced", (
     rows({
       sessions: [session({ model: null })],
       messages: [
-        message("msg_1", { modelID: "gpt-6.1-sol", providerID: "openai" }),
+        message("msg_1", { modelID: "gpt-6.2-sol", providerID: "openai" }),
         message("msg_2", { modelID: "qwen3-coder-plus", providerID: "alibaba" }, T0 + 2000),
       ],
       parts: [step("prt_1", "msg_1", TOKENS), free],

@@ -1,0 +1,46 @@
+// The sidebar is one column. The report is a wider page, two columns when
+// there is room.
+
+#app > [data-s] {
+  display: contents;
+}
+
+body.report {
+  #app {
+    gap: 14px;
+  }
+
+  [data-s] {
+    display: block;
+    min-width: 0;
+  }
+}
+
+.cols {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 14px;
+
+  > .col {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    min-width: 0;
+  }
+}
+
+@media (min-width: 760px) {
+  .cols {
+    grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
+    align-items: start;
+  }
+
+  body.report .hero {
+    padding: 26px 28px 22px;
+
+    .lead {
+      font-size: 1.15em;
+      max-width: 60ch;
+    }
+  }
+}

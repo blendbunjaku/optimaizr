@@ -234,6 +234,40 @@ test("the 5-hour row marks an estimate, and the context bar warns past 200K", ()
   assert.match(card, /Past 200K/);
 });
 
+test("Claude Code's Fable limit shows until Fable is back, with or without a conversation", () => {
+  const now = Date.now();
+  const fable = {
+    ts: new Date(now - 3_600_000).toISOString(),
+    resetsAt: new Date(now + 3 * 86_400_000).toISOString(),
+  };
+  const s = snapshot({ fable }, now);
+  for (const c of [null, convo({}, now)]) {
+    const card = section(
+      render(view({ snapshot: s, live: live({ convo: c }, now) }, now), SIDEBAR),
+      "now",
+    );
+    assert.match(card, /Claude Code hit the Fable limit\.<\/b> Fable is back [A-Z][a-z]{2} \d+, /);
+    assert.match(card, /other models still run/);
+  }
+  // Past the reset, or with no stop at all, as for Codex and opencode, it is gone.
+  const after = now + 4 * 86_400_000;
+  const gone = render(view({ snapshot: s, live: live({}, after) }, after), SIDEBAR);
+  assert.doesNotMatch(section(gone, "now"), /Fable limit/);
+  assert.doesNotMatch(section(render(view({}, now), SIDEBAR), "now"), /Fable limit/);
+});
+
+test("settings kept by hand: no switch and no Apply, only what to add", () => {
+  const v = view({ managed: false });
+  const guard = section(render(v, SIDEBAR), "guard");
+  assert.doesNotMatch(guard, /data-action="guard"/);
+  assert.match(guard, /optimaizr guard print/);
+  const all = render(v, SIDEBAR)
+    .map(([, html]) => html)
+    .join("");
+  assert.doesNotMatch(all, /data-action="compact"/);
+  assert.match(all, /CLAUDE_CODE_AUTO_COMPACT_WINDOW/);
+});
+
 test("guard: off explains itself, on counts what it held", () => {
   const off = section(render(view({ cli: "missing" }), SIDEBAR), "guard");
   assert.match(off, /aria-checked="false" data-action="guard" data-on="true"/);

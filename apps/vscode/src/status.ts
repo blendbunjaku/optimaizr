@@ -1,5 +1,5 @@
 import { modelLabel } from "@optimaizr/core";
-import { clip, clock, countdown, duration, money, multiple, tokens } from "./format.js";
+import { clip, clock, countdown, day, duration, money, multiple, tokens } from "./format.js";
 import { windowShare } from "./notices.js";
 import type { LiveConvo, LiveState, Snapshot } from "./types.js";
 
@@ -88,6 +88,12 @@ export function tooltip(live: LiveState, s: Snapshot | null): string {
     const reset = five.resetsAt ? `, resets ${clock(five.resetsAt)}` : "";
     lines.push(
       `$(dashboard) 5-hour window **${Math.round(five.percent)}%**${reset}${five.basis === "estimate" ? " (estimate)" : ""}`,
+    );
+  }
+  const fable = s?.fable;
+  if (fable && Date.parse(fable.resetsAt) > live.now) {
+    lines.push(
+      `$(warning) Claude Code hit the Fable limit. Fable is back **${day(fable.resetsAt)}, ${clock(fable.resetsAt)}**; other models still run.`,
     );
   }
   if (s && !s.empty) {

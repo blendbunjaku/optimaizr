@@ -80,7 +80,7 @@ once read or after 30 minutes.
 
 Everything in the sidebar works on its own. Turning guard **on** uses the free
 [optimaizr](https://www.npmjs.com/package/optimaizr) command line tool, and the extension offers to
-install it for you (`npm i -g optimaizr`, Node.js 20 or newer). Turning guard off needs nothing.
+install it for you (`npm i -g optimaizr@0.13.1`, the version this extension was built with; Node.js 20 or newer). Turning guard off needs nothing.
 
 ## Commands
 
@@ -98,17 +98,17 @@ Open the Command Palette and type **optimAIzr**.
 
 ## Settings
 
-| Setting                                 | Default | What it does                                                    |
-| --------------------------------------- | ------- | --------------------------------------------------------------- |
-| `optimaizr.statusBar.enabled`           | on      | Context, cache countdown and 5-hour window in the status bar    |
-| `optimaizr.alerts.cacheExpiring`        | on      | Heads-up before a cache expires                                 |
-| `optimaizr.alerts.cacheExpiringMinutes` | 5       | How many minutes before it expires the heads-up comes (1 to 10) |
-| `optimaizr.alerts.coldCache`            | on      | What a return to an expired cache cost                          |
-| `optimaizr.alerts.longConversation`     | on      | Once, when a conversation grows past 200K                       |
-| `optimaizr.alerts.guard`                | on      | When guard holds a message, a read or a retry                   |
-| `optimaizr.alerts.claudeDone`           | on      | Desktop alert when a long turn finishes (macOS and Linux)       |
-| `optimaizr.days`                        | 30      | Days of history the savings are worked out over (7 to 90)       |
-| `optimaizr.cliPath`                     | empty   | Where the `optimaizr` CLI is; empty looks on your PATH          |
+| Setting                                 | Default | What it does                                                                                      |
+| --------------------------------------- | ------- | ------------------------------------------------------------------------------------------------- |
+| `optimaizr.statusBar.enabled`           | on      | Context, cache countdown and 5-hour window in the status bar                                      |
+| `optimaizr.alerts.cacheExpiring`        | on      | Heads-up before a cache expires                                                                   |
+| `optimaizr.alerts.cacheExpiringMinutes` | 5       | How many minutes before it expires the heads-up comes (1 to 10)                                   |
+| `optimaizr.alerts.coldCache`            | on      | What a return to an expired cache cost                                                            |
+| `optimaizr.alerts.longConversation`     | on      | Once, when a conversation grows past 200K                                                         |
+| `optimaizr.alerts.guard`                | on      | When guard holds a message, a read or a retry                                                     |
+| `optimaizr.alerts.claudeDone`           | on      | Desktop alert when a long turn finishes (macOS and Linux)                                         |
+| `optimaizr.days`                        | 30      | Days of history the savings are worked out over (7 to 90)                                         |
+| `optimaizr.cliPath`                     | empty   | Full path to the `optimaizr` CLI; empty looks on your PATH. User settings only, never a workspace |
 
 ## Requirements
 

@@ -7,6 +7,7 @@ import {
   changeName,
   type ChangeResult,
   claudeConfigDir,
+  fableStop,
   guardSaved,
   ingest,
   isKnownRule,
@@ -179,6 +180,7 @@ export async function buildSnapshot(opts: { days?: number; now?: number } = {}):
     guard: guardNow(now),
     results: profile.applied.map(resultOf),
     week: week ? `Last 7 days: ${weekText(week)}.` : null,
+    fable: fableStop(data.limitHits ?? [], now),
     rate: rate ? { usdPerPercent: rate.usdPerPercent, basis: rate.basis } : null,
     titles: { ...(data.titles ?? {}) },
     recent: data.events.filter(
@@ -225,6 +227,7 @@ export function emptySnapshot(days: number, now = Date.now()): Snapshot {
     guard: { on: guardApplied(), catches: 0, savedUsd: 0, recent: [] },
     results: [],
     week: null,
+    fable: null,
     rate: null,
     titles: {},
     recent: [],

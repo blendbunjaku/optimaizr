@@ -1,0 +1,17 @@
+// optimAIzr in VS Code. scripts/bundle.mjs compiles this to dist/webview.css,
+// the one stylesheet the sidebar and the report load. Order is cascade order.
+
+@use "styles/tokens";
+@use "styles/base";
+@use "styles/header";
+@use "styles/card";
+@use "styles/hero";
+@use "styles/stack";
+@use "styles/now";
+@use "styles/guard";
+@use "styles/fixes";
+@use "styles/report";
+@use "styles/buttons";
+@use "styles/chrome";
+@use "styles/layout";
+@use "styles/motion";

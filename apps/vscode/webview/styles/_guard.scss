@@ -1,0 +1,90 @@
+@use "tools" as *;
+
+.guard {
+  &.is-on {
+    border-color: tint(var(--save), 40%, var(--line));
+
+    .card-h .ico {
+      color: var(--save);
+    }
+  }
+
+  .card-h {
+    color: var(--fg);
+  }
+}
+
+.switch {
+  margin-left: auto;
+  width: 34px;
+  height: 20px;
+  border-radius: 99px;
+  border: 1px solid var(--line);
+  background: var(--track);
+  position: relative;
+  cursor: pointer;
+  padding: 0;
+  flex: none;
+  transition: background 0.2s;
+
+  i {
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    @include circle(14px);
+    background: var(--fg);
+    transition: transform 0.2s cubic-bezier(0.3, 1.4, 0.5, 1);
+  }
+
+  &.on {
+    background: var(--save);
+    border-color: transparent;
+
+    i {
+      transform: translateX(14px);
+      background: var(--on-accent);
+    }
+  }
+
+  body.vscode-dark &.on i {
+    background: $ink;
+  }
+
+  &.busy i {
+    animation: breathe 0.9s ease-in-out infinite;
+  }
+}
+
+.kept {
+  font-size: 1em;
+
+  .num {
+    font-size: 1.25em;
+  }
+}
+
+.catches {
+  @include bare-list;
+  @include stack(8px);
+
+  li {
+    display: flex;
+    gap: 8px;
+  }
+}
+
+.catch-i {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  display: grid;
+  place-items: center;
+  flex: none;
+  color: var(--save);
+  background: tint(var(--save), 14%);
+
+  .ico {
+    width: 12px;
+    height: 12px;
+  }
+}

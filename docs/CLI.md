@@ -101,6 +101,7 @@ mid-session and `/optimaizr handoff`, and nothing above needs it.
 | `optimaizr live`            | Watch calls as they happen and surface fixes interactively           |
 | `optimaizr statusline on`   | Context, re-read cost and cache countdown under Claude Code's prompt |
 | `optimaizr guard on`        | Hold a costly step once in Claude Code, before it is paid            |
+| `optimaizr guard print`     | The hooks `guard on` adds, as JSON, with nothing written             |
 | `optimaizr mod`             | Install steps and status of the Claude Code mod                      |
 | `optimaizr recommend`       | Ranked actions with impact and confidence                            |
 | `optimaizr show <rule>`     | The individual requests a recommendation touches                     |
@@ -151,6 +152,10 @@ marketplace, in a Claude Code session:
 /plugin marketplace add blendbunjaku/optimaizr
 /plugin install optimaizr@optimaizr
 ```
+
+To stay on one release, pin the marketplace to its tag:
+`/plugin marketplace add blendbunjaku/optimaizr#v0.13.1`. `optimaizr mod`
+prints that line for the version you have.
 
 What it adds:
 
@@ -488,6 +493,18 @@ Claude Code's own 5-hour and weekly meters into its session file, and
 top of the hour of the first message after the previous one closed, and lasts
 five hours. Only Claude Code traffic counts; Codex belongs to a different plan.
 The weekly limit is not modelled.
+
+**The Fable limit.** On Max and Ultra, Fable has its own weekly allowance. When
+it runs out, Claude Code's message says to switch models, not when Fable comes
+back. It writes the reset to the transcript, though, so `profile` and `live`
+say it until then:
+
+```
+  Claude Code hit the Fable limit Nov 11 22:10. Fable is back Nov 16 09:00; other models still run.
+```
+
+It is not counted as a stop at the 5-hour limit, and `profile --json` has it as
+`fableLimit`.
 
 ## On a ChatGPT plan
 
@@ -1081,8 +1098,20 @@ extension's chat panel alike, with no mod:
 ```
 optimaizr guard on        # adds its hooks to ~/.claude/settings.json
 optimaizr guard off       # takes out only its own
+optimaizr guard print     # the hooks as JSON, nothing written
 optimaizr guard           # on or off, and what it held in the last 7 days
 ```
+
+`guard print` is for reading the hooks before they go in, or for settings you
+keep yourself, in a dotfiles repo or built by Nix. With
+`"manageSettings": false` in `~/.optimaizr/config.json`, optimAIzr never writes
+Claude Code's or Codex's settings: `guard on` prints the same JSON,
+`statusline on`, `apply context-compaction` and a model swap in `live` say what
+to add by hand, and hooks you added yourself count as guard being on. The VS
+Code extension follows the same setting.
+
+Settings are written in one step, a temp file renamed over the old one, so a
+crash leaves the old file. A symlinked settings file stays a symlink.
 
 The first time `optimaizr` finds $5 or more of messages guard would have held
 in the last 30 days, it says how many and what they cost, and asks once to turn
@@ -1224,7 +1253,8 @@ across that boundary.
 On Anthropic models cache reads bill at 10% of the input rate by default,
 5-minute writes at 125%, 1-hour writes at 200%, and batch traffic at 50%. That
 is per-provider policy, and a model can set its own: Opus 5.5 reads at 5%
-($0.20/M against $4/M input) and Fable 5.1 at 2.5%.
+($0.20/M against $4/M input), and Fable 5.1 and 5.2 at 2.5% ($0.20/M against
+$8/M on 5.2).
 
 **Open models count too.** Through opencode you can run DeepSeek, GLM, Kimi or
 MiniMax, and each has a card from its vendor's own price list: DeepSeek V4 at
@@ -1307,6 +1337,12 @@ never a code change:
 
 The analysis engine never learns about a provider; it reads the catalogue.
 
+A newer version of a model in the catalogue, `claude-fable-5-3` while the
+newest entry is `claude-fable-5-2`, is priced as the nearest older version
+until it has an entry of its own. It keeps its own name, and `profile` and
+`scan` say how many calls were priced that way. An entry in `models.json` with
+its id gives it its own price.
+
 ---
 
 ## Architecture
@@ -1365,8 +1401,9 @@ with `--json` or when output is piped, and is off with
 Prompt contents are not stored unless you explicitly enable capture, which is
 sampled, capped, redacted before it touches disk, and local-only. The one
 exception is [guard](#guard)'s handoff note, kept until the `/clear` it was
-made for, 30 minutes at most. Nothing in
-that store is ever uploaded.
+made for, 30 minutes at most. Guard remembers a held command as a hash, and its
+receipts, dropped after 30 days, keep the first 80 characters with passwords,
+tokens and keys masked. Nothing in that store is ever uploaded.
 
 `optimaizr privacy` prints the full answer; [SECURITY.md](../SECURITY.md) is the
 long form.

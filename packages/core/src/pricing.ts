@@ -393,6 +393,32 @@ export const OPEN_MODELS: ModelPrice[] = [
 
 export const BUILTIN_MODELS: ModelPrice[] = [
   {
+    id: "claude-fable-5-2",
+    label: "Fable 5.2",
+    provider: "anthropic",
+    tier: "frontier",
+    // Cache reads are $0.20/M, a fortieth of input. Without its own entry the
+    // id prefix-matched Fable 5 and billed cache reads at $1.00.
+    rates: withCache(8, 40, 0.2, "2026-11-09"),
+    contextTokens: 1_000_000,
+    maxOutputTokens: 128_000,
+    capabilities: [...anthropicCaps, "reasoning"],
+    fast: { inputPerM: 16, outputPerM: 80 },
+    bestFor: "Hardest reasoning and long-horizon agentic runs. Thinking is always on.",
+  },
+  {
+    id: "claude-mythos-5-2",
+    label: "Mythos 5.2",
+    provider: "anthropic",
+    tier: "frontier",
+    rates: withCache(8, 40, 0.2, "2026-11-09"),
+    contextTokens: 1_000_000,
+    maxOutputTokens: 128_000,
+    capabilities: [...anthropicCaps, "reasoning"],
+    fast: { inputPerM: 16, outputPerM: 80 },
+    bestFor: "Same capability as Fable 5.2, for approved organisations.",
+  },
+  {
     id: "claude-fable-5-1",
     label: "Fable 5.1",
     provider: "anthropic",
@@ -403,7 +429,7 @@ export const BUILTIN_MODELS: ModelPrice[] = [
     contextTokens: 1_000_000,
     maxOutputTokens: 128_000,
     capabilities: [...anthropicCaps, "reasoning"],
-    bestFor: "Hardest reasoning and long-horizon agentic runs. Thinking is always on.",
+    bestFor: "Previous Fable generation; Fable 5.2 does the same work for 20% less.",
   },
   {
     id: "claude-mythos-5-1",
@@ -427,7 +453,7 @@ export const BUILTIN_MODELS: ModelPrice[] = [
     contextTokens: 1_000_000,
     maxOutputTokens: 128_000,
     capabilities: [...anthropicCaps, "reasoning"],
-    bestFor: "Previous Fable generation, at the same price as Fable 5.1.",
+    bestFor: "Older Fable generation, at the same price as Fable 5.1.",
   },
   {
     id: "claude-mythos-5",
@@ -575,6 +601,29 @@ export const BUILTIN_MODELS: ModelPrice[] = [
     bestFor: "OpenAI's flagship: hardest reasoning, long agentic runs, judging other models.",
   },
   {
+    id: "gpt-6.1-sol",
+    label: "GPT-6.1 Sol",
+    provider: "openai",
+    tier: "balanced",
+    // Same rates as GPT-6 Sol, but cached input is half: $0.10/M, not $0.20.
+    rates: gpt(2, 0.1, 10, "2026-09-29", { writes: true, long: true }),
+    contextTokens: 1_050_000,
+    maxOutputTokens: 128_000,
+    capabilities: [...openaiCaps, "reasoning"],
+    bestFor: "Codex's default: complex coding and agentic workflows.",
+  },
+  {
+    id: "gpt-6.1-terra",
+    label: "GPT-6.1 Terra",
+    provider: "openai",
+    tier: "fast",
+    rates: gpt(1, 0.05, 5, "2026-10-26", { writes: true, long: true }),
+    contextTokens: 1_050_000,
+    maxOutputTokens: 128_000,
+    capabilities: [...openaiCaps, "reasoning"],
+    bestFor: "Fast, efficient work at half of Sol's price, above Luna's.",
+  },
+  {
     id: "gpt-6-sol",
     label: "GPT-6 Sol",
     provider: "openai",
@@ -583,7 +632,7 @@ export const BUILTIN_MODELS: ModelPrice[] = [
     contextTokens: 1_050_000,
     maxOutputTokens: 128_000,
     capabilities: [...openaiCaps, "reasoning"],
-    bestFor: "The GPT-6 workhorse: complex coding and agentic workflows.",
+    bestFor: "Previous workhorse; GPT-6.1 Sol has the same rates with cached input at half.",
   },
   {
     id: "gpt-6-luna",
@@ -705,6 +754,18 @@ export const BUILTIN_MODELS: ModelPrice[] = [
     maxOutputTokens: 128_000,
     capabilities: [...openaiCaps, "reasoning"],
     bestFor: "Older maximum-effort tier. No prompt caching.",
+  },
+  {
+    // Without its own entry this prefix-matched gpt-5 and billed at $1.25/$10.
+    id: "gpt-5.3-codex",
+    label: "GPT-5.3 Codex",
+    provider: "openai",
+    tier: "frontier",
+    rates: gpt(1.75, 0.175, 14, "2026-02-24"),
+    contextTokens: 400_000,
+    maxOutputTokens: 128_000,
+    capabilities: [...openaiCaps, "reasoning"],
+    bestFor: "Older Codex model, deprecated in Codex.",
   },
   {
     id: "gpt-5.2",
@@ -910,9 +971,11 @@ export const GEMINI_MODELS: ModelPrice[] = [
 
 const catalogue: ModelPrice[] = [...BUILTIN_MODELS];
 let byId = new Map(catalogue.map((m) => [m.id, m]));
+let byLower = new Map(catalogue.map((m) => [m.id.toLowerCase(), m]));
 
 function reindex(): void {
   byId = new Map(catalogue.map((m) => [m.id, m]));
+  byLower = new Map(catalogue.map((m) => [m.id.toLowerCase(), m]));
 }
 
 /** The live catalogue, built-ins plus anything registered at runtime. */
@@ -951,26 +1014,57 @@ export function resetModels(): void {
 // is not stripped: a host sets its own price, so it stays unpriced.
 const VENDOR_PREFIX = /^(anthropic|openai|azure|deepseek|z-ai|zai|moonshotai|minimax)[./]/i;
 
-/**
- * Resolve a model id to its price card. Handles the date-suffixed ids every
- * provider emits, the platform prefixes used on Bedrock and Vertex, and the
- * `vendor/model` form gateways such as OpenRouter and LiteLLM pass through.
- */
-export function priceFor(modelId: string | undefined | null): ModelPrice | null {
+// A newer version after a catalogued id: "-3" on claude-fable-5-3, ".4-codex"
+// on gpt-5.4-codex. A date is longer than two digits, so it never matches.
+const NEWER_VERSION = /^([-.])(\d{1,2})(?!\d)(.*)$/;
+
+function resolve(
+  modelId: string | undefined | null,
+): { card: ModelPrice; borrowed: boolean } | null {
   if (!modelId) return null;
   const id = modelId
     .trim()
     .replace(/^(us|eu|apac)\./, "")
     .replace(VENDOR_PREFIX, "");
   const exact = byId.get(id) ?? byId.get(id.toLowerCase());
-  if (exact) return exact;
+  if (exact) return { card: exact, borrowed: false };
   // Vendors spell their own ids in mixed case (MiniMax-M3, GLM-4.6).
   const lower = id.toLowerCase();
   let best: ModelPrice | null = null;
   for (const m of catalogue) {
     if (lower.startsWith(m.id.toLowerCase()) && (!best || m.id.length > best.id.length)) best = m;
   }
-  return best;
+  if (!best) return null;
+  const v = NEWER_VERSION.exec(lower.slice(best.id.length));
+  if (!v) return { card: best, borrowed: false };
+  // The nearest older version is priced closest: claude-fable-5-3 as Fable 5.2, not Fable 5.
+  const [, sep, num, tail] = v;
+  const base = best.id.toLowerCase();
+  for (const rest of tail ? [tail, ""] : [""]) {
+    for (let n = Number(num) - 1; n >= 1; n--) {
+      const near = byLower.get(`${base}${sep}${n}${rest}`);
+      if (near) return { card: near, borrowed: true };
+    }
+  }
+  return { card: best, borrowed: true };
+}
+
+/**
+ * Resolve a model id to its price card. Handles the date-suffixed ids every
+ * provider emits, the platform prefixes used on Bedrock and Vertex, and the
+ * `vendor/model` form gateways such as OpenRouter and LiteLLM pass through.
+ */
+export function priceFor(modelId: string | undefined | null): ModelPrice | null {
+  return resolve(modelId)?.card ?? null;
+}
+
+/**
+ * The older card a newer version is priced as while it has none of its own
+ * here, or null. Without it a new release was billed as an old one unseen.
+ */
+export function borrowedPrice(modelId: string | undefined | null): ModelPrice | null {
+  const r = resolve(modelId);
+  return r?.borrowed ? r.card : null;
 }
 
 export function providerOf(modelId: string | undefined | null): string {
@@ -979,11 +1073,13 @@ export function providerOf(modelId: string | undefined | null): string {
 
 /**
  * A model id for display: the catalogue label where there is one
- * (`claude-haiku-4-5` -> "Haiku 4.5"), otherwise the raw id.
+ * (`claude-haiku-4-5` -> "Haiku 4.5"), otherwise the raw id. A newer version
+ * priced as an older one keeps its own id, so it is not taken for the old one.
  */
 export function modelLabel(modelId: string | undefined | null): string {
   if (!modelId) return "unknown";
-  return priceFor(modelId)?.label ?? modelId;
+  const r = resolve(modelId);
+  return r && !r.borrowed ? r.card.label : modelId;
 }
 
 export interface UsageLike {

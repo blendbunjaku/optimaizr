@@ -125,6 +125,22 @@ test("the tooltip names the model and effort, and what the last reply cost", () 
   assert.match(bare, /Last reply cost \*\*\$0\.42\*\* over 2m 10s\./);
 });
 
+test("the tooltip says when Fable is back while Claude Code's Fable limit holds", () => {
+  const now = Date.now();
+  const fable = {
+    ts: new Date(now).toISOString(),
+    resetsAt: new Date(now + 86_400_000).toISOString(),
+  };
+  const t = tooltip(live({ convo: convo({}, now) }, now), snapshot({ fable }, now));
+  assert.match(
+    t,
+    /\$\(warning\) Claude Code hit the Fable limit\. Fable is back \*\*[A-Z][a-z]{2} \d+, /,
+  );
+  const after = now + 2 * 86_400_000;
+  assert.doesNotMatch(tooltip(live({}, after), snapshot({ fable }, now)), /Fable/);
+  assert.doesNotMatch(tooltip(live({}, now), snapshot({}, now)), /Fable/);
+});
+
 test("the way in carries what the open fixes are worth", () => {
   const now = Date.now();
   const s = snapshot({}, now);
