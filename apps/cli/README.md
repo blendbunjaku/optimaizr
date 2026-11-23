@@ -224,7 +224,7 @@ JSON usage exports. Node 20.11 or later.
 
 ## Recent releases
 
-- **0.14** (Nov 24, 2026): per piece of work. `results` now prices a finished
+- **0.14** (Nov 23, 2026): per piece of work. `results` now prices a finished
   piece of work, not only a prompt: a conversation that ended on a passing
   test, build or typecheck. Cheaper prompts can still make the work dearer:
   split at Oct 20, my usage cost 5% to 27% less per prompt, but a finished
