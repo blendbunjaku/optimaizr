@@ -153,10 +153,13 @@ cache expired before the next call, with who was waiting:
 optimaizr apply context-compaction   # Claude Code and Codex compact at 200K
 optimaizr undo context-compaction    # and back
 optimaizr results                    # did it work?
+optimaizr results --since 2026-11-01 --label rtk   # any change you made yourself
 ```
 
 `results` compares the days after a change with the days before it, on your
-own usage, and marks every row that got worse, so you see what a saving cost.
+own usage, per prompt and per finished piece of work, and marks every row that
+got worse, so you see what a saving cost. For a change made anywhere else,
+installing rtk or rewriting CLAUDE.md, give it the date with `--since`.
 
 Every finding says what happened, why it matters and what it saves, in dollars
 from your own logs. Savings are split into clear waste, likely, and "up to".
@@ -198,7 +201,7 @@ cheaper model, and `/optimaizr handoff` writes a note to start fresh from.
 | `optimaizr sessions`      | Where long conversations start to cost more     |
 | `optimaizr why`           | Spend by model, project and kind of work        |
 | `optimaizr apply <rule>`  | Applies a fix; `undo <rule>` takes it back      |
-| `optimaizr results`       | Did it work? The days after against before      |
+| `optimaizr results`       | Did it work? `--since <date>` for any change    |
 | `optimaizr verify <rule>` | Replays your own requests on the cheaper option |
 | `optimaizr card`          | Your last 30 days as an image to post           |
 
@@ -221,6 +224,13 @@ JSON usage exports. Node 20.11 or later.
 
 ## Recent releases
 
+- **0.14** (Nov 23, 2026): per piece of work. `results` now prices a finished
+  piece of work, not only a prompt: a conversation that ended on a passing
+  test, build or typecheck. Cheaper prompts can still make the work dearer:
+  split at Oct 20, my usage cost 5% to 27% less per prompt, but a finished
+  piece went from $10.40 to $11.54. `results --since <date>` measures any change
+  you made yourself, like rtk or a new CLAUDE.md, and `sessions` shows what fix
+  loops cost: $44.46 of mine, 15% of spend.
 - **0.13** (Oct 30, 2026): optimAIzr for VS Code. The cache countdown, context
   and 5-hour window in VS Code's status bar, a heads-up 5 minutes before a cache
   expires ($1.14 to skip on mine), and the savings, guard and every fix in a
@@ -257,7 +267,8 @@ Every release in full:
 Everything runs on your machine and stays in `~/.optimaizr/`. To spot repeated
 work it also reads what each tool call was given (a file path, a command, the
 first 200 characters of anything else) and keeps that in memory only, since
-commands can hold secrets. A report you export names the file or command a
+commands can hold secrets. Of a test or build's output it keeps only whether it
+passed. A report you export names the file or command a
 finding is about. Guard, when you turn it on, logs what it held in
 `~/.optimaizr/guard/` for 30 days, a command as a hash and its first 80
 characters with secrets masked. A held message leaves a short note from your

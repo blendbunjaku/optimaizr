@@ -231,6 +231,18 @@ export interface ToolCall {
   isError?: boolean;
   /** The file a file tool read or changed, so an edit can retire earlier reads of it. */
   target?: string;
+  /** A test, typecheck, build or lint run and what it said. Only the outcome is kept. */
+  check?: CheckRun;
+}
+
+export type CheckKind = "test" | "typecheck" | "build" | "lint";
+
+/** Read from the runner's summary line; "unknown" when the output says neither. */
+export type CheckOutcome = "pass" | "fail" | "unknown";
+
+export interface CheckRun {
+  kind: CheckKind;
+  outcome: CheckOutcome;
 }
 
 /** The money a call cost, broken out by what drove it. */

@@ -5,8 +5,10 @@ import readline from "node:readline";
 
 import { costOf, providerOf } from "../pricing.js";
 import { userPath } from "./claudecode.js";
+import { checkKindOf, checkRunOf } from "../analyze/check-runs.js";
 import type {
   CallEvent,
+  CheckKind,
   CompactionRecord,
   Dataset,
   RateLimitSnapshot,
@@ -72,6 +74,37 @@ function signatureOf(name: string, args: unknown): string {
   const raw = typeof args === "string" ? args : JSON.stringify(args ?? {});
   const text = raw.trim().replace(/\s+/g, " ");
   return `${name}:${text.length > 200 ? text.slice(0, 200) : text}`;
+}
+
+/** The command a shell call ran: `{ cmd }`, or `{ command: ["bash", "-lc", "..."] }`. */
+function shellCommand(args: unknown): string | null {
+  let a: unknown = args;
+  if (typeof a === "string") {
+    try {
+      a = JSON.parse(a);
+    } catch {
+      return null;
+    }
+  }
+  const o = (a ?? {}) as Record<string, unknown>;
+  if (typeof o.cmd === "string") return o.cmd;
+  if (typeof o.command === "string") return o.command;
+  if (Array.isArray(o.command) && o.command.every((x) => typeof x === "string")) {
+    const c = o.command as string[];
+    return /^(?:ba|z)?sh$/.test(c[0] ?? "") && /^-l?c$/.test(c[1] ?? "")
+      ? (c[2] ?? "")
+      : c.join(" ");
+  }
+  return null;
+}
+
+/** The text of a tool output, for reading a check's summary line. */
+function outputText(output: unknown): string {
+  if (typeof output === "string") return output;
+  const o = (output ?? {}) as Record<string, unknown>;
+  if (typeof o.output === "string") return o.output;
+  if (typeof o.content === "string") return o.content;
+  return "";
 }
 
 /** Tool output can be a string or a wrapped object; only its size matters here. */
@@ -140,6 +173,8 @@ export interface CodexState {
   limits?: RateLimitSnapshot;
   /** Started with `codex exec`: nobody was there to read it. */
   headless?: boolean;
+  /** Pending calls that ran a check, read for pass or fail when their output lands. */
+  checkKinds?: Map<string, CheckKind>;
 }
 
 export function createCodexState(file: string): CodexState {
@@ -204,12 +239,21 @@ export function consumeCodexLine(state: CodexState, line: string): CallEvent | n
       const id = typeof p.call_id === "string" ? p.call_id : `t${state.pending.size}`;
       const name = typeof p.name === "string" ? p.name : "unknown";
       state.pending.set(id, { id, name, signature: signatureOf(name, p.arguments ?? p.input) });
+      const command = shellCommand(p.arguments ?? p.input);
+      const kind = command ? checkKindOf(command) : null;
+      if (kind) (state.checkKinds ??= new Map()).set(id, kind);
     } else if (kind === "function_call_output" || kind === "custom_tool_call_output") {
       const id = typeof p.call_id === "string" ? p.call_id : "";
       const tool = state.pending.get(id);
       if (tool) {
         tool.resultChars = outputChars(p.output);
         if (failed(p.output)) tool.isError = true;
+        const kind = state.checkKinds?.get(id);
+        if (kind) {
+          const check = checkRunOf(kind, outputText(p.output), tool.isError);
+          if (check) tool.check = check;
+          state.checkKinds!.delete(id);
+        }
       }
     }
     return null;

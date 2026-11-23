@@ -51,6 +51,11 @@ const WHATS_NEW: Record<string, string[]> = {
     "Fable 5.2 and GPT-6.1 priced, and a model with no price yet says so.",
     "Claude Code's Fable limit: profile and live say when Fable is back.",
   ],
+  "0.14.0": [
+    "results prices a finished piece of work too: a conversation that ended on a passing test, build or typecheck.",
+    "optimaizr results --since 2026-10-20 --label rtk measures a change you made anywhere else.",
+    "sessions shows pieces of work and what fix loops cost: a check failed, files changed, it passed.",
+  ],
 };
 
 export function updatePath(): string {

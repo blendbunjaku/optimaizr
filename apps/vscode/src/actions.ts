@@ -26,7 +26,7 @@ export interface ActionResult {
 const WINDOWS = process.platform === "win32";
 
 /** The CLI this extension was built with: what "Install and turn on" installs. */
-export const CLI_VERSION = "0.13.1";
+export const CLI_VERSION = "0.14.0";
 
 /** A Windows network path: a file there is someone else's to change. */
 const remote = (file: string) => /^[\\/]{2}/.test(file);

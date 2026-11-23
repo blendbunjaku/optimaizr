@@ -22,7 +22,8 @@ import type { CacheState } from "../analyze/cache-watch.js";
 import { type ColdResume, waitedOn } from "../analyze/cold.js";
 import type { LiveChecks, LiveStep } from "../analyze/checks.js";
 import type { GuardReceipt } from "../analyze/guard.js";
-import { compactPointOf } from "../analyze/results.js";
+import { SINCE_RULE, compactPointOf } from "../analyze/results.js";
+import { MIN_PIECES, type PieceTally, judgedPieces } from "../analyze/work.js";
 import type { AppliedChange, ChangeResult, ResultRow, ResultsReport } from "../analyze/results.js";
 
 /** Terminal rendering. No dependencies; colour is disabled when not a TTY or NO_COLOR is set. */
@@ -962,6 +963,7 @@ const AGENT_NAME: Record<string, string> = {
 
 /** "Compact earlier: Claude Code at 200K", "Model mismatch: Opus 5.5 -> Sonnet 5.5 in api". */
 export function changeName(c: AppliedChange): string {
+  if (c.rule === SINCE_RULE) return c.label ?? `Before and after ${localDay(c.at)}`;
   const label = ruleLabel(c.rule);
   if (c.rule === "context-compaction") {
     const who = c.source ? `${AGENT_NAME[c.source] ?? c.source} at ` : "at ";
@@ -978,7 +980,7 @@ function resultValue(unit: ResultRow["unit"], v: number | null): string {
   if (v === null) return "-";
   if (unit === "usd") return usd(v);
   if (unit === "share") return pct(v);
-  if (unit === "tokens") return kTokens(v);
+  if (unit === "tokens") return v < 1000 ? String(Math.round(v)) : kTokens(v);
   if (unit === "minutes") return `${v < 10 ? v.toFixed(1) : Math.round(v)}m`;
   return v < 1 ? v.toFixed(2) : v < 10 ? v.toFixed(1) : String(Math.round(v));
 }
@@ -1015,6 +1017,18 @@ function perUnit(r: ChangeResult): string {
   return `${size} ${c < 0 ? "less" : "more"} per ${r.measure}`;
 }
 
+/** Why the per-piece rows are missing, when some pieces were judged. */
+function piecesShort(r: ChangeResult): string | null {
+  const p = r.pieces;
+  if (!p || r.measure !== "prompt" || r.rows.some((x) => x.key === "costPerFinishedPiece")) {
+    return null;
+  }
+  const b = judgedPieces(p.before);
+  const a = judgedPieces(p.after);
+  if (b + a === 0) return null;
+  return `Per piece of work needs ${MIN_PIECES} judged by a check on each side: ${b} before, ${a} after.`;
+}
+
 /** "a, b and c" */
 function listed(xs: readonly string[]): string {
   return xs.length < 2 ? (xs[0] ?? "") : `${xs.slice(0, -1).join(", ")} and ${xs.at(-1)}`;
@@ -1049,7 +1063,7 @@ function verdictLine(r: ChangeResult): string {
       return `${yellow("Too early to tell:")} ${sofar}.${around}`;
     }
     case "no-baseline":
-      return `${yellow("Not enough from before the change to compare:")} ${r.before.activeDays} active days in ${base}.`;
+      return `${yellow("Not enough from before the change to compare:")} ${r.before.activeDays} active day${r.before.activeDays === 1 ? "" : "s"} in ${base}.`;
     case "working": {
       const costs = r.rows.filter((x) => x.worse).map((x) => x.label);
       const extra = r.withCost ? ` It comes with a cost: ${listed(costs)} went up.` : "";
@@ -1093,6 +1107,9 @@ export function renderResults(
     out.push(
       `    ${blue("optimaizr apply <rule> --done")}   ${dim("record a change you made yourself")}`,
     );
+    out.push(
+      `    ${blue("optimaizr results --since <date>")}   ${dim("before and after any other change")}`,
+    );
     out.push("");
     return out.join("\n");
   }
@@ -1101,7 +1118,12 @@ export function renderResults(
   for (const r of report.results) {
     out.push(rule());
     out.push("");
-    const how = r.change.how === "by-hand" ? "made by hand" : "applied";
+    const how =
+      r.change.rule === SINCE_RULE
+        ? "from"
+        : r.change.how === "by-hand"
+          ? "made by hand"
+          : "applied";
     const undone = r.change.until ? `, undone ${localDay(r.change.until)}` : "";
     out.push(`  ${bold(changeName(r.change))}`);
     out.push(`  ${dim(`${how} ${sinceWhen(r.change.at, now)}${undone}`)}`);
@@ -1122,6 +1144,8 @@ export function renderResults(
           `    ${pad(x.label, width)}${padLeft(resultValue(x.unit, x.before), 10)}${padLeft(resultValue(x.unit, x.after), 10)}   ${resultChange(x)}`,
         );
       }
+      const note = piecesShort(r);
+      if (note) out.push(`    ${dim(note)}`);
       out.push("");
     }
 
@@ -1320,11 +1344,52 @@ function renderNoteVsCompaction(f: { note: StartFacts; compaction: StartFacts })
   return out;
 }
 
+function renderPieces(t: PieceTally, totalUsd: number): string[] {
+  if (t.pieces === 0) return [];
+  const out = [
+    `  ${bold("Pieces of work")} ${dim("(a conversation, split at a break of 2 hours or more)")}`,
+  ];
+  const parts = [
+    `${t.passed} ended on a pass`,
+    `${t.failed} on a fail`,
+    ...(t.unknown > 0 ? [`${t.unknown} unreadable`] : []),
+    `${t.unchecked} with no check`,
+  ];
+  out.push(
+    `    ${t.pieces.toLocaleString()} piece${t.pieces === 1 ? "" : "s"} · ${parts.join(" · ")}`,
+  );
+  if (t.finishedUsd !== null) {
+    out.push(`    ${pad("finished piece", 24)}median ${usd(t.finishedUsd)}`);
+  }
+  if (t.fixLoops > 0) {
+    const share = totalUsd > 0 ? t.fixUsd / totalUsd : 0;
+    out.push(
+      `    ${pad("fix loops", 24)}${t.fixLoops} · ${usd(t.fixUsd)} ${dim(`(${pct(share)} of spend)`)}`,
+    );
+  }
+  out.push(
+    `    ${dim("Pass or fail: what the last test, build or typecheck printed. A fix loop: a check")}`,
+  );
+  out.push(
+    `    ${dim("failed, files changed, the same check passed. Claude Code and Codex only.")}`,
+  );
+  if (judgedPieces(t) < MIN_PIECES) {
+    out.push(
+      `    ${dim(`Only ${judgedPieces(t)} judged by a check so far, so read this as a first look.`)}`,
+    );
+  }
+  out.push("");
+  return out;
+}
+
 export function renderSessions(
   c: SessionStats,
   s: Summary,
   convos?: ConversationList,
-  opts: { fresh?: { note: StartFacts; compaction: StartFacts } | null } = {},
+  opts: {
+    fresh?: { note: StartFacts; compaction: StartFacts } | null;
+    pieces?: PieceTally | null;
+  } = {},
 ): string {
   const out: string[] = [];
   out.push("");
@@ -1355,6 +1420,7 @@ export function renderSessions(
     );
   }
   out.push("");
+  if (opts.pieces) out.push(...renderPieces(opts.pieces, c.costUsd));
   out.push(...renderWindows(c.windows, convos));
 
   const bands = c.byContext.filter((b) => b.calls > 0);

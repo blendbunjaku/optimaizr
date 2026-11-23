@@ -31,6 +31,8 @@ import {
   savingsOverlap,
   noteVsCompaction,
   sessionStats,
+  tallyPieces,
+  workPieces,
   summarize,
   tokens as fmtTokens,
   toRecommendations,
@@ -308,12 +310,20 @@ export async function cmdSessions(args: Args): Promise<void> {
     .filter((r) => r.kind === "handoff-used" && r.detail)
     .map((r) => ({ session: r.session, from: r.detail! }));
   const fresh = noteVsCompaction(data, notes);
+  const work = workPieces(data.events);
+  const pieces = tallyPieces(work);
   if (args.flags.json) {
     const of5h = (usd: number) => (rate ? usd / rate.usdPerPercent : null);
     const list = rows.map((r) => ({ ...r, windowPercent: of5h(r.costUsd) }));
     console.log(
       JSON.stringify(
-        { ...c, conversations: list, windowRate: rate, noteVsCompaction: fresh },
+        {
+          ...c,
+          conversations: list,
+          windowRate: rate,
+          noteVsCompaction: fresh,
+          pieces: { ...pieces, list: work },
+        },
         null,
         2,
       ),
@@ -322,7 +332,12 @@ export async function cmdSessions(args: Args): Promise<void> {
   }
   const top = num(args.flags.top, 10);
   console.log(
-    renderSessions(c, summarize(data, summaryOptions(args)), { rows, rate, top }, { fresh }),
+    renderSessions(
+      c,
+      summarize(data, summaryOptions(args)),
+      { rows, rate, top },
+      { fresh, pieces },
+    ),
   );
 }
 

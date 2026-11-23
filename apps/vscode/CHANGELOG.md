@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.3
+
+- Install and turn on installs `optimaizr@0.14.0`, which measures a change per finished piece of work and takes `results --since <date>` for changes you made yourself
+
 ## 0.1.2
 
 - **Security: only your own settings can name the CLI.** `optimaizr.cliPath` is run as a program when guard is turned on. It was read from workspace settings too, so a folder's `.vscode/settings.json` could point it at a file of its own. It is now a machine setting read from your user settings only, it has to be a full path to a file on this machine, and in a workspace you have not trusted VS Code ignores it altogether. If you had set it in a workspace, set it again in your user settings
