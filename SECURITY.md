@@ -60,7 +60,9 @@ call its name and what it was given: the file path, the command, the search
 pattern or URL, and for other tools the first 200 characters of their input. Those are read in memory, to spot repeated
 reads and retry loops, and are never written to `~/.optimaizr`; a finding, and
 a report you write, can name the file or command it is about. Of a tool's
-result only its size is kept. Your prompts and Claude's answers are not used,
+result only its size is kept, and for a test, build, typecheck or lint command
+whether it passed: its output is read in memory for the runner's summary line,
+then dropped. Your prompts and Claude's answers are not used,
 except by guard's handoff note when you have turned guard on (below).
 
 opencode's database is found under `$XDG_DATA_HOME` when that is set, and read

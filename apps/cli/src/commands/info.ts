@@ -138,7 +138,7 @@ export function cmdPrivacy(): void {
     ["Telemetry", "None. No analytics, no usage reporting, no crash reporting."],
     [
       "Agent logs",
-      "Claude Code and Codex logs, and opencode's database (read-only), are read for usage. What each tool call was given (a path, a command, the first 200 characters of anything else) is read in memory. Only a report you export, and guard's log of what it held, name a file or command. By default prompts and answers aren't read; guard, once on, reads them for its handoff note.",
+      "Claude Code and Codex logs, and opencode's database (read-only), are read for usage. What each tool call was given (a path, a command, the first 200 characters of anything else) is read in memory. When a call runs a test, build, typecheck or lint, its output is read in memory for the pass or fail line, and only that is kept. Only a report you export, and guard's log of what it held, name a file or command. By default prompts and answers aren't read; guard, once on, reads them for its handoff note.",
     ],
     ["Usage records", `${optimaizrDir()}/events.jsonl - tokens, cost, latency, model.`],
     [
@@ -293,7 +293,7 @@ export const HELP_GROUPS: Array<{ title: string; more?: boolean; commands: HelpE
       },
       {
         cmd: "optimaizr sessions",
-        what: "your costliest conversations and where the cost climbs",
+        what: "your costliest conversations, pieces of work and where the cost climbs",
         flags: [["--top N", "how many conversations to list (default 10)"]],
       },
     ],
@@ -321,7 +321,17 @@ export const HELP_GROUPS: Array<{ title: string; more?: boolean; commands: HelpE
           ["week", "the last 7 days against the 7 before, shown once a week"],
         ],
       },
-      { cmd: "optimaizr results", what: "did it work: the days after each change against before" },
+      {
+        cmd: "optimaizr results",
+        what: "did it work: the days after each change against before",
+        flags: [
+          [
+            "--since <date>",
+            "the same for a change made anywhere else, like rtk or a new CLAUDE.md",
+          ],
+          ["--label <name>", "with --since: what to call it"],
+        ],
+      },
       {
         cmd: "optimaizr undo <rule>",
         what: "revert a change optimAIzr made (alone, lists them)",

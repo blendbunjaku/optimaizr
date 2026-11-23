@@ -12,7 +12,8 @@ export const START = Date.UTC(2026, 8, 20, 10, 0);
 /**
  * A Claude Code transcript from a short script:
  * `{ prompt }`, `{ compact: true }`, or a call `{ tools, out, think, ctx, side, stop }`
- * where each tool is `{ name, input, error?, chars? }`. A compaction with `meta`
+ * where each tool is `{ name, input, error?, chars?, text? }`; `text` is what the tool
+ * printed, x's otherwise. A compaction with `meta`
  * (`{ trigger, preTokens, ... }`) records it as Claude Code does. Records are 20 seconds
  * apart; `gap` adds minutes before one. A call's `write` sets its cache write,
  * 500 by default, and `hour` makes it a 1-hour write.
@@ -90,7 +91,7 @@ export function transcript(session, script) {
           content: tools.map((b, k) => ({
             type: "tool_result",
             tool_use_id: b.id,
-            content: "x".repeat(s.tools[k].chars ?? 2_000),
+            content: s.tools[k].text ?? "x".repeat(s.tools[k].chars ?? 2_000),
             is_error: Boolean(s.tools[k].error),
           })),
         },
@@ -132,7 +133,7 @@ export const lookup = (opts = {}) => [
 
 /**
  * A Codex rollout from a short script: `{ prompt, gap }`, `{ compact: true }`,
- * or a call `{ cmd, error, out, think, ctx, cached }`. Each call is one billed
+ * or a call `{ cmd, error, output, out, think, ctx, cached }`. Each call is one billed
  * token_count; `gap` is minutes away before the prompt.
  */
 export function codexRollout(id, script, model = "gpt-5.4") {
@@ -167,7 +168,7 @@ export function codexRollout(id, script, model = "gpt-5.4") {
       row("response_item", {
         type: "function_call_output",
         call_id: callId,
-        output: `Process exited with code ${s.error ? 1 : 0}\n${"x".repeat(2_000)}`,
+        output: s.output ?? `Process exited with code ${s.error ? 1 : 0}\n${"x".repeat(2_000)}`,
       });
     }
     const ctx = s.ctx ?? 20_000;

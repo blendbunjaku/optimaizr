@@ -30,6 +30,8 @@ export * from "./analyze/live.js";
 export * from "./analyze/context-watch.js";
 export * from "./analyze/cache-watch.js";
 export * from "./analyze/checks.js";
+export * from "./analyze/check-runs.js";
+export * from "./analyze/work.js";
 export * from "./analyze/guard.js";
 export * from "./analyze/week.js";
 

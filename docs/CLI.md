@@ -96,7 +96,7 @@ mid-session and `/optimaizr handoff`, and nothing above needs it.
 | `optimaizr audit`           | The savings audit: what you spend, what is recoverable, and why      |
 | `optimaizr profile`         | One screen: what your plan does, savings found, the biggest win      |
 | `optimaizr scan`            | Spend, savings, and what to do about it                              |
-| `optimaizr sessions`        | Your costliest conversations, and where re-reading takes over        |
+| `optimaizr sessions`        | Costliest conversations, pieces of work, where re-reading takes over |
 | `optimaizr why`             | Drill into where the money actually goes                             |
 | `optimaizr live`            | Watch calls as they happen and surface fixes interactively           |
 | `optimaizr statusline on`   | Context, re-read cost and cache countdown under Claude Code's prompt |
@@ -111,7 +111,7 @@ mid-session and `/optimaizr handoff`, and nothing above needs it.
 | `optimaizr verify <rule>`   | Prove a fix against your quality bar before applying it              |
 | `optimaizr apply`           | What optimAIzr changes for you, and what you change yourself         |
 | `optimaizr apply <rule>`    | Make the change, or get its steps; `--done` records one you made     |
-| `optimaizr results`         | Each change against the days before it, on your own usage            |
+| `optimaizr results`         | Each change against the days before it; `--since` for any change     |
 | `optimaizr undo <rule>`     | Take back a change optimAIzr made, or mark one you made as undone    |
 | `optimaizr import <file>`   | Load a CSV or JSON usage export you already have                     |
 | `optimaizr report`          | Write a shareable HTML dashboard                                     |
@@ -597,6 +597,9 @@ over? All of it is measured, nothing is estimated:
 - the cache hit rate, and how many sessions were headless: started by
   `claude -p`, the Agent SDK or `codex exec`, with nobody there to read them.
   The costliest conversations mark them too
+- pieces of work (below): how many ended on a passing check, on a failing one
+  or with no check, what a finished one cost on the median, and what fix
+  loops cost: a check failed, files changed, the same check passed
 - the last five 5-hour windows: what each cost, its share of the window, how
   many conversations spent it and how many ran at once, and which ones took
   the most
@@ -968,6 +971,53 @@ or a difference that was already under way in the days just before. `results
 `optimaizr metrics` counts realised savings only from these readings: what
 each measured change saved since it went in, at the measured rate. With
 [guard](#guard) on, `results` ends with what it kept in the last 7 days.
+
+### Per piece of work
+
+Cost per prompt can fall while the work costs more: a change that makes each
+prompt cheaper but takes more of them to finish the job. So `results` also
+counts pieces of work. A piece is a conversation, or the part of one after a
+break of 2 hours or more (`/clear` already starts a new conversation). The
+break is inferred: nothing in the logs marks where one job ends.
+
+A piece ended on a pass when the last test, build or typecheck in it said so.
+Whether it passed comes from the runner's own summary line (`ℹ fail 0`,
+`12 passed`, `error TS2322`, `Found 0 errors`), since most runs are piped into
+`tail`, which exits 0 either way. A run whose output says neither is unknown,
+and lint never decides. Only Claude Code and Codex keep what a command printed,
+so opencode has no pieces. The output is read in memory for that one line and
+dropped; only pass or fail is kept.
+
+```
+                                      before     after
+    cost per finished piece           $10.40    $11.54   +11%
+    pieces ending on a pass              89%       93%   +4 pts
+    spent in fix loops                   15%       16%   same
+```
+
+A finished piece is priced on the median, subagents included. A fix loop is a
+check that failed, files changed, and the same check passing, priced from the
+call after the failure to the one that passed. The rows show once both sides
+have 5 pieces judged by a check, and when per prompt and per finished piece
+each move 10% or more, one down and one up, Worth knowing says so.
+`optimaizr sessions` shows the same counts for the whole period.
+
+### A change you made yourself
+
+`optimaizr apply <rule> --done` records a change optimAIzr knows. For anything
+else (installing rtk or caveman, rewriting CLAUDE.md, switching models,
+removing MCP servers) give the date:
+
+```bash
+optimaizr results --since 2026-10-20 --label rtk
+```
+
+The days after it are put against the days before, with the same verdict, range
+and trade-offs, plus three rows a change like that tends to move: the first
+call of a conversation, what Claude writes per call and the tool output per
+prompt. A date starts at local midnight; `2026-10-20T14:00` sets a time.
+Nothing is stored, and a change applied with optimAIzr in the same days shows
+up under Worth knowing.
 
 ---
 

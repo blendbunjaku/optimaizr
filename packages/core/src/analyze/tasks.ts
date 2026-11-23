@@ -108,7 +108,7 @@ export function commandOf(t: ToolCall): string | null {
 }
 
 /** A command line's parts, split on `&&`, `||`, `;` and pipes outside quotes. */
-function commandParts(command: string): string[] {
+export function commandParts(command: string): string[] {
   const unquoted = command.replace(/'[^']*'|"(?:[^"\\]|\\.)*"/g, "Q");
   return unquoted
     .split(/&&|\|\||;|\||\n/)

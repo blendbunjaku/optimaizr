@@ -3,6 +3,7 @@ import type { CompactionRecord, OptimizationFinding, UsageEvent } from "../domai
 import { coldResumes } from "./cold.js";
 import { COMPACT_AT } from "./rules.js";
 import { contextOf } from "./tasks.js";
+import { MIN_PIECES, judgedPieces, tallyPieces, workPieces, type PieceTally } from "./work.js";
 
 /**
  * Did a change work? Each applied change splits the usage at the moment it was
@@ -12,6 +13,9 @@ import { contextOf } from "./tasks.js";
  */
 
 export const RESULTS_SCHEMA = "optimaizr.results/1";
+
+/** The rule of a `results --since` comparison: a date, not a change optimAIzr knows. */
+export const SINCE_RULE = "since";
 
 const DAY = 86_400_000;
 /** The baseline is at least two weeks, so one odd day doesn't set it. */
@@ -46,6 +50,8 @@ export interface AppliedChange {
   value?: string;
   /** "optimaizr" when optimAIzr made the change, "by-hand" when you said you did. */
   how: "optimaizr" | "by-hand";
+  /** Your name for a `--since` comparison, like "rtk". */
+  label?: string;
   at: string;
   /** When it was undone or replaced, which ends the after period. */
   until?: string;
@@ -122,6 +128,8 @@ export interface ChangeResult {
   range: { low: number; high: number; shortest: number; longest: number } | null;
   /** What the change saved since it was made, at the measured rate. Negative when it cost more. */
   measuredSavingUsd: number | null;
+  /** Pieces of work on each side, for agents whose checks can be read. */
+  pieces: { before: PieceTally; after: PieceTally } | null;
   caveats: string[];
   next: NextStep[];
 }
@@ -143,15 +151,18 @@ export function resultsDays(changes: readonly AppliedChange[], now = Date.now())
   return Math.ceil((now - first) / DAY) + BASELINE_MAX_DAYS + 1;
 }
 
+/** `others` are changes not measured here that can still overlap the ones that are. */
 export function measureResults(
   input: ResultsInput,
   changes: readonly AppliedChange[],
-  opts: { now?: number } = {},
+  opts: { now?: number; others?: readonly AppliedChange[] } = {},
 ): ResultsReport {
   const now = opts.now ?? Date.now();
+  const ids = new Set(changes.map((c) => c.id));
+  const others = [...changes, ...(opts.others ?? []).filter((o) => !ids.has(o.id))];
   const results: ChangeResult[] = [];
   for (const change of [...changes].sort((a, b) => b.at.localeCompare(a.at))) {
-    const r = measureChange(input, change, { now, others: changes });
+    const r = measureChange(input, change, { now, others });
     if (r) results.push(r);
   }
   return { schema: RESULTS_SCHEMA, generatedAt: new Date(now).toISOString(), results };
@@ -240,8 +251,13 @@ export function measureChange(
   const countOf = (p: Period) => (measure === "prompt" ? p.prompts : p.calls);
   const need = measure === "prompt" ? READY_PROMPTS : READY_CALLS;
 
+  const pb = tallyPieces(workPieces(before));
+  const pa = tallyPieces(workPieces(after));
+  const pieces = pb.pieces + pa.pieces > 0 ? { before: pb, after: pa } : null;
+
   const rows = markTradeOffs([
     ...generalRows(before, after, b, a, measure),
+    ...(measure === "prompt" ? pieceRows(pb, pa) : []),
     ...leverRows(change, scoped, before, after, b, a, compsBefore, compsAfter),
   ]);
   const headline = rows[0] ?? null;
@@ -277,7 +293,7 @@ export function measureChange(
     before: b,
     after: a,
     rows,
-    since: sinceFacts(change, scoped, after, a, compsAfter),
+    since: sinceFacts(change, scoped, after, a, compsAfter, pa),
     progress: {
       activeDays: a.activeDays,
       count: countOf(a),
@@ -287,7 +303,11 @@ export function measureChange(
     },
     range: ready && baseline && vs.length > 1 ? rangeOf(vs) : null,
     measuredSavingUsd,
-    caveats: verdict === "too-early" ? [] : caveats(change, scoped, vs, b, a, at, lo, end, others),
+    pieces,
+    caveats:
+      verdict === "too-early"
+        ? []
+        : [...perPieceCaveat(rows), ...caveats(change, scoped, vs, b, a, at, lo, end, others)],
     next: nextSteps(change, verdict, rows),
   };
 }
@@ -402,6 +422,58 @@ function markTradeOffs(rows: ResultRow[]): ResultRow[] {
       ? row(r.key, r.label, r.unit, r.before, r.after, r.better, true)
       : r,
   );
+}
+
+/**
+ * Per piece of work: a cheaper prompt that takes more prompts to finish the
+ * same work is no saving. Shown once each side has MIN_PIECES judged pieces.
+ */
+function pieceRows(b: PieceTally, a: PieceTally): ResultRow[] {
+  if (judgedPieces(b) < MIN_PIECES || judgedPieces(a) < MIN_PIECES) return [];
+  const passed = (t: PieceTally) => ratio(t.passed, judgedPieces(t));
+  const inLoops = (t: PieceTally) => ratio(t.fixUsd, t.costUsd);
+  return [
+    row(
+      "costPerFinishedPiece",
+      "cost per finished piece",
+      "usd",
+      b.finishedUsd,
+      a.finishedUsd,
+      "lower",
+      true,
+    ),
+    row("piecesPassed", "pieces ending on a pass", "share", passed(b), passed(a), "higher", true),
+    row("fixLoopShare", "spent in fix loops", "share", inLoops(b), inLoops(a), "lower", true),
+  ];
+}
+
+/** When cost per prompt and cost per finished piece point different ways. */
+function perPieceCaveat(rows: readonly ResultRow[]): string[] {
+  const prompt = rows.find((r) => r.key === "costPerPrompt")?.change;
+  const piece = rows.find((r) => r.key === "costPerFinishedPiece")?.change;
+  if (prompt == null || piece == null) return [];
+  const p = (x: number) => `${Math.round(Math.abs(x) * 100)}%`;
+  if (prompt <= -EFFECT && piece >= EFFECT) {
+    return [
+      `Cost per prompt fell ${p(prompt)}, but a finished piece of work cost ${p(piece)} more: the same work may be taking more prompts.`,
+    ];
+  }
+  if (prompt >= EFFECT && piece <= -EFFECT) {
+    return [
+      `Cost per prompt rose ${p(prompt)}, but a finished piece of work cost ${p(piece)} less: fewer prompts may be doing the same work.`,
+    ];
+  }
+  return [];
+}
+
+/** Median size of each conversation's first call: what every conversation starts by reading. */
+function firstCallMedian(es: readonly UsageEvent[]): number | null {
+  const first = new Map<string, UsageEvent>();
+  for (const e of es) {
+    const seen = first.get(e.sessionId);
+    if (!seen || e.ts < seen.ts) first.set(e.sessionId, e);
+  }
+  return median([...first.values()].map(contextOf));
 }
 
 /** The point a compaction change set, in tokens. */
@@ -575,16 +647,41 @@ function leverRows(
   }
 
   if (change.rule === "heavy-start") {
-    const firsts = (es: UsageEvent[]) => {
-      const first = new Map<string, UsageEvent>();
-      for (const e of es) {
-        const seen = first.get(e.sessionId);
-        if (!seen || e.ts < seen.ts) first.set(e.sessionId, e);
-      }
-      return median([...first.values()].map(contextOf));
-    };
     return [
-      row("firstCall", "first call of a conversation", "tokens", firsts(mainB), firsts(mainA)),
+      row(
+        "firstCall",
+        "first call of a conversation",
+        "tokens",
+        firstCallMedian(mainB),
+        firstCallMedian(mainA),
+      ),
+    ];
+  }
+
+  // A change made outside optimAIzr: the rows the usual ones show up in. A
+  // trimmed CLAUDE.md or fewer MCP servers in the first call, a terser style
+  // in the answers, a command-output filter like rtk in the tool output.
+  if (change.rule === SINCE_RULE) {
+    const answer = (es: UsageEvent[]) =>
+      ratio(sum(es.map((e) => Math.max(0, e.outputTokens - e.thinkingTokens))), es.length);
+    const toolOutput = (es: readonly UsageEvent[], p: Period) =>
+      ratio(sum(es.flatMap((e) => e.tools.map((t) => t.resultTokens ?? 0))), p.prompts);
+    return [
+      row(
+        "firstCall",
+        "first call of a conversation",
+        "tokens",
+        firstCallMedian(mainB),
+        firstCallMedian(mainA),
+      ),
+      row("answerPerCall", "written per call", "tokens", answer(mainB), answer(mainA)),
+      row(
+        "toolOutputPerPrompt",
+        "tool output per prompt",
+        "tokens",
+        toolOutput(before, b),
+        toolOutput(after, a),
+      ),
     ];
   }
 
@@ -603,6 +700,7 @@ function sinceFacts(
   after: readonly UsageEvent[],
   a: Period,
   compsAfter: readonly CompactionRecord[],
+  pieces: PieceTally,
 ): SinceFact[] {
   const plural = (n: number, one: string, many = `${one}s`) =>
     `${n.toLocaleString()} ${n === 1 ? one : many}`;
@@ -614,6 +712,13 @@ function sinceFacts(
       text: plural(a.conversations, "conversation"),
     });
     facts.push({ key: "prompts", value: a.prompts, text: plural(a.prompts, "prompt") });
+    if (judgedPieces(pieces) > 0) {
+      facts.push({
+        key: "piecesPassed",
+        value: pieces.passed,
+        text: `${pieces.passed} of ${plural(pieces.pieces, "piece")} of work ending on a passing check`,
+      });
+    }
   } else {
     facts.push({ key: "calls", value: a.calls, text: plural(a.calls, "call") });
   }
@@ -811,10 +916,10 @@ function caveats(
     const there = before.concat(after).filter((e) => e.project === o.project);
     return total > 0 && there.reduce((s, e) => s + e.cost.total, 0) / total >= 0.1;
   });
-  for (const o of overlaps) {
-    out.push(
-      `Another change landed in this period (${o.rule}, ${o.at.slice(0, 10)}), so the difference carries both.`,
-    );
+  // One change made for two agents at once reads as one.
+  const landed = new Set(overlaps.map((o) => `${o.rule}, ${o.at.slice(0, 10)}`));
+  for (const o of landed) {
+    out.push(`Another change landed in this period (${o}), so the difference carries both.`);
   }
 
   // Logs that start well after the baseline was meant to. A loop, not
@@ -827,8 +932,9 @@ function caveats(
       change.source === "claude-code"
         ? " Claude Code deletes transcripts after 30 days unless cleanupPeriodDays is set higher."
         : "";
+    const days = Math.max(1, Math.round((at - first) / DAY));
     out.push(
-      `Only ${Math.max(1, Math.round((at - first) / DAY))} days of logs before the change, not ${Math.round(wanted)}.${kept}`,
+      `Only ${days} day${days === 1 ? "" : "s"} of logs before the change, not ${Math.round(wanted)}.${kept}`,
     );
   }
   return out;
@@ -845,6 +951,8 @@ function signed(x: number): string {
 
 function nextSteps(change: AppliedChange, verdict: ResultVerdict, rows: ResultRow[]): NextStep[] {
   const out: NextStep[] = [];
+  // Nothing optimAIzr made, so nothing it can undo.
+  if (change.rule === SINCE_RULE) return out;
   const undo = { command: `optimaizr undo ${change.rule}`, why: "put it back" };
   if (verdict === "worse") out.push({ ...undo, why: "it costs more than before" });
 

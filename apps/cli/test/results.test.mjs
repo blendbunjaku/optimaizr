@@ -1,8 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import {
   computeMetrics,
@@ -25,10 +27,15 @@ import { codexRollout, load, loadCodex, transcript } from "./fixtures/transcript
 const DAY = 86_400_000;
 const AT = Date.UTC(2026, 9, 1, 0, 0);
 const iso = (t) => new Date(t).toISOString();
+const strip = (s) => s.replace(new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*m`, "g"), "");
+// The change's day as the report prints it, in this machine's time zone.
+const changeDay = new Date(AT).toLocaleDateString("en-US", { month: "short", day: "numeric" });
 
 /**
  * One day of usage, `d` days from the change (negative is before): `prompts`
- * prompts of `calls` calls each, costing `perPrompt` in all.
+ * prompts of `calls` calls each, costing `perPrompt` in all. `perSession`
+ * prompts make a conversation; with `check` each one ends on a test run
+ * that says "pass" or "fail".
  */
 function day(d, prompts, opts = {}) {
   const {
@@ -40,11 +47,18 @@ function day(d, prompts, opts = {}) {
     source = "claude-code",
     errors = 0,
     tag = "",
+    perSession = 10,
+    check,
   } = opts;
   const out = [];
   for (let p = 0; p < prompts; p++) {
-    const session = `s${tag}${d}-${Math.floor(p / 10)}`;
+    const session = `s${tag}${d}-${Math.floor(p / perSession)}`;
+    const ends = p % perSession === perSession - 1 || p === prompts - 1;
     for (let c = 0; c < calls; c++) {
+      const test =
+        check && ends && c === calls - 1
+          ? [{ name: "Bash", signature: "Bash:npm test", check: { kind: "test", outcome: check } }]
+          : [];
       out.push({
         id: `${tag}${d}-${p}-${c}`,
         source,
@@ -60,7 +74,7 @@ function day(d, prompts, opts = {}) {
         cacheReadTokens: ctx,
         cacheWrite5mTokens: 0,
         cacheWrite1hTokens: 0,
-        tools: c < errors ? [{ name: "Bash", isError: true }] : [],
+        tools: c < errors ? [{ name: "Bash", signature: "Bash:false", isError: true }] : test,
         cost: { total: perPrompt / calls },
       });
     }
@@ -130,6 +144,91 @@ test("results: a cheaper prompt after the change reads as working, with what it 
   assert.deepEqual(
     r.next.map((n) => n.command),
     ["optimaizr undo context-compaction"],
+  );
+});
+
+const byHand = (label) => ({
+  id: `since:${iso(AT)}`,
+  rule: "since",
+  how: "by-hand",
+  at: iso(AT),
+  ...(label ? { label } : {}),
+});
+
+test("results: a change made by hand gets the same verdict, named by its label", () => {
+  const events = [...days(-14, 0, 30, { perPrompt: 1 }), ...days(0, 5, 30, { perPrompt: 0.6 })];
+  const report = measureResults({ events }, [byHand("rtk")], { now: AT + 5 * DAY });
+  const [r] = report.results;
+  assert.equal(r.verdict, "working");
+  assert.equal(r.measure, "prompt");
+  assert.deepEqual(r.next, [], "nothing to undo");
+  const keys = r.rows.map((x) => x.key);
+  for (const k of ["firstCall", "answerPerCall", "toolOutputPerPrompt"]) {
+    assert.ok(keys.includes(k), k);
+  }
+
+  const text = strip(renderResults(report, { now: AT + 5 * DAY }));
+  assert.match(text, /^ {2}rtk$/m);
+  assert.ok(text.includes(`from ${changeDay}, 5 days ago`), text);
+  assert.doesNotMatch(text, /optimaizr undo/);
+
+  const unnamed = measureResults({ events }, [byHand()], { now: AT + 5 * DAY });
+  const plain = strip(renderResults(unnamed, { now: AT + 5 * DAY }));
+  assert.ok(plain.includes(`Before and after ${changeDay}`), plain);
+});
+
+test("results: an applied change in the same days shows up as a caveat on a dated one", () => {
+  const events = [...days(-14, 0, 30, { perPrompt: 1 }), ...days(0, 5, 30, { perPrompt: 0.6 })];
+  const other = { ...compact200, at: iso(AT - 3 * DAY) };
+  const report = measureResults({ events }, [byHand("rtk")], {
+    now: AT + 5 * DAY,
+    others: [other],
+  });
+  assert.equal(report.results.length, 1, "only the dated change is measured");
+  const [r] = report.results;
+  assert.equal(r.caveats.filter((c) => /Another change landed/.test(c)).length, 1);
+});
+
+test("results: per finished piece shows once both sides have five judged by a check", () => {
+  const before = days(-14, 0, 30, { perPrompt: 1, check: "pass" });
+  const unchecked = measureChange(
+    { events: [...before, ...days(0, 5, 30, { perPrompt: 0.6 })] },
+    byHand(),
+    { now: AT + 5 * DAY },
+  );
+  assert.ok(!unchecked.rows.some((x) => x.key === "costPerFinishedPiece"));
+  assert.equal(unchecked.pieces.after.unchecked, 15);
+
+  const r = measureChange(
+    { events: [...before, ...days(0, 5, 30, { perPrompt: 0.6, check: "pass" })] },
+    byHand(),
+    { now: AT + 5 * DAY },
+  );
+  const row = r.rows.find((x) => x.key === "costPerFinishedPiece");
+  assert.equal(row.before, 10);
+  assert.ok(Math.abs(row.after - 6) < 1e-9);
+  assert.equal(r.rows.find((x) => x.key === "piecesPassed").after, 1);
+  assert.equal(r.pieces.before.passed, 42);
+  assert.deepEqual(
+    r.since.find((f) => f.key === "piecesPassed").text,
+    "15 of 15 pieces of work ending on a passing check",
+  );
+});
+
+test("results: cheaper prompts that make a piece of work dearer are called out", () => {
+  const events = [
+    ...days(-14, 0, 30, { perPrompt: 1, check: "pass" }),
+    ...days(0, 5, 30, { perPrompt: 0.8, perSession: 20, check: "pass" }),
+  ];
+  const r = measureChange({ events }, byHand(), { now: AT + 5 * DAY });
+  const piece = r.rows.find((x) => x.key === "costPerFinishedPiece");
+  assert.ok(piece.change > 0.5, "a piece costs more");
+  assert.ok(piece.worse, "and counts as a trade-off");
+  assert.ok(
+    r.caveats.some((c) =>
+      /^Cost per prompt fell 20%, but a finished piece of work cost 60% more/.test(c),
+    ),
+    r.caveats.join("\n"),
   );
 });
 
@@ -562,4 +661,64 @@ test("journal: an undo keeps the record of a change made before the journal exis
   undoCompaction(p);
   const kinds = readChanges(path.join(dir, "changes.jsonl")).map((e) => e.kind);
   assert.deepEqual(kinds, ["apply", "undo"]);
+});
+
+const CLI = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../dist/cli.js");
+
+/** The CLI in an empty home: no transcripts, nothing applied. */
+function results(...argv) {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "optimaizr-since-"));
+  const env = {
+    ...process.env,
+    HOME: home,
+    XDG_DATA_HOME: path.join(home, ".local", "share"),
+    CLAUDE_CONFIG_DIR: path.join(home, ".claude"),
+    CODEX_HOME: path.join(home, ".codex"),
+    OPTIMAIZR_DIR: path.join(home, ".optimaizr"),
+    OPTIMAIZR_NO_UPDATE_CHECK: "1",
+    NO_COLOR: "1",
+  };
+  const r = spawnSync(process.execPath, [CLI, "results", ...argv], {
+    env,
+    cwd: home,
+    encoding: "utf8",
+  });
+  return { code: r.status, out: strip(r.stdout) };
+}
+
+test(
+  "results --since: says what is wrong with the date and exits 1",
+  { skip: !fs.existsSync(CLI) },
+  () => {
+    const cases = [
+      [["--label", "rtk"], "--label goes with --since,"],
+      [["--since"], "--since takes a date,"],
+      [["--since", "last week"], "last week is not a date,"],
+      [["--since", "2026-02-30"], "2026-02-30 is not a date,"],
+      [["--since", "2999-01-01"], "--since has to be in the past,"],
+    ];
+    for (const [argv, said] of cases) {
+      const r = results(...argv);
+      assert.equal(r.code, 1, argv.join(" "));
+      assert.ok(r.out.includes(`${said} like optimaizr results --since 2026-10-20`), r.out);
+    }
+  },
+);
+
+test(
+  "results --since: with no usage around the date, says so",
+  { skip: !fs.existsSync(CLI) },
+  () => {
+    const r = results("--since", "2026-10-20", "--label", "rtk");
+    assert.equal(r.code, 0, r.out);
+    assert.match(r.out, /No usage before or since Oct 20 to compare\./);
+    assert.doesNotMatch(r.out, /No changes to measure yet/);
+    assert.deepEqual(JSON.parse(results("--since", "2026-10-20", "--json").out).results, []);
+  },
+);
+
+test("results: with nothing applied, points at --since too", { skip: !fs.existsSync(CLI) }, () => {
+  const r = results();
+  assert.match(r.out, /No changes to measure yet/);
+  assert.match(r.out, /optimaizr results --since <date> +before and after any other change/);
 });

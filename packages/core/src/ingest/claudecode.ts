@@ -5,7 +5,16 @@ import readline from "node:readline";
 
 import { costOf, providerOf } from "../pricing.js";
 import { estimateImageTokens } from "./images.js";
-import type { CallEvent, CompactionRecord, Dataset, LimitHitRecord, ToolCall } from "../types.js";
+import { checkKindOf, checkRunOf, resultText } from "../analyze/check-runs.js";
+import type {
+  CallEvent,
+  CheckKind,
+  CheckRun,
+  CompactionRecord,
+  Dataset,
+  LimitHitRecord,
+  ToolCall,
+} from "../types.js";
 
 /**
  * Ingest Claude Code session transcripts. Claude Code writes one JSONL record
@@ -95,6 +104,7 @@ interface ToolResultInfo {
   tokens: number;
   images: number;
   isError: boolean;
+  check?: CheckRun;
 }
 
 /** Accumulator for one API response, assembled from its many JSONL records. */
@@ -145,6 +155,8 @@ export interface TranscriptState {
   entrypoints: Map<string, string>;
   /** Plan limits Claude Code was refused at, one per window it names. */
   limitHits: Map<string, LimitHitRecord>;
+  /** Shell calls that ran a check, by tool use id, so their result can be read for pass or fail. */
+  checkKinds: Map<string, CheckKind>;
 }
 
 export function createTranscriptState(): TranscriptState {
@@ -157,6 +169,7 @@ export function createTranscriptState(): TranscriptState {
     titles: new Map(),
     entrypoints: new Map(),
     limitHits: new Map(),
+    checkKinds: new Map(),
   };
 }
 
@@ -381,11 +394,17 @@ export function consumeTranscriptLine(
       for (const block of content) {
         if (block?.type !== "tool_result") continue;
         const m = measureResult(block.content);
+        const kind = state.checkKinds.get(block.tool_use_id);
+        const check = kind
+          ? checkRunOf(kind, resultText(block.content), Boolean(block.is_error))
+          : null;
+        state.checkKinds.delete(block.tool_use_id);
         toolResults.set(block.tool_use_id, {
           chars: m.chars,
           tokens: m.tokens,
           images: m.images,
           isError: Boolean(block.is_error),
+          ...(check ? { check } : {}),
         });
       }
     }
@@ -453,6 +472,9 @@ export function consumeTranscriptLine(
       const id = block.id ?? `${messageId}:${p.tools.size}`;
       if (!p.tools.has(id)) {
         const target = targetOf(block.input);
+        const command = block.name === "Bash" ? block.input?.command : undefined;
+        const kind = typeof command === "string" ? checkKindOf(command) : null;
+        if (kind) state.checkKinds.set(id, kind);
         p.tools.set(id, {
           id,
           name: block.name ?? "unknown",
@@ -597,6 +619,7 @@ export function buildTranscriptEvent(p: Partial, state: TranscriptState): CallEv
           resultTokens: r.tokens,
           imageCount: r.images,
           isError: r.isError,
+          ...(r.check ? { check: r.check } : {}),
         }
       : t;
   });

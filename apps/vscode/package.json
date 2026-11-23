@@ -2,7 +2,7 @@
   "name": "optimaizr-vscode",
   "displayName": "optimAIzr: Claude Code, Codex & opencode savings",
   "description": "Spend fewer tokens on the same work. What Claude Code, Codex and opencode cost you and what you could save, plus Claude Code's cache countdown, context size and 5-hour window at a glance, a heads-up before a cache expires, and one-click fixes. Everything stays on your machine.",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "private": true,
   "publisher": "optimAIzr",
   "license": "MIT",

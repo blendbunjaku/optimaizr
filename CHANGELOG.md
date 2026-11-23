@@ -1,5 +1,38 @@
 # Changelog
 
+## 0.14.0
+
+- **Per piece of work** (#17). `results` judged a change on cost per prompt,
+  and a change can make each prompt cheaper while the work takes more of them.
+  It now counts pieces of work too: a conversation, or the part of one after a
+  break of 2 hours or more, that ended on a passing test, build or typecheck.
+  Three rows join the table: cost per finished piece (the median), the share of
+  pieces ending on a pass, and the share spent in fix loops (a check failed,
+  files changed, the same check passed). Split at Oct 20, my own usage reads
+  5% to 27% less per prompt, but a finished piece went from $10.40 to $11.54.
+  When the two each move 10% or more, one down and one up, Worth knowing says
+  so. The rows show once both sides have 5 pieces a check judged.
+- **Pass or fail from the runner's own line.** Most test runs are piped into
+  `tail`, which exits 0 either way, so the exit code can't say. optimAIzr
+  reads the summary line: `ℹ fail 0`, `12 passed`, `error TS2322`,
+  `Found 0 errors`, `TSC_OK` from an `&& echo`. A run that says neither is
+  unknown, lint never decides, and a command you turned down never ran. 75 of
+  the 93 checks in my last 30 days were readable. The output is read in memory
+  for that line and dropped; only pass or fail is kept. Claude Code and Codex
+  only: opencode doesn't keep what a command printed.
+- **`optimaizr results --since <date>`** (#18). For a change made anywhere
+  else (installing rtk or caveman, rewriting CLAUDE.md, switching models,
+  removing MCP servers), the days after a date against the days before, with
+  the same verdict, range and trade-offs as an applied change. `--label rtk`
+  names it. Three rows come with it: the first call of a conversation, what
+  Claude writes per call, and tool output per prompt. A date starts at local
+  midnight, `2026-10-20T14:00` sets a time, and nothing is stored. A change
+  applied with optimAIzr in the same days shows under Worth knowing.
+- **Pieces of work in `sessions`.** How many ended on a pass, on a fail or with
+  no check, what a finished one cost on the median, and what fix loops cost:
+  18 of them, $44.46 of mine, 15% of spend. `--json` lists every piece.
+- **VS Code extension 0.1.3.** Install and turn on installs `optimaizr@0.14.0`.
+
 ## 0.13.1
 
 - **`optimaizr guard print`** (#23). Prints the hooks `guard on` would add to
